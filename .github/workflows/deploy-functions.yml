@@ -1,0 +1,30 @@
+name: Deploiement Edge Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/config.toml'
+      - 'packages/**'
+      - '.github/workflows/deploy-functions.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      # Deploie l'Edge Function /api (verify_jwt vient de config.toml).
+      # Secrets requis : SUPABASE_ACCESS_TOKEN (compte Supabase) et
+      # SUPABASE_PROJECT_ID (ref du projet). Les secrets d'execution de la
+      # fonction (ENCRYPTION_KEY, ALLOWED_USER_EMAILS, ALLOWED_ORIGINS) se
+      # configurent dans le dashboard, pas ici.
+      - name: Deployer la fonction api
+        run: supabase functions deploy api --project-ref "$SUPABASE_PROJECT_ID"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
