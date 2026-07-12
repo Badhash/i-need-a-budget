@@ -1,8 +1,10 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Check, ChevronLeft, ChevronRight, Moon, Palette, Settings, Sun, Wallet } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, LogOut, Moon, Palette, Settings, Sun, Wallet } from 'lucide-react'
 import { PAGE_TITLES } from '@/components/layout/nav'
 import { THEMES } from '@/styles/themes'
 import { resolveDark, useUiStore } from '@/stores/ui'
+import { useAuthStore } from '@/stores/auth'
+import { supabase } from '@/lib/supabase'
 import { addMonths, fmtMonthTitle, MAX_MONTH, MIN_MONTH } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
@@ -95,6 +97,33 @@ function ModeToggle() {
   )
 }
 
+function UserMenu() {
+  const session = useAuthStore((s) => s.session)
+  const email = session?.user.email ?? ''
+  const initial = email ? email[0]!.toUpperCase() : '?'
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label="Compte">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-[12px] font-semibold text-accentfg">
+            {initial}
+          </span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel className="max-w-[220px] truncate font-normal text-soft">
+          {email || 'Compte'}
+        </DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => void supabase.auth.signOut()}>
+          <LogOut className="h-4 w-4" />
+          <span className="flex-1">Se déconnecter</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export function Header() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const title = PAGE_TITLES[pathname] ?? 'Budget'
@@ -116,6 +145,7 @@ export function Header() {
         <div className="flex items-center gap-0.5">
           <ThemeMenu />
           <ModeToggle />
+          <UserMenu />
           <Link
             to="/reglages"
             aria-label="Réglages"

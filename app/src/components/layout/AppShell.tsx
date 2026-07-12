@@ -4,9 +4,11 @@ import { Header } from '@/components/layout/Header'
 import { BottomNav, Fab } from '@/components/layout/BottomNav'
 import { AddTransactionDialog } from '@/components/transactions/AddTransactionDialog'
 import { useThemeController } from '@/hooks/useTheme'
+import { useRealtimeSync } from '@/hooks/useRealtimeSync'
 
 export function AppShell() {
   useThemeController()
+  useRealtimeSync()
 
   return (
     <div className="min-h-dvh">

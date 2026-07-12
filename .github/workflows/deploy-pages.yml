@@ -33,6 +33,12 @@ jobs:
       - name: Build
         working-directory: app
         run: npm run build
+        env:
+          # Valeurs publiques (embarquees dans le bundle) : la cle anon ne donne
+          # aucun acces aux tables (RLS + revoke). Definir ces secrets dans
+          # Settings > Secrets and variables > Actions.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: app/dist
