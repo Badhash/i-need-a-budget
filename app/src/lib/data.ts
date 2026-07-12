@@ -1,0 +1,340 @@
+// Couche de donnees reelle : consomme l'Edge Function /api (via apiCall) et
+// remplace les mocks. La taxonomie (comptes, groupes, categories avec de vrais
+// UUID) provient de l'action bootstrap ; les composants la lisent via les
+// selecteurs ci-dessous. Tous les montants sont en centimes.
+
+import { useQuery, type UseQueryResult } from '@tanstack/react-query'
+import { apiCall } from '@/lib/api'
+import type {
+  Account,
+  AccountKind,
+  Category,
+  CategoryGroup,
+  GroupIcon,
+  Transaction,
+} from '@/mocks/data'
+import type { CatColor } from '@/styles/themes'
+import type { BudgetMonth, BudgetGroupBlock, BudgetRow } from '@/lib/budget'
+import type { ReportsData } from '@/lib/reports'
+import { monthOf, TODAY } from '@/lib/format'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface AccountWithBalance extends Account {
+  balance: number
+}
+
+export interface NewTransactionInput {
+  accountId: string
+  date: string
+  label: string
+  categoryId: string | null
+  amount: number // centimes signes
+  note?: string
+}
+
+/** Forme brute renvoyee par l'action bootstrap. */
+interface BootstrapAccount {
+  id: string
+  name: string
+  institution: string
+  kind: AccountKind
+  onBudget: boolean
+  closed: boolean
+  connectionId: string | null
+  providerAccountUid: string | null
+  balance: number
+}
+
+interface BootstrapGroup {
+  id: string
+  name: string
+  color: string
+  icon: string
+  sortOrder: number
+  hidden: boolean
+}
+
+interface BootstrapCategory {
+  id: string
+  groupId: string
+  name: string
+  isIncome: boolean
+  sortOrder: number
+  hidden: boolean
+}
+
+interface BootstrapResponse {
+  accounts: BootstrapAccount[]
+  groups: BootstrapGroup[]
+  categories: BootstrapCategory[]
+  uncategorizedCount: number
+}
+
+/** Taxonomie hydratee (objets du domaine, prets pour l'UI). */
+export interface Bootstrap {
+  accounts: AccountWithBalance[]
+  groups: CategoryGroup[]
+  categories: Category[]
+  uncategorizedCount: number
+}
+
+// Forme plate renvoyee par getBudgetMonth (sortie du moteur).
+interface FlatCategoryMonth {
+  categoryId: string
+  rollover: number
+  assigned: number
+  activity: number
+  available: number
+}
+interface FlatBudgetMonth {
+  month: string
+  readyToAssign: number
+  categories: FlatCategoryMonth[]
+  totals: { assigned: number; activity: number; available: number }
+}
+
+// Transaction telle que servie par /api (avant mapping vers le type UI).
+interface ApiTransaction {
+  id: string
+  accountId: string
+  categoryId: string | null
+  bookingDate: string
+  bookingMonth: string
+  amount: number
+  counterparty?: string | null
+  transferGroupId?: string | null
+  notes?: string | null
+  label: string
+}
+
+// ---------------------------------------------------------------------------
+// Hydratation de la taxonomie
+// ---------------------------------------------------------------------------
+
+function hydrateBootstrap(raw: BootstrapResponse): Bootstrap {
+  return {
+    accounts: raw.accounts.map((a) => ({
+      id: a.id,
+      name: a.name,
+      institution: a.institution,
+      kind: a.kind,
+      onBudget: a.onBudget,
+      openingBalance: 0,
+      balance: a.balance,
+    })),
+    groups: raw.groups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      color: g.color as CatColor,
+      icon: g.icon as GroupIcon,
+      sortOrder: g.sortOrder,
+    })),
+    categories: raw.categories.map((c) => ({
+      id: c.id,
+      groupId: c.groupId,
+      name: c.name,
+      isIncome: c.isIncome,
+      sortOrder: c.sortOrder,
+    })),
+    uncategorizedCount: raw.uncategorizedCount,
+  }
+}
+
+async function fetchBootstrap(): Promise<Bootstrap> {
+  const raw = await apiCall<BootstrapResponse>('bootstrap')
+  return hydrateBootstrap(raw)
+}
+
+const BOOTSTRAP_KEY = ['bootstrap'] as const
+
+export function useBootstrap(): UseQueryResult<Bootstrap> {
+  return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap })
+}
+
+// Selecteurs derives (partagent la meme query que bootstrap : pas de refetch).
+export function useAccountsList(): AccountWithBalance[] {
+  return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.accounts })
+    .data ?? []
+}
+
+export function useCategoriesList(): Category[] {
+  return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.categories })
+    .data ?? []
+}
+
+export function useGroupsList(): CategoryGroup[] {
+  return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.groups }).data ?? []
+}
+
+export function useAccountsMap(): Map<string, AccountWithBalance> {
+  return new Map(useAccountsList().map((a) => [a.id, a]))
+}
+
+export function useCategoriesMap(): Map<string, Category> {
+  return new Map(useCategoriesList().map((c) => [c.id, c]))
+}
+
+export function useGroupsMap(): Map<string, CategoryGroup> {
+  return new Map(useGroupsList().map((g) => [g.id, g]))
+}
+
+// ---------------------------------------------------------------------------
+// Adaptateur budget : forme plate (moteur) -> forme groupee attendue par l'UI
+// ---------------------------------------------------------------------------
+
+function adaptBudget(flat: FlatBudgetMonth, taxo: Bootstrap): BudgetMonth {
+  const byCat = new Map(flat.categories.map((r) => [r.categoryId, r]))
+  const groupById = new Map(taxo.groups.map((g) => [g.id, g]))
+
+  // Categories hors revenus, regroupees par groupe.
+  const envelopeCats = taxo.categories.filter((c) => !c.isIncome)
+  const catsByGroup = new Map<string, Category[]>()
+  for (const cat of envelopeCats) {
+    const list = catsByGroup.get(cat.groupId) ?? []
+    list.push(cat)
+    catsByGroup.set(cat.groupId, list)
+  }
+
+  const groups: BudgetGroupBlock[] = [...catsByGroup.entries()]
+    .map(([groupId, cats]) => ({ group: groupById.get(groupId), cats }))
+    .filter((e): e is { group: CategoryGroup; cats: Category[] } => e.group !== undefined)
+    .sort((a, b) => a.group.sortOrder - b.group.sortOrder)
+    .map(({ group, cats }) => {
+      const rows: BudgetRow[] = cats
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((category) => {
+          const r = byCat.get(category.id)
+          return {
+            category,
+            assigned: r?.assigned ?? 0,
+            activity: r?.activity ?? 0,
+            available: r?.available ?? 0,
+          }
+        })
+      return {
+        group,
+        rows,
+        totals: {
+          assigned: rows.reduce((s, r) => s + r.assigned, 0),
+          activity: rows.reduce((s, r) => s + r.activity, 0),
+          available: rows.reduce((s, r) => s + r.available, 0),
+        },
+      }
+    })
+
+  return {
+    month: flat.month,
+    rta: flat.readyToAssign,
+    groups,
+    totals: {
+      assigned: groups.reduce((s, g) => s + g.totals.assigned, 0),
+      activity: groups.reduce((s, g) => s + g.totals.activity, 0),
+      available: groups.reduce((s, g) => s + g.totals.available, 0),
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hooks de lecture
+// ---------------------------------------------------------------------------
+
+export function useBudgetMonth(month: string): UseQueryResult<BudgetMonth> {
+  const boot = useBootstrap()
+  return useQuery({
+    queryKey: ['budget', month],
+    enabled: boot.data !== undefined,
+    queryFn: async () => {
+      const flat = await apiCall<FlatBudgetMonth>('getBudgetMonth', { month })
+      return adaptBudget(flat, boot.data!)
+    },
+  })
+}
+
+function toTransaction(t: ApiTransaction): Transaction {
+  return {
+    id: t.id,
+    accountId: t.accountId,
+    date: t.bookingDate,
+    label: t.label,
+    categoryId: t.categoryId,
+    amount: t.amount,
+    transferGroupId: t.transferGroupId ?? null,
+    note: t.notes ?? undefined,
+  }
+}
+
+export function useTransactions(): UseQueryResult<Transaction[]> {
+  return useQuery({
+    queryKey: ['transactions'],
+    queryFn: async () => {
+      const { transactions } = await apiCall<{ transactions: ApiTransaction[] }>('listTransactions')
+      return transactions.map(toTransaction)
+    },
+  })
+}
+
+export function useAccounts(): UseQueryResult<AccountWithBalance[]> {
+  return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.accounts })
+}
+
+export function useReports(month: string): UseQueryResult<ReportsData> {
+  return useQuery({
+    queryKey: ['reports', month],
+    queryFn: () => apiCall<ReportsData>('getReports', { month }),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Mutations (appelees inline par les pages)
+// ---------------------------------------------------------------------------
+
+export async function apiSetAssigned(input: {
+  categoryId: string
+  month: string
+  amount: number
+}): Promise<void> {
+  await apiCall('setAssigned', input)
+}
+
+export async function apiCategorize(txId: string, categoryId: string | null): Promise<void> {
+  await apiCall('categorizeTransaction', { transactionId: txId, categoryId })
+}
+
+export async function apiAddTransaction(input: NewTransactionInput): Promise<{ id: string }> {
+  return apiCall<{ id: string }>('addTransaction', {
+    accountId: input.accountId,
+    date: input.date,
+    label: input.label,
+    categoryId: input.categoryId,
+    amount: input.amount,
+    notes: input.note,
+  })
+}
+
+export interface CreateAccountInput {
+  name: string
+  institution: string
+  kind: AccountKind
+  onBudget: boolean
+  openingBalance: number
+  openingDate: string
+}
+
+export async function apiCreateAccount(input: CreateAccountInput): Promise<{ id: string }> {
+  return apiCall<{ id: string }>('createAccount', { ...input })
+}
+
+export async function apiSeedDefaults(): Promise<void> {
+  await apiCall('seedDefaults')
+}
+
+/** Nombre de transactions non categorisees (hors transferts) jusqu'a aujourd'hui. */
+export function uncategorizedCount(list: Transaction[]): number {
+  return list.filter(
+    (t) => !t.categoryId && !t.transferGroupId && monthOf(t.date) <= monthOf(TODAY),
+  ).length
+}

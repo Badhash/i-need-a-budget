@@ -1,8 +1,6 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Check, Download, Landmark, RefreshCw } from 'lucide-react'
+import { Check, Landmark } from 'lucide-react'
 import { THEMES, type Mode, type ThemeMeta } from '@/styles/themes'
 import { useUiStore } from '@/stores/ui'
-import { apiResetDemo } from '@/mocks/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -149,43 +147,13 @@ function BankSection() {
   )
 }
 
-function DataSection() {
-  const queryClient = useQueryClient()
-  const reset = useMutation({
-    mutationFn: apiResetDemo,
-    onSuccess: () => queryClient.invalidateQueries(),
-  })
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Données</CardTitle>
-        <p className="text-[13px] text-soft">
-          Cette version fonctionne sur des données fictives de démonstration, stockées en mémoire.
-        </p>
-      </CardHeader>
-      <CardContent className="flex flex-wrap gap-3">
-        <Button variant="secondary" onClick={() => reset.mutate()} disabled={reset.isPending}>
-          <RefreshCw className={cn('h-4 w-4', reset.isPending && 'animate-spin')} />
-          Réinitialiser la démo
-        </Button>
-        <Button variant="outline" disabled>
-          <Download className="h-4 w-4" />
-          Exporter (bientôt)
-        </Button>
-      </CardContent>
-    </Card>
-  )
-}
-
 export function SettingsPage() {
   return (
     <div className="space-y-5">
       <ThemeSection />
       <BankSection />
-      <DataSection />
       <p className="px-1 text-center text-[12px] text-soft">
-        I Need A Budget · version 0.1.0 · données de démonstration
+        I Need A Budget · version 0.1.0
       </p>
     </div>
   )

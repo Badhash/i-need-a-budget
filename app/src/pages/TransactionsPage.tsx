@@ -9,16 +9,8 @@ import {
   type SortingState,
 } from '@tanstack/react-table'
 import { ArrowDownUp, ArrowLeftRight, Inbox, Plus, Search } from 'lucide-react'
-import {
-  accounts,
-  categories,
-  categoryGroups,
-  type Account,
-  type Category,
-  type CategoryGroup,
-  type Transaction,
-} from '@/mocks/data'
-import { apiCategorize } from '@/mocks/api'
+import type { Account, Category, CategoryGroup, Transaction } from '@/mocks/data'
+import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesMap, useGroupsMap } from '@/lib/data'
 import { useTransactions } from '@/lib/queries'
 import { fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
@@ -41,14 +33,18 @@ interface TxRow {
   group: CategoryGroup | null
 }
 
-const accountById = new Map(accounts.map((a) => [a.id, a]))
-const categoryById = new Map(categories.map((c) => [c.id, c]))
-const groupById = new Map(categoryGroups.map((g) => [g.id, g]))
+type Maps = {
+  accountById: Map<string, Account>
+  categoryById: Map<string, Category>
+  groupById: Map<string, CategoryGroup>
+}
 
-function toRow(tx: Transaction): TxRow {
-  const category = tx.categoryId ? (categoryById.get(tx.categoryId) ?? null) : null
-  const group = category ? (groupById.get(category.groupId) ?? null) : null
-  return { tx, account: accountById.get(tx.accountId)!, category, group }
+function toRow(tx: Transaction, maps: Maps): TxRow | null {
+  const account = maps.accountById.get(tx.accountId)
+  if (!account) return null
+  const category = tx.categoryId ? (maps.categoryById.get(tx.categoryId) ?? null) : null
+  const group = category ? (maps.groupById.get(category.groupId) ?? null) : null
+  return { tx, account, category, group }
 }
 
 function useCategorize() {
@@ -286,26 +282,33 @@ export function TransactionsPage() {
   const month = useUiStore((s) => s.month)
   const setAddTxOpen = useUiStore((s) => s.setAddTxOpen)
   const { data: txs } = useTransactions()
+  const boot = useBootstrap()
+  const accounts = useAccountsList()
+  const accountById = useAccountsMap()
+  const categoryById = useCategoriesMap()
+  const groupById = useGroupsMap()
 
   const [search, setSearch] = useState('')
   const [accountFilter, setAccountFilter] = useState('all')
   const [onlyUncat, setOnlyUncat] = useState(false)
 
   const rows = useMemo(() => {
-    if (!txs) return []
+    if (!txs || !boot.data) return []
+    const maps: Maps = { accountById, categoryById, groupById }
     const q = search.trim().toLowerCase()
     return txs
       .filter((t) => monthOf(t.date) === month)
       .filter((t) => accountFilter === 'all' || t.accountId === accountFilter)
       .filter((t) => !onlyUncat || (!t.categoryId && !t.transferGroupId))
-      .map(toRow)
+      .map((t) => toRow(t, maps))
+      .filter((r): r is TxRow => r !== null)
       .filter(
         (r) =>
           !q ||
           r.tx.label.toLowerCase().includes(q) ||
           (r.category?.name.toLowerCase().includes(q) ?? false),
       )
-  }, [txs, month, search, accountFilter, onlyUncat])
+  }, [txs, boot.data, month, search, accountFilter, onlyUncat])
 
   const uncatCount = useMemo(
     () => (txs ?? []).filter((t) => monthOf(t.date) === month && !t.categoryId && !t.transferGroupId).length,

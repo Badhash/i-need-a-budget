@@ -1,7 +1,6 @@
 import { Landmark, PiggyBank, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
 import type { AccountKind } from '@/mocks/data'
-import { useAccounts } from '@/lib/queries'
-import type { AccountWithBalance } from '@/mocks/api'
+import { useAccounts, type AccountWithBalance } from '@/lib/data'
 import { Amount } from '@/components/shared/Amount'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'

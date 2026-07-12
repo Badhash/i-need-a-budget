@@ -1,7 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { accounts, categories, categoryGroups, INCOME_GROUP_ID } from '@/mocks/data'
-import { apiAddTransaction } from '@/mocks/api'
+import { apiAddTransaction, useAccountsList, useCategoriesList, useGroupsList } from '@/lib/data'
 import { MIN_MONTH, TODAY } from '@/lib/format'
 
 const MIN_DATE = `${MIN_MONTH}-01`
@@ -30,21 +29,29 @@ export function AddTransactionDialog() {
   const open = useUiStore((s) => s.addTxOpen)
   const setOpen = useUiStore((s) => s.setAddTxOpen)
   const queryClient = useQueryClient()
+  const accounts = useAccountsList()
+  const categories = useCategoriesList()
+  const groups = useGroupsList()
 
   const [kind, setKind] = useState<TxKind>('expense')
   const [amount, setAmount] = useState('')
   const [label, setLabel] = useState('')
   const [date, setDate] = useState(TODAY)
-  const [accountId, setAccountId] = useState(accounts[0].id)
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
   const [categoryId, setCategoryId] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
+
+  // Selectionne le premier compte des que la taxonomie est chargee.
+  useEffect(() => {
+    if (!accountId && accounts[0]) setAccountId(accounts[0].id)
+  }, [accountId, accounts])
 
   const reset = () => {
     setKind('expense')
     setAmount('')
     setLabel('')
     setDate(TODAY)
-    setAccountId(accounts[0].id)
+    setAccountId(accounts[0]?.id ?? '')
     setCategoryId('')
     setError(null)
   }
@@ -82,8 +89,9 @@ export function AddTransactionDialog() {
     })
   }
 
-  const visibleGroups = categoryGroups
-    .filter((g) => (kind === 'income' ? g.id === INCOME_GROUP_ID : g.id !== INCOME_GROUP_ID))
+  const wantIncome = kind === 'income'
+  const visibleGroups = groups
+    .filter((g) => categories.some((c) => c.groupId === g.id && c.isIncome === wantIncome))
     .sort((a, b) => a.sortOrder - b.sortOrder)
 
   return (
@@ -174,7 +182,8 @@ export function AddTransactionDialog() {
               {visibleGroups.map((group) => (
                 <optgroup key={group.id} label={group.name}>
                   {categories
-                    .filter((c) => c.groupId === group.id)
+                    .filter((c) => c.groupId === group.id && c.isIncome === wantIncome)
+                    .sort((a, b) => a.sortOrder - b.sortOrder)
                     .map((cat) => (
                       <option key={cat.id} value={cat.id}>
                         {cat.name}

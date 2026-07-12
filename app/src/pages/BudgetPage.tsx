@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { BudgetGroupBlock } from '@/lib/budget'
-import { useBudgetMonth } from '@/lib/queries'
-import { apiSetAssigned } from '@/mocks/api'
+import { useBudgetMonth, apiSetAssigned } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'

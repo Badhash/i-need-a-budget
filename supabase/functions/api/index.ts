@@ -432,6 +432,12 @@ async function actionGetTransactions(userId: string, params: Params) {
   return { transactions: rows }
 }
 
+async function actionListTransactions(userId: string) {
+  const rows = await loadAll<TxPayload>('transactions', userId)
+  rows.sort((a, b) => (a.bookingDate < b.bookingDate ? 1 : -1))
+  return { transactions: rows }
+}
+
 async function actionGetReports(userId: string, params: Params) {
   const month = requireMonth(params.month)
   const data = await loadBudgetData(userId)
@@ -652,6 +658,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   bootstrap: (u) => actionBootstrap(u),
   getBudgetMonth: actionGetBudgetMonth,
   getTransactions: actionGetTransactions,
+  listTransactions: (u) => actionListTransactions(u),
   getReports: actionGetReports,
   addTransaction: actionAddTransaction,
   categorizeTransaction: actionCategorizeTransaction,

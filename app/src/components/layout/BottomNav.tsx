@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
 import { NAV_ITEMS } from '@/components/layout/nav'
 import { useTransactions } from '@/lib/queries'
-import { uncategorizedCount } from '@/mocks/api'
+import { uncategorizedCount } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
 
 export function BottomNav() {

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { categories, categoryGroups, INCOME_GROUP_ID } from '@/mocks/data'
+import { useCategoriesList, useGroupsList } from '@/lib/data'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,8 +17,12 @@ interface CategoryPickerProps {
 
 /** Menu de categorisation rapide (2 taps) groupe par groupe de categories. */
 export function CategoryPicker({ children, onSelect, includeIncome = false }: CategoryPickerProps) {
-  const groups = categoryGroups
-    .filter((g) => includeIncome || g.id !== INCOME_GROUP_ID)
+  const allCategories = useCategoriesList()
+  const allGroups = useGroupsList()
+  const catVisible = (groupId: string) =>
+    allCategories.filter((c) => c.groupId === groupId && (includeIncome || !c.isIncome))
+  const groups = allGroups
+    .filter((g) => catVisible(g.id).length > 0)
     .sort((a, b) => a.sortOrder - b.sortOrder)
 
   return (
@@ -29,8 +33,7 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
           <div key={group.id}>
             {i > 0 && <DropdownMenuSeparator />}
             <DropdownMenuLabel>{group.name}</DropdownMenuLabel>
-            {categories
-              .filter((c) => c.groupId === group.id)
+            {catVisible(group.id)
               .sort((a, b) => a.sortOrder - b.sortOrder)
               .map((cat) => (
                 <DropdownMenuItem key={cat.id} onSelect={() => onSelect(cat.id)}>
