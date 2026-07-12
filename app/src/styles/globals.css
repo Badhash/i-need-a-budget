@@ -1,0 +1,63 @@
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-bg font-sans text-[15px] leading-normal text-ink antialiased;
+  }
+
+  ::selection {
+    @apply bg-accent/25;
+  }
+
+  button {
+    @apply outline-none;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/60 ring-offset-2 ring-offset-bg;
+  }
+}
+
+@layer utilities {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .label-caps {
+    @apply text-[12px] font-medium uppercase tracking-[0.08em] text-soft;
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Transition douce lors du changement de theme ou de mode */
+html.theme-anim,
+html.theme-anim * {
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    color 150ms ease;
+}

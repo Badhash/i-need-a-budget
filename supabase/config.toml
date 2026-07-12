@@ -1,0 +1,13 @@
+# Configuration Supabase CLI (minimale : le schema vit dans /migrations,
+# deploye automatiquement par l'integration GitHub sur push main).
+project_id = "i-need-a-budget"
+
+# Doit correspondre a la version du projet INAB (dashboard > Settings >
+# Infrastructure) ; les projets crees en 2026 sont provisionnes en Postgres 17.
+[db]
+major_version = 17
+
+# Le JWT est verifie par la plateforme puis re-verifie dans la fonction
+# (identite utilisateur via auth.getUser()).
+[functions.api]
+verify_jwt = true

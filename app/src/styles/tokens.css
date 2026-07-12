@@ -1,0 +1,210 @@
+/*
+ * tokens.css — source unique des design tokens.
+ * 3 themes (corail, menthe, nuit), chacun en light et dark.
+ * Les couleurs semantiques sont des triplets RGB (consommes par Tailwind
+ * via rgb(var(--x) / <alpha-value>)). Les couleurs de groupes de categories
+ * (--cat-*) sont des valeurs completes, consommees en inline style.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Theme CORAIL — north star Copilot Money : chaleureux, blanc casse,  */
+/* accent corail. Typo : Instrument Sans.                              */
+/* ------------------------------------------------------------------ */
+
+:root,
+:root[data-theme='corail'] {
+  --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --bg: 250 249 247;
+  --surface: 255 255 255;
+  --surface2: 244 242 238;
+  --ink: 26 26 26;
+  --soft: 138 132 123;
+  --line: 235 232 226;
+  --accent: 255 107 94;
+  --accent-fg: 255 255 255;
+  --success: 41 168 99;
+  --warning: 214 138 13;
+  --danger: 229 72 77;
+
+  --shadow-card: 0 1px 2px rgb(26 26 26 / 0.04), 0 4px 12px rgb(26 26 26 / 0.05);
+  --shadow-fab: 0 8px 24px rgb(255 107 94 / 0.35);
+
+  --cat-blue-bg: #e8f0fa;
+  --cat-blue-fg: #3b6fb5;
+  --cat-green-bg: #e3f5eb;
+  --cat-green-fg: #1f9d5b;
+  --cat-amber-bg: #faf0da;
+  --cat-amber-fg: #a8700f;
+  --cat-pink-bg: #fbe7ea;
+  --cat-pink-fg: #c94f63;
+  --cat-purple-bg: #efeafb;
+  --cat-purple-fg: #7a5fc7;
+  --cat-teal-bg: #e0f3f2;
+  --cat-teal-fg: #1f8d85;
+}
+
+:root[data-theme='corail'].dark,
+:root.dark {
+  --bg: 20 20 20;
+  --surface: 30 30 30;
+  --surface2: 40 39 37;
+  --ink: 242 240 237;
+  --soft: 158 152 144;
+  --line: 48 46 43;
+  --accent: 255 122 110;
+  --accent-fg: 46 18 15;
+  --success: 61 214 140;
+  --warning: 247 184 75;
+  --danger: 242 85 90;
+
+  --shadow-card: none;
+  --shadow-fab: 0 8px 24px rgb(0 0 0 / 0.5);
+
+  --cat-blue-bg: #22303f;
+  --cat-blue-fg: #8fb8e8;
+  --cat-green-bg: #1d3328;
+  --cat-green-fg: #7cd9a5;
+  --cat-amber-bg: #3b301a;
+  --cat-amber-fg: #ebc178;
+  --cat-pink-bg: #3a2428;
+  --cat-pink-fg: #ee9eac;
+  --cat-purple-bg: #2c2540;
+  --cat-purple-fg: #bba5f0;
+  --cat-teal-bg: #1c3432;
+  --cat-teal-fg: #7fd1ca;
+}
+
+/* ------------------------------------------------------------------ */
+/* Theme MENTHE — fintech fraiche et apaisante, vert menthe, tons      */
+/* cools. Typo : Outfit.                                               */
+/* ------------------------------------------------------------------ */
+
+:root[data-theme='menthe'] {
+  --font-sans: 'Outfit', ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --bg: 246 250 248;
+  --surface: 255 255 255;
+  --surface2: 234 243 239;
+  --ink: 15 31 26;
+  --soft: 104 125 117;
+  --line: 222 235 229;
+  --accent: 13 148 118;
+  --accent-fg: 255 255 255;
+  --success: 22 158 90;
+  --warning: 204 122 8;
+  --danger: 224 66 76;
+
+  --shadow-card: 0 1px 2px rgb(15 31 26 / 0.04), 0 4px 12px rgb(15 31 26 / 0.06);
+  --shadow-fab: 0 8px 24px rgb(13 148 118 / 0.35);
+
+  --cat-blue-bg: #e3eef9;
+  --cat-blue-fg: #33689c;
+  --cat-green-bg: #dff5e7;
+  --cat-green-fg: #178a50;
+  --cat-amber-bg: #f8eed9;
+  --cat-amber-fg: #9c6d11;
+  --cat-pink-bg: #f9e6ec;
+  --cat-pink-fg: #bf4e6e;
+  --cat-purple-bg: #ece8f9;
+  --cat-purple-fg: #6f58bd;
+  --cat-teal-bg: #dcf3f0;
+  --cat-teal-fg: #12857c;
+}
+
+:root[data-theme='menthe'].dark {
+  --bg: 13 20 18;
+  --surface: 21 31 28;
+  --surface2: 29 42 38;
+  --ink: 232 242 238;
+  --soft: 141 161 153;
+  --line: 40 55 50;
+  --accent: 46 211 167;
+  --accent-fg: 6 30 23;
+  --success: 92 214 143;
+  --warning: 240 173 78;
+  --danger: 240 92 97;
+
+  --shadow-card: none;
+  --shadow-fab: 0 8px 24px rgb(0 0 0 / 0.5);
+
+  --cat-blue-bg: #1f2f3e;
+  --cat-blue-fg: #8cb6e6;
+  --cat-green-bg: #1b3527;
+  --cat-green-fg: #7bdba4;
+  --cat-amber-bg: #37301b;
+  --cat-amber-fg: #e6c078;
+  --cat-pink-bg: #382429;
+  --cat-pink-fg: #ec9dab;
+  --cat-purple-bg: #2a2540;
+  --cat-purple-fg: #b8a4ee;
+  --cat-teal-bg: #17332f;
+  --cat-teal-fg: #7dd3ca;
+}
+
+/* ------------------------------------------------------------------ */
+/* Theme NUIT — premium, violet electrique, contrastes profonds.       */
+/* Typo : Space Grotesk.                                               */
+/* ------------------------------------------------------------------ */
+
+:root[data-theme='nuit'] {
+  --font-sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --bg: 247 246 251;
+  --surface: 255 255 255;
+  --surface2: 238 236 247;
+  --ink: 23 21 31;
+  --soft: 116 111 132;
+  --line: 231 228 240;
+  --accent: 112 78 250;
+  --accent-fg: 255 255 255;
+  --success: 36 165 96;
+  --warning: 209 132 10;
+  --danger: 229 72 77;
+
+  --shadow-card: 0 1px 2px rgb(23 21 31 / 0.04), 0 4px 14px rgb(23 21 31 / 0.06);
+  --shadow-fab: 0 8px 24px rgb(112 78 250 / 0.35);
+
+  --cat-blue-bg: #e4edfb;
+  --cat-blue-fg: #3d6bc0;
+  --cat-green-bg: #e2f5ea;
+  --cat-green-fg: #1e9a58;
+  --cat-amber-bg: #f9eeda;
+  --cat-amber-fg: #a06c12;
+  --cat-pink-bg: #fae6f0;
+  --cat-pink-fg: #c2498f;
+  --cat-purple-bg: #ece6fd;
+  --cat-purple-fg: #7150e0;
+  --cat-teal-bg: #e0f2f4;
+  --cat-teal-fg: #1b8e96;
+}
+
+:root[data-theme='nuit'].dark {
+  --bg: 17 16 24;
+  --surface: 26 24 36;
+  --surface2: 35 32 48;
+  --ink: 238 236 246;
+  --soft: 150 145 168;
+  --line: 45 42 60;
+  --accent: 155 133 255;
+  --accent-fg: 24 16 54;
+  --success: 84 214 149;
+  --warning: 246 180 85;
+  --danger: 242 90 100;
+
+  --shadow-card: none;
+  --shadow-fab: 0 8px 24px rgb(0 0 0 / 0.5);
+
+  --cat-blue-bg: #232c44;
+  --cat-blue-fg: #93b4f2;
+  --cat-green-bg: #1e3430;
+  --cat-green-fg: #7adfac;
+  --cat-amber-bg: #3a3020;
+  --cat-amber-fg: #eec583;
+  --cat-pink-bg: #3c2334;
+  --cat-pink-fg: #ef9dcb;
+  --cat-purple-bg: #2d2547;
+  --cat-purple-fg: #bfabff;
+  --cat-teal-bg: #1b3438;
+  --cat-teal-fg: #83d4dc;
+}

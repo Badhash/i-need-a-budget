@@ -1,0 +1,18 @@
+{
+  "name": "@inab/engine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Moteur d'enveloppes YNAB en TypeScript pur (zero dependance runtime)",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}
