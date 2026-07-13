@@ -220,9 +220,11 @@ async function updateEncrypted(
   if (error) throw new ApiError(500, `mise a jour ${table} impossible`)
 }
 
-// Insertion d'une transaction importee, idempotente sur (user_id, tx_hash).
-// ignoreDuplicates : un doublon (run cron et run manuel concurrents) est ignore
-// silencieusement. Aucun .select() : sur conflit, aucune ligne n'est renvoyee.
+// Insertion d'une transaction importee. La dedup principale est faite en amont
+// via seenHashes ; l'index unique PARTIEL (user_id, tx_hash) where tx_hash not
+// null ne peut PAS servir d'arbitre a un upsert PostgREST (le WHERE est omis),
+// donc on fait un INSERT simple et on ignore une eventuelle violation d'unicite
+// (course concurrente cron/manuel) : code Postgres 23505.
 async function insertImportedTransaction(
   userId: string,
   payload: TxPayload,
@@ -230,16 +232,15 @@ async function insertImportedTransaction(
   txHash: string,
 ): Promise<void> {
   const keys = await getKeys()
-  const { error } = await admin.from('transactions').upsert(
-    {
-      user_id: userId,
-      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['transactions', userId])),
-      month_idx: monthIdx,
-      tx_hash: txHash,
-    },
-    { onConflict: 'user_id,tx_hash', ignoreDuplicates: true },
-  )
-  if (error) throw new ApiError(500, 'ecriture transactions impossible')
+  const { error } = await admin.from('transactions').insert({
+    user_id: userId,
+    enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['transactions', userId])),
+    month_idx: monthIdx,
+    tx_hash: txHash,
+  })
+  if (error && error.code !== '23505') {
+    throw new ApiError(500, 'ecriture transactions impossible')
+  }
 }
 
 // Journalisation d'une sync : ne throw jamais (best-effort). Un echec de log ne
