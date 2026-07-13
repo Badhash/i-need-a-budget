@@ -33,6 +33,24 @@
     touch-action: manipulation;
   }
 
+  /* Ecrans tactiles : l'appui long ne doit jamais declencher la selection de
+     texte ni le menu systeme (Copier / Chercher / Traduire) — c'est une app,
+     pas une page de lecture. Les champs de saisie restent selectionnables. */
+  @media (pointer: coarse) {
+    body {
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    input,
+    textarea,
+    [contenteditable='true'] {
+      -webkit-user-select: text;
+      user-select: text;
+    }
+  }
+
   ::selection {
     @apply bg-accent/25;
   }
