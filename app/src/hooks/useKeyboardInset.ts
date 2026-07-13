@@ -12,14 +12,23 @@ export function useKeyboardInset(): number {
     const vv = window.visualViewport
     if (!vv) return
     const update = () => {
-      setInset(Math.max(0, window.innerHeight - vv.height - vv.offsetTop))
+      // setState est un no-op si la valeur ne change pas : le polling est gratuit.
+      setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)))
     }
     vv.addEventListener('resize', update)
     vv.addEventListener('scroll', update)
+    window.addEventListener('focusin', update)
+    window.addEventListener('focusout', update)
+    // Filet : en mode standalone (ecran d'accueil), iOS n'emet pas toujours
+    // resize a l'ouverture du clavier ; on re-mesure periodiquement.
+    const timer = window.setInterval(update, 250)
     update()
     return () => {
       vv.removeEventListener('resize', update)
       vv.removeEventListener('scroll', update)
+      window.removeEventListener('focusin', update)
+      window.removeEventListener('focusout', update)
+      window.clearInterval(timer)
     }
   }, [])
 
