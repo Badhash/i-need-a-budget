@@ -9,13 +9,13 @@ import {
   useReactTable,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDownUp, ArrowLeftRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet } from 'lucide-react'
+import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/mocks/data'
 import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesMap, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
-import { fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
+import { fmtDateShort, fmtDayLong } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
 import { TxKindChip } from '@/components/transactions/TxKindChip'
@@ -265,6 +265,8 @@ function AccountChip({ account }: { account: Account }) {
   )
 }
 
+const PAGE_SIZE = 50
+
 const columnHelper = createColumnHelper<TxRow>()
 
 const columns = [
@@ -457,7 +459,6 @@ function TransactionsSkeleton() {
 }
 
 export function TransactionsPage() {
-  const month = useUiStore((s) => s.month)
   const setAddTxOpen = useUiStore((s) => s.setAddTxOpen)
   const { data: txs } = useTransactions()
   const boot = useBootstrap()
@@ -475,12 +476,13 @@ export function TransactionsPage() {
     if (compte) setAccountFilter(compte)
   }, [compte])
 
+  // Filtres appliques a TOUTES les transactions (tous mois confondus), tri
+  // anti-chronologique, puis pagination.
   const rows = useMemo(() => {
     if (!txs || !boot.data) return []
     const maps: Maps = { accountById, categoryById, groupById }
     const q = search.trim().toLowerCase()
     return txs
-      .filter((t) => monthOf(t.date) === month)
       .filter((t) => accountFilter === 'all' || t.accountId === accountFilter)
       .filter((t) => !onlyUncat || (!t.categoryId && !t.transferGroupId))
       .map((t) => toRow(t, maps))
@@ -492,12 +494,22 @@ export function TransactionsPage() {
           r.parsed.short.toLowerCase().includes(q) ||
           (r.category?.name.toLowerCase().includes(q) ?? false),
       )
-  }, [txs, boot.data, month, search, accountFilter, onlyUncat])
+      .sort((a, b) => (a.tx.date < b.tx.date ? 1 : a.tx.date > b.tx.date ? -1 : 0))
+  }, [txs, boot.data, search, accountFilter, onlyUncat])
 
   const uncatCount = useMemo(
-    () => (txs ?? []).filter((t) => monthOf(t.date) === month && !t.categoryId && !t.transferGroupId).length,
-    [txs, month],
+    () => (txs ?? []).filter((t) => !t.categoryId && !t.transferGroupId).length,
+    [txs],
   )
+
+  // Pagination : remise a la premiere page a chaque changement de filtre.
+  const [page, setPage] = useState(0)
+  useEffect(() => {
+    setPage(0)
+  }, [search, accountFilter, onlyUncat])
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const safePage = Math.min(page, pageCount - 1)
+  const pagedRows = rows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
 
   if (!txs) return <TransactionsSkeleton />
 
@@ -554,8 +566,8 @@ export function TransactionsPage() {
             title="Aucune transaction"
             description={
               onlyUncat
-                ? 'Tout est catégorisé pour ce mois. Bravo, rien ne traîne.'
-                : 'Aucune transaction ne correspond à ces filtres pour ce mois.'
+                ? 'Tout est catégorisé. Bravo, rien ne traîne.'
+                : 'Aucune transaction ne correspond à ces filtres.'
             }
             actionLabel="Ajouter une transaction"
             onAction={() => setAddTxOpen(true)}
@@ -563,8 +575,36 @@ export function TransactionsPage() {
         </Card>
       ) : (
         <>
-          <DesktopTable rows={rows} />
-          <MobileList rows={rows} />
+          <DesktopTable rows={pagedRows} />
+          <MobileList rows={pagedRows} />
+          {pageCount > 1 && (
+            <div className="flex items-center justify-between gap-3 px-1">
+              <p className="text-[12.5px] text-soft tnum">
+                {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, rows.length)} sur{' '}
+                {rows.length}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="h-10 px-3.5"
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={safePage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Précédent
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-10 px-3.5"
+                  onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                  disabled={safePage >= pageCount - 1}
+                >
+                  Suivant
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
