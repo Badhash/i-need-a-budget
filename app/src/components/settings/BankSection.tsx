@@ -1,10 +1,19 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Landmark, Loader2, RefreshCw } from 'lucide-react'
-import { useBankConnections, useAspsps, bankStartAuth, bankSync, type BankConnection } from '@/lib/bank'
+import {
+  useBankConnections,
+  useAspsps,
+  bankStartAuth,
+  bankSync,
+  apiLinkBankAccount,
+  type BankConnection,
+} from '@/lib/bank'
+import { useAccountsList } from '@/lib/data'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { BankCombobox } from '@/components/settings/BankCombobox'
+import { Select } from '@/components/ui/select'
+import { BankCombobox, BankLogo } from '@/components/settings/BankCombobox'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -26,6 +35,8 @@ export function BankSection() {
   const queryClient = useQueryClient()
   const { data: connections, isLoading } = useBankConnections()
   const { data: aspsps, isLoading: aspspsLoading, isError: aspspsError } = useAspsps()
+  const localAccounts = useAccountsList()
+  const logoByName = new Map((aspsps ?? []).map((a) => [a.name, a.logo]))
   const [selectedBank, setSelectedBank] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -69,6 +80,16 @@ export function BankSection() {
     }
   }
 
+  // Associe (ou detache) un compte bancaire EB a un compte local, puis rafraichit.
+  async function handleLink(connectionId: string, providerAccountUid: string, accountId: string | null) {
+    try {
+      await apiLinkBankAccount({ connectionId, providerAccountUid, accountId })
+      await queryClient.invalidateQueries()
+    } catch {
+      // silencieux : l'utilisateur peut reessayer
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -105,20 +126,55 @@ export function BankSection() {
             {list.map((c) => {
               const meta = STATUS_META[c.status]
               const until = fmtValidUntil(c.validUntil)
+              const noneLinked = c.accounts.length > 0 && !c.accounts.some((a) => a.linkedAccountId)
               return (
-                <div key={c.id} className="flex flex-wrap items-center gap-4 rounded-xl border border-line p-4">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface2 text-soft">
-                    <Landmark className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="truncate font-semibold">{c.institution}</p>
-                      <Badge variant={meta.variant}>{meta.label}</Badge>
+                <div key={c.id} className="space-y-3 rounded-xl border border-line p-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <BankLogo logo={logoByName.get(c.institution) ?? null} className="h-11 w-11" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate font-semibold">{c.institution}</p>
+                        <Badge variant={meta.variant}>{meta.label}</Badge>
+                      </div>
+                      <p className="text-[12.5px] text-soft">
+                        {until ? `Consentement valide jusqu'au ${until}.` : 'Consentement actif.'}
+                      </p>
                     </div>
-                    <p className="text-[12.5px] text-soft">
-                      {until ? `Consentement valide jusqu'au ${until}.` : 'Consentement actif.'}
-                    </p>
                   </div>
+
+                  {c.accounts.length > 0 && (
+                    <div className="space-y-2 border-t border-line/60 pt-3">
+                      <p className="label-caps">Comptes à associer</p>
+                      {c.accounts.map((acc) => (
+                        <div key={acc.uid} className="flex flex-wrap items-center gap-2.5">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[13.5px] font-medium">
+                              {acc.name ?? 'Compte bancaire'}
+                            </p>
+                            <p className="truncate text-[11px] text-soft">{acc.uid}</p>
+                          </div>
+                          <Select
+                            value={acc.linkedAccountId ?? ''}
+                            onChange={(e) => void handleLink(c.id, acc.uid, e.target.value || null)}
+                            className="min-w-[170px]"
+                            aria-label="Associer a un compte local"
+                          >
+                            <option value="">Non associé</option>
+                            {localAccounts.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.name}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                      ))}
+                      {noneLinked && (
+                        <p className="text-[12px] text-warning">
+                          Associe au moins un compte pour que la synchronisation importe tes transactions.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )
             })}

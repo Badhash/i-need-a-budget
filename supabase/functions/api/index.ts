@@ -109,6 +109,8 @@ interface BankConnectionPayload {
   institution: string
   validUntil?: string | null
   sessionState?: string
+  sessionId?: string
+  accounts?: { uid: string; name?: string }[]
 }
 
 type BankConnectionStatus = 'active' | 'expiring' | 'expired' | 'pending'
@@ -865,7 +867,15 @@ async function actionDeleteTarget(userId: string, params: Params) {
 const EXPIRY_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
 
 async function actionGetBankConnections(userId: string) {
-  const rows = await loadAll<BankConnectionPayload>('bank_connections', userId)
+  const [rows, accounts] = await Promise.all([
+    loadAll<BankConnectionPayload>('bank_connections', userId),
+    loadAll<AccountPayload>('accounts', userId),
+  ])
+  // uid provider -> compte local lie (pour afficher l'etat de liaison).
+  const byUid = new Map<string, { id: string; name: string }>()
+  for (const a of accounts) {
+    if (a.providerAccountUid) byUid.set(a.providerAccountUid, { id: a.id, name: a.name })
+  }
   const now = Date.now()
   const connections = rows.map((p) => {
     const validUntil = p.validUntil ?? null
@@ -878,9 +888,49 @@ async function actionGetBankConnections(userId: string) {
       else if (expiry < now + EXPIRY_WINDOW_MS) status = 'expiring'
       else status = 'active'
     }
-    return { id: p.id, institution: p.institution, validUntil, status }
+    const ebAccounts = (p.accounts ?? []).map((acc) => {
+      const linked = byUid.get(acc.uid) ?? null
+      return {
+        uid: acc.uid,
+        name: acc.name ?? null,
+        linkedAccountId: linked?.id ?? null,
+        linkedAccountName: linked?.name ?? null,
+      }
+    })
+    return { id: p.id, institution: p.institution, validUntil, status, accounts: ebAccounts }
   })
   return { connections }
+}
+
+// Lie (ou detache) un compte bancaire Enable Banking (uid) a un compte local.
+// Un uid ne peut etre lie qu'a un seul compte : on detache tout autre compte.
+async function actionLinkBankAccount(userId: string, params: Params) {
+  const connectionId = requireUuid(params.connectionId, 'connectionId')
+  const providerAccountUid = requireText(params.providerAccountUid, 'providerAccountUid', 200)
+  const accountId =
+    params.accountId == null || params.accountId === ''
+      ? null
+      : requireUuid(params.accountId, 'accountId')
+
+  const accounts = await loadAll<AccountPayload>('accounts', userId)
+  if (accountId && !accounts.some((a) => a.id === accountId)) throw new ApiError(404, 'compte inconnu')
+
+  for (const a of accounts) {
+    if (a.providerAccountUid === providerAccountUid && a.id !== accountId) {
+      const { id, ...rest } = a
+      await updateEncrypted('accounts', userId, id, {
+        ...rest,
+        providerAccountUid: null,
+        connectionId: null,
+      })
+    }
+  }
+  if (accountId) {
+    const target = accounts.find((a) => a.id === accountId)!
+    const { id, ...rest } = target
+    await updateEncrypted('accounts', userId, id, { ...rest, connectionId, providerAccountUid })
+  }
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------------------
@@ -934,6 +984,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   setTarget: actionSetTarget,
   deleteTarget: actionDeleteTarget,
   getBankConnections: (u) => actionGetBankConnections(u),
+  linkBankAccount: actionLinkBankAccount,
   exportData: (u) => actionExportData(u),
 }
 

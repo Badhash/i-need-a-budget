@@ -84,12 +84,12 @@ export function BankCombobox({ aspsps, value, onSelect, loading, disabled }: Ban
 }
 
 /** Logo de banque (image Enable Banking) avec repli sur une icone si indisponible. */
-function BankLogo({ logo }: { logo: string | null }) {
+export function BankLogo({ logo, className = 'h-6 w-6' }: { logo: string | null; className?: string }) {
   const [broken, setBroken] = useState(false)
   if (!logo || broken) {
     return (
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-surface2 text-soft">
-        <Landmark className="h-3.5 w-3.5" />
+      <span className={cn('flex shrink-0 items-center justify-center rounded-md bg-surface2 text-soft', className)}>
+        <Landmark className="h-1/2 w-1/2" />
       </span>
     )
   }
@@ -99,7 +99,7 @@ function BankLogo({ logo }: { logo: string | null }) {
       alt=""
       loading="lazy"
       onError={() => setBroken(true)}
-      className="h-6 w-6 shrink-0 rounded-md bg-white object-contain"
+      className={cn('shrink-0 rounded-md bg-white object-contain', className)}
     />
   )
 }

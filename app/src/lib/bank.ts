@@ -10,11 +10,28 @@ import { apiCall } from '@/lib/api'
 const SYNC_URL = `${SUPABASE_URL}/functions/v1/sync-bank`
 const ANON_KEY = SUPABASE_ANON_KEY
 
+export interface EbAccountLink {
+  uid: string
+  name: string | null
+  linkedAccountId: string | null
+  linkedAccountName: string | null
+}
+
 export interface BankConnection {
   id: string
   institution: string
   validUntil: string | null
   status: 'active' | 'expiring' | 'expired' | 'pending'
+  accounts: EbAccountLink[]
+}
+
+/** Lie (accountId) ou detache (accountId null) un compte bancaire EB a un compte local. */
+export async function apiLinkBankAccount(input: {
+  connectionId: string
+  providerAccountUid: string
+  accountId: string | null
+}): Promise<void> {
+  await apiCall('linkBankAccount', input)
 }
 
 export interface Aspsp {
