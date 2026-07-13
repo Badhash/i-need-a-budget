@@ -795,6 +795,25 @@ async function actionFinalizeAuth(userId: string, params: Params) {
   return { ok: true, connectionId }
 }
 
+// listAspsps : liste des banques (ASPSP) disponibles pour la France. Sert au
+// selecteur de banque du front (evite de saisir le nom exact a la main).
+async function actionListAspsps() {
+  // HYP EB : GET /aspsps?country=FR -> { aspsps: [{ name, country, logo, psu_types }] }
+  const res = (await ebFetch('/aspsps?country=FR')) as {
+    aspsps?: Array<{ name?: string; country?: string; logo?: string; psu_types?: string[] }>
+  }
+  const seen = new Set<string>()
+  const aspsps: { name: string; country: string; logo: string | null }[] = []
+  for (const a of res.aspsps ?? []) {
+    if (!a.name || seen.has(a.name)) continue
+    if (a.psu_types && !a.psu_types.includes('personal')) continue
+    seen.add(a.name)
+    aspsps.push({ name: a.name, country: a.country ?? 'FR', logo: a.logo ?? null })
+  }
+  aspsps.sort((x, y) => x.name.localeCompare(y.name))
+  return { aspsps }
+}
+
 // sync : synchronise les utilisateurs cibles. En mode cron, ne jamais laisser un
 // user isole faire echouer les autres.
 async function actionSync(targetUserIds: string[], isCron: boolean) {
@@ -949,6 +968,10 @@ Deno.serve(async (req) => {
       case 'finalizeAuth':
         if (isCron || !userId) throw new ApiError(401, 'action reservee a un utilisateur')
         result = await actionFinalizeAuth(userId, params)
+        break
+      case 'listAspsps':
+        if (isCron || !userId) throw new ApiError(401, 'action reservee a un utilisateur')
+        result = await actionListAspsps()
         break
       case 'sync': {
         const targets = isCron ? await allUsersWithConnections() : [userId as string]

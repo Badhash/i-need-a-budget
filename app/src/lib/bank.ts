@@ -17,6 +17,12 @@ export interface BankConnection {
   status: 'active' | 'expiring' | 'expired' | 'pending'
 }
 
+export interface Aspsp {
+  name: string
+  country: string
+  logo: string | null
+}
+
 /**
  * Liste des connexions bancaires de l'utilisateur, lue via l'Edge Function /api
  * (action getBankConnections). Le tri/statut est calcule cote serveur.
@@ -64,9 +70,23 @@ async function syncBankCall<T>(action: string, params: Record<string, unknown> =
   return body as T
 }
 
+/**
+ * Liste des banques (ASPSP) disponibles pour la France, pour le selecteur de
+ * banque. Passe par sync-bank -> Enable Banking. staleTime long : la liste
+ * bouge peu et l'appel authentifie EB n'a pas besoin d'etre refait souvent.
+ */
+export function useAspsps(): UseQueryResult<Aspsp[]> {
+  return useQuery({
+    queryKey: ['aspsps'],
+    queryFn: () => syncBankCall<{ aspsps: Aspsp[] }>('listAspsps').then((r) => r.aspsps),
+    staleTime: 60 * 60 * 1000,
+    retry: false,
+  })
+}
+
 /** Demarre le flow d'auth PSD2 : retourne l'URL de redirection Enable Banking. */
-export async function bankStartAuth(redirectUrl: string): Promise<{ url: string }> {
-  return syncBankCall<{ url: string }>('startAuth', { redirectUrl })
+export async function bankStartAuth(redirectUrl: string, aspspName: string): Promise<{ url: string }> {
+  return syncBankCall<{ url: string }>('startAuth', { redirectUrl, aspspName })
 }
 
 /**

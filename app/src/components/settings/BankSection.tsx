@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Landmark, Loader2, RefreshCw } from 'lucide-react'
-import { useBankConnections, bankStartAuth, bankSync, type BankConnection } from '@/lib/bank'
+import { useBankConnections, useAspsps, bankStartAuth, bankSync, type BankConnection } from '@/lib/bank'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Select } from '@/components/ui/select'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -24,6 +25,8 @@ function fmtValidUntil(iso: string | null): string | null {
 export function BankSection() {
   const queryClient = useQueryClient()
   const { data: connections, isLoading } = useBankConnections()
+  const { data: aspsps, isLoading: aspspsLoading, isError: aspspsError } = useAspsps()
+  const [selectedBank, setSelectedBank] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [connectMessage, setConnectMessage] = useState<string | null>(null)
@@ -34,14 +37,16 @@ export function BankSection() {
   const needsReconnect = list.some((c) => c.status === 'expiring' || c.status === 'expired')
   const isExpired = list.some((c) => c.status === 'expired')
 
-  async function handleConnect() {
+  // Redirige vers le consentement PSD2 de la banque choisie (aspspName).
+  async function handleConnect(aspspName: string) {
+    if (!aspspName) return
     setConnectMessage(null)
     setConnecting(true)
     try {
-      const { url } = await bankStartAuth(window.location.origin + window.location.pathname)
+      const { url } = await bankStartAuth(window.location.origin + window.location.pathname, aspspName)
       window.location.assign(url)
     } catch {
-      setConnectMessage('Synchronisation bientot disponible.')
+      setConnectMessage('Connexion bancaire indisponible pour le moment.')
       setConnecting(false)
     }
   }
@@ -85,7 +90,11 @@ export function BankSection() {
                 ? 'Ta connexion bancaire a expire. Reconnecte-toi pour reprendre la synchronisation.'
                 : 'Ta connexion bancaire expire dans moins de 14 jours. Reconnecte-toi pour ne pas interrompre la synchronisation.'}
             </p>
-            <Button variant="outline" onClick={() => void handleConnect()} disabled={connecting}>
+            <Button
+              variant="outline"
+              onClick={() => void handleConnect(list[0]?.institution ?? '')}
+              disabled={connecting}
+            >
               {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Reconnecter'}
             </Button>
           </div>
@@ -116,11 +125,7 @@ export function BankSection() {
 
             <div className="flex flex-wrap items-center gap-3 pt-1">
               <Button variant="secondary" onClick={() => void handleSync()} disabled={syncing}>
-                {syncing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4" />
-                )}
+                {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 Synchroniser maintenant
               </Button>
               {syncMessage && <p className="text-[13px] text-soft">{syncMessage}</p>}
@@ -129,20 +134,47 @@ export function BankSection() {
         )}
 
         {!isLoading && !hasConnections && (
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-4 rounded-xl border border-line p-4">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface2 text-soft">
-                <Landmark className="h-5 w-5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold">Aucune banque connectee</p>
-                <p className="text-[12.5px] text-soft">
-                  {connectMessage ?? 'Connecte ta banque pour importer tes transactions automatiquement.'}
-                </p>
+          <div className="space-y-3">
+            <div className="space-y-3 rounded-xl border border-line p-4">
+              <div className="flex items-center gap-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface2 text-soft">
+                  <Landmark className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="font-semibold">Connecter ta banque</p>
+                  <p className="text-[12.5px] text-soft">
+                    Choisis ta banque puis autorise l'acces en lecture seule.
+                  </p>
+                </div>
               </div>
-              <Button onClick={() => void handleConnect()} disabled={connecting}>
-                {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connecter'}
-              </Button>
+
+              {aspspsError ? (
+                <p className="text-[13px] text-soft">
+                  La liste des banques n'est pas encore disponible (configuration Enable Banking en attente).
+                </p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <Select
+                    value={selectedBank}
+                    onChange={(e) => setSelectedBank(e.target.value)}
+                    disabled={aspspsLoading}
+                    className="min-w-[200px] flex-1"
+                    aria-label="Choisir ta banque"
+                  >
+                    <option value="">{aspspsLoading ? 'Chargement des banques…' : 'Choisis ta banque'}</option>
+                    {(aspsps ?? []).map((a) => (
+                      <option key={a.name} value={a.name}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Button onClick={() => void handleConnect(selectedBank)} disabled={connecting || !selectedBank}>
+                    {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connecter'}
+                  </Button>
+                </div>
+              )}
+
+              {connectMessage && <p className="text-[13px] text-soft">{connectMessage}</p>}
             </div>
             <p className="text-[12.5px] text-soft">
               Apres avoir autorise l'acces chez ta banque, tu seras redirige vers l'application pour finaliser la connexion.
