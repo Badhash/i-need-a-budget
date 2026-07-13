@@ -530,7 +530,10 @@ function lastSuccessfulRunDate(
 // Synchronisation d'un utilisateur
 // ---------------------------------------------------------------------------
 
-async function syncUser(userId: string): Promise<{ imported: number; linked: number }> {
+async function syncUser(
+  userId: string,
+  sinceDays?: number,
+): Promise<{ imported: number; linked: number; errors: string[] }> {
   const keys = await getKeys()
 
   // Connexions bancaires actives de l'utilisateur.
@@ -569,7 +572,7 @@ async function syncUser(userId: string): Promise<{ imported: number; linked: num
     }
     activeConnections.push(conn)
   }
-  if (activeConnections.length === 0) return { imported: 0, linked: 0 }
+  if (activeConnections.length === 0) return { imported: 0, linked: 0, errors: [] }
 
   // Comptes (pour lier uid EB -> id compte interne) et regles de categorisation.
   const [accounts, rules] = await Promise.all([
@@ -601,6 +604,7 @@ async function syncUser(userId: string): Promise<{ imported: number; linked: num
 
   let importedTotal = 0
   let linkedCount = 0
+  const errors: string[] = []
 
   for (const conn of activeConnections) {
     let importedForConn = 0
@@ -611,9 +615,15 @@ async function syncUser(userId: string): Promise<{ imported: number; linked: num
       // sont importees (le solde d'ouverture est saisi manuellement).
       const activationDate = conn.createdAt.slice(0, 10)
       const lastOkDate = lastSuccessfulRunDate(recentLogs, conn.id)
-      const dateFrom = lastOkDate
-        ? maxDate(shiftDays(lastOkDate, -OVERLAP_DAYS), activationDate)
-        : activationDate
+      // sinceDays (mode user, diagnostic / import initial) : force la fenetre a
+      // aujourd'hui - N jours, en ignorant la borne d'activation.
+      const today = new Date().toISOString().slice(0, 10)
+      const dateFrom =
+        sinceDays != null
+          ? shiftDays(today, -sinceDays)
+          : lastOkDate
+            ? maxDate(shiftDays(lastOkDate, -OVERLAP_DAYS), activationDate)
+            : activationDate
 
       for (const ebAccount of conn.payload.accounts) {
         const localAccount = accountByUid.get(ebAccount.uid)
@@ -691,6 +701,7 @@ async function syncUser(userId: string): Promise<{ imported: number; linked: num
       // Echec d'une connexion : on journalise et on passe a la suivante, sans
       // interrompre les autres connexions/utilisateurs. Message statique.
       const message = err instanceof ApiError ? err.message : 'synchronisation echouee'
+      errors.push(message)
       await logSyncSafe(userId, {
         connectionId: conn.id,
         status: 'error',
@@ -700,7 +711,7 @@ async function syncUser(userId: string): Promise<{ imported: number; linked: num
     }
   }
 
-  return { imported: importedTotal, linked: linkedCount }
+  return { imported: importedTotal, linked: linkedCount, errors }
 }
 
 // ---------------------------------------------------------------------------
@@ -837,29 +848,33 @@ async function actionListAspsps() {
 
 // sync : synchronise les utilisateurs cibles. En mode cron, ne jamais laisser un
 // user isole faire echouer les autres.
-async function actionSync(targetUserIds: string[], isCron: boolean) {
+async function actionSync(targetUserIds: string[], isCron: boolean, sinceDays?: number) {
   let imported = 0
   let linked = 0
+  const errors: string[] = []
   for (const userId of targetUserIds) {
     try {
-      const r = await syncUser(userId)
+      const r = await syncUser(userId, sinceDays)
       imported += r.imported
       linked += r.linked
+      errors.push(...r.errors)
     } catch (err) {
       // Erreur "dure" (chargement impossible) : journalisee, puis on continue en
       // mode cron. En mode user, on la propage pour un retour d'erreur explicite.
+      const message = err instanceof ApiError ? err.message : 'synchronisation echouee'
+      errors.push(message)
       await logSyncSafe(userId, {
         connectionId: null,
         status: 'error',
         importedCount: 0,
-        error: err instanceof ApiError ? err.message : 'synchronisation echouee',
+        error: message,
       })
       if (!isCron) throw err
     }
   }
   // `linked` = nombre de comptes bancaires effectivement associes a un compte
   // local : permet au front de dire "associe d'abord un compte" si 0.
-  return { imported, linked }
+  return { imported, linked, errors }
 }
 
 // ---------------------------------------------------------------------------
@@ -1001,7 +1016,13 @@ Deno.serve(async (req) => {
         break
       case 'sync': {
         const targets = isCron ? await allUsersWithConnections() : [userId as string]
-        result = await actionSync(targets, isCron)
+        // sinceDays : diagnostic / import initial reserve au mode user, borne a 2 ans.
+        const rawSince = (params as { sinceDays?: unknown }).sinceDays
+        const sinceDays =
+          !isCron && typeof rawSince === 'number' && rawSince > 0
+            ? Math.min(Math.floor(rawSince), 730)
+            : undefined
+        result = await actionSync(targets, isCron, sinceDays)
         break
       }
       default:
