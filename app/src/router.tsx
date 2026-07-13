@@ -12,6 +12,7 @@ import { BudgetPage } from '@/pages/BudgetPage'
 import { TransactionsPage } from '@/pages/TransactionsPage'
 import { AccountsPage } from '@/pages/AccountsPage'
 import { ReportsPage } from '@/pages/ReportsPage'
+import { RulesPage } from '@/pages/RulesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 
 interface RouterAuthContext {
@@ -74,6 +75,12 @@ const reportsRoute = createRoute({
   component: ReportsPage,
 })
 
+const rulesRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: '/regles',
+  component: RulesPage,
+})
+
 const settingsRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: '/reglages',
@@ -88,6 +95,7 @@ const routeTree = rootRoute.addChildren([
     transactionsRoute,
     accountsRoute,
     reportsRoute,
+    rulesRoute,
     settingsRoute,
   ]),
 ])

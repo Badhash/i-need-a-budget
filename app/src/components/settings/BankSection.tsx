@@ -1,0 +1,150 @@
+import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Landmark, Loader2, RefreshCw } from 'lucide-react'
+import { useBankConnections, bankStartAuth, bankSync, type BankConnection } from '@/lib/bank'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge, type BadgeProps } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+
+const STATUS_META: Record<BankConnection['status'], { label: string; variant: BadgeProps['variant'] }> = {
+  active: { label: 'Connectee', variant: 'success' },
+  expiring: { label: 'Expire bientot', variant: 'warning' },
+  expired: { label: 'Expiree', variant: 'danger' },
+  pending: { label: 'En attente', variant: 'neutral' },
+}
+
+function fmtValidUntil(iso: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
+export function BankSection() {
+  const queryClient = useQueryClient()
+  const { data: connections, isLoading } = useBankConnections()
+  const [connecting, setConnecting] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [connectMessage, setConnectMessage] = useState<string | null>(null)
+  const [syncMessage, setSyncMessage] = useState<string | null>(null)
+
+  const list = connections ?? []
+  const hasConnections = list.length > 0
+  const needsReconnect = list.some((c) => c.status === 'expiring' || c.status === 'expired')
+  const isExpired = list.some((c) => c.status === 'expired')
+
+  async function handleConnect() {
+    setConnectMessage(null)
+    setConnecting(true)
+    try {
+      const { url } = await bankStartAuth(window.location.origin + window.location.pathname)
+      window.location.assign(url)
+    } catch {
+      setConnectMessage('Synchronisation bientot disponible.')
+      setConnecting(false)
+    }
+  }
+
+  async function handleSync() {
+    setSyncMessage(null)
+    setSyncing(true)
+    try {
+      const { imported } = await bankSync()
+      setSyncMessage(
+        imported > 0
+          ? `${imported} transaction${imported > 1 ? 's' : ''} importee${imported > 1 ? 's' : ''}.`
+          : 'Aucune nouvelle transaction.',
+      )
+      await queryClient.invalidateQueries()
+    } catch {
+      setSyncMessage('Synchronisation indisponible pour le moment.')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Connexion bancaire</CardTitle>
+        <p className="text-[13px] text-soft">
+          Synchronisation automatique via Enable Banking (PSD2), trois fois par jour.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isLoading && <Skeleton className="h-20 w-full" />}
+
+        {!isLoading && needsReconnect && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-warning/30 bg-warning/10 p-4">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-warning/15 text-warning">
+              <AlertTriangle className="h-[18px] w-[18px]" />
+            </span>
+            <p className="min-w-0 flex-1 text-[13px] text-ink">
+              {isExpired
+                ? 'Ta connexion bancaire a expire. Reconnecte-toi pour reprendre la synchronisation.'
+                : 'Ta connexion bancaire expire dans moins de 14 jours. Reconnecte-toi pour ne pas interrompre la synchronisation.'}
+            </p>
+            <Button variant="outline" onClick={() => void handleConnect()} disabled={connecting}>
+              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Reconnecter'}
+            </Button>
+          </div>
+        )}
+
+        {!isLoading && hasConnections && (
+          <div className="space-y-2">
+            {list.map((c) => {
+              const meta = STATUS_META[c.status]
+              const until = fmtValidUntil(c.validUntil)
+              return (
+                <div key={c.id} className="flex flex-wrap items-center gap-4 rounded-xl border border-line p-4">
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface2 text-soft">
+                    <Landmark className="h-5 w-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="truncate font-semibold">{c.institution}</p>
+                      <Badge variant={meta.variant}>{meta.label}</Badge>
+                    </div>
+                    <p className="text-[12.5px] text-soft">
+                      {until ? `Consentement valide jusqu'au ${until}.` : 'Consentement actif.'}
+                    </p>
+                  </div>
+                </div>
+              )
+            })}
+
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <Button variant="secondary" onClick={() => void handleSync()} disabled={syncing}>
+                {syncing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                Synchroniser maintenant
+              </Button>
+              {syncMessage && <p className="text-[13px] text-soft">{syncMessage}</p>}
+            </div>
+          </div>
+        )}
+
+        {!isLoading && !hasConnections && (
+          <div className="flex flex-wrap items-center gap-4 rounded-xl border border-line p-4">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface2 text-soft">
+              <Landmark className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold">Aucune banque connectee</p>
+              <p className="text-[12.5px] text-soft">
+                {connectMessage ?? 'Connecte ta banque pour importer tes transactions automatiquement.'}
+              </p>
+            </div>
+            <Button onClick={() => void handleConnect()} disabled={connecting}>
+              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connecter'}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}

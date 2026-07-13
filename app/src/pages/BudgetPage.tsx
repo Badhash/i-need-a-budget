@@ -1,10 +1,16 @@
+import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Target as TargetIcon } from 'lucide-react'
 import type { BudgetGroupBlock } from '@/lib/budget'
+import type { Category } from '@/mocks/data'
 import { useBudgetMonth, apiSetAssigned } from '@/lib/data'
+import { useTargets, type Target } from '@/lib/targets'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
 import { AvailablePill } from '@/components/budget/AvailablePill'
+import { TargetBar } from '@/components/budget/TargetBar'
+import { TargetDialog } from '@/components/budget/TargetDialog'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { Amount } from '@/components/shared/Amount'
 import { Card } from '@/components/ui/card'
@@ -40,7 +46,49 @@ function SpentBar({ assigned, activity, color }: { assigned: number; activity: n
   )
 }
 
-function DesktopGrid({ groups, month }: { groups: BudgetGroupBlock[]; month: string }) {
+/** Petite affordance ronde qui ouvre le dialog d'objectif d'une categorie. */
+function TargetTrigger({
+  category,
+  hasTarget,
+  onOpen,
+  variant,
+}: {
+  category: Category
+  hasTarget: boolean
+  onOpen: (category: Category) => void
+  variant: 'desktop' | 'mobile'
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(category)}
+      aria-label={hasTarget ? "Modifier l'objectif" : 'Définir un objectif'}
+      title={hasTarget ? "Modifier l'objectif" : 'Définir un objectif'}
+      className={cn(
+        'inline-flex shrink-0 items-center justify-center rounded-xl transition-colors',
+        variant === 'desktop'
+          ? cn(
+              "relative h-7 w-7 rounded-lg after:absolute after:-inset-1.5 after:content-['']",
+              hasTarget
+                ? 'text-accent hover:bg-surface2'
+                : 'text-soft/50 opacity-0 hover:bg-surface2 hover:text-ink focus-visible:opacity-100 group-hover:opacity-100',
+            )
+          : cn('h-11 w-11 hover:bg-surface2 active:bg-surface2', hasTarget ? 'text-accent' : 'text-soft'),
+      )}
+    >
+      <TargetIcon className={variant === 'desktop' ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+    </button>
+  )
+}
+
+interface GridProps {
+  groups: BudgetGroupBlock[]
+  month: string
+  targets: Map<string, Target>
+  onOpenTarget: (category: Category) => void
+}
+
+function DesktopGrid({ groups, month, targets, onOpenTarget }: GridProps) {
   const assign = useAssignMutation(month)
 
   return (
@@ -56,7 +104,13 @@ function DesktopGrid({ groups, month }: { groups: BudgetGroupBlock[]; month: str
         </thead>
         <tbody>
           {groups.map((block) => (
-            <GroupRows key={block.group.id} block={block} onAssign={(categoryId, amount) => assign.mutate({ categoryId, amount })} />
+            <GroupRows
+              key={block.group.id}
+              block={block}
+              targets={targets}
+              onOpenTarget={onOpenTarget}
+              onAssign={(categoryId, amount) => assign.mutate({ categoryId, amount })}
+            />
           ))}
         </tbody>
       </table>
@@ -66,9 +120,13 @@ function DesktopGrid({ groups, month }: { groups: BudgetGroupBlock[]; month: str
 
 function GroupRows({
   block,
+  targets,
+  onOpenTarget,
   onAssign,
 }: {
   block: BudgetGroupBlock
+  targets: Map<string, Target>
+  onOpenTarget: (category: Category) => void
   onAssign: (categoryId: string, amount: number) => void
 }) {
   return (
@@ -96,28 +154,48 @@ function GroupRows({
           />
         </td>
       </tr>
-      {block.rows.map((row) => (
-        <tr key={row.category.id} className="group border-t border-line/60 transition-colors hover:bg-surface2/40">
-          <td className="px-5 py-2.5">
-            <p className="font-medium">{row.category.name}</p>
-            <SpentBar assigned={row.assigned} activity={row.activity} color={block.group.color} />
-          </td>
-          <td className="px-5 py-1.5 text-right">
-            <AssignedEditor value={row.assigned} onCommit={(cents) => onAssign(row.category.id, cents)} />
-          </td>
-          <td className="px-5 py-2.5 text-right">
-            <Amount cents={row.activity} className={cn(row.activity === 0 ? 'text-soft/60' : 'text-soft')} />
-          </td>
-          <td className="px-5 py-2.5 text-right">
-            <AvailablePill cents={row.available} />
-          </td>
-        </tr>
-      ))}
+      {block.rows.map((row) => {
+        const target = targets.get(row.category.id)
+        return (
+          <tr key={row.category.id} className="group border-t border-line/60 transition-colors hover:bg-surface2/40">
+            <td className="px-5 py-2.5">
+              <div className="flex items-center gap-1.5">
+                <p className="font-medium">{row.category.name}</p>
+                <TargetTrigger
+                  category={row.category}
+                  hasTarget={target !== undefined}
+                  onOpen={onOpenTarget}
+                  variant="desktop"
+                />
+              </div>
+              {target ? (
+                <TargetBar
+                  target={target}
+                  assigned={row.assigned}
+                  available={row.available}
+                  color={block.group.color}
+                />
+              ) : (
+                <SpentBar assigned={row.assigned} activity={row.activity} color={block.group.color} />
+              )}
+            </td>
+            <td className="px-5 py-1.5 text-right">
+              <AssignedEditor value={row.assigned} onCommit={(cents) => onAssign(row.category.id, cents)} />
+            </td>
+            <td className="px-5 py-2.5 text-right">
+              <Amount cents={row.activity} className={cn(row.activity === 0 ? 'text-soft/60' : 'text-soft')} />
+            </td>
+            <td className="px-5 py-2.5 text-right">
+              <AvailablePill cents={row.available} />
+            </td>
+          </tr>
+        )
+      })}
     </>
   )
 }
 
-function MobileGroups({ groups, month }: { groups: BudgetGroupBlock[]; month: string }) {
+function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
   const assign = useAssignMutation(month)
 
   return (
@@ -135,27 +213,44 @@ function MobileGroups({ groups, month }: { groups: BudgetGroupBlock[]; month: st
             <AvailablePill cents={block.totals.available} />
           </div>
           <div className="divide-y divide-line/60">
-            {block.rows.map((row) => (
-              <div key={row.category.id} className="flex min-h-[56px] items-center gap-3 px-4 py-2.5">
-                <div className="flex-1">
-                  <p className="font-medium">{row.category.name}</p>
-                  <div className="flex items-center gap-1 text-[12px] text-soft">
-                    <span>Assigné</span>
-                    <AssignedEditor
-                      value={row.assigned}
-                      onCommit={(cents) => assign.mutate({ categoryId: row.category.id, amount: cents })}
-                      className="h-10 -my-2.5 px-2 text-[13px]"
-                    />
+            {block.rows.map((row) => {
+              const target = targets.get(row.category.id)
+              return (
+                <div key={row.category.id} className="flex min-h-[56px] items-center gap-2 px-4 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium">{row.category.name}</p>
+                    {target && (
+                      <TargetBar
+                        target={target}
+                        assigned={row.assigned}
+                        available={row.available}
+                        color={block.group.color}
+                      />
+                    )}
+                    <div className="mt-0.5 flex items-center gap-1 text-[12px] text-soft">
+                      <span>Assigné</span>
+                      <AssignedEditor
+                        value={row.assigned}
+                        onCommit={(cents) => assign.mutate({ categoryId: row.category.id, amount: cents })}
+                        className="h-10 -my-2.5 px-2 text-[13px]"
+                      />
+                    </div>
                   </div>
+                  <div className="shrink-0 text-right">
+                    <AvailablePill cents={row.available} />
+                    <p className="mt-1 text-[11.5px] text-soft tnum">
+                      Activité <Amount cents={row.activity} />
+                    </p>
+                  </div>
+                  <TargetTrigger
+                    category={row.category}
+                    hasTarget={target !== undefined}
+                    onOpen={onOpenTarget}
+                    variant="mobile"
+                  />
                 </div>
-                <div className="text-right">
-                  <AvailablePill cents={row.available} />
-                  <p className="mt-1 text-[11.5px] text-soft tnum">
-                    Activité <Amount cents={row.activity} />
-                  </p>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </Card>
       ))}
@@ -186,14 +281,23 @@ function BudgetSkeleton() {
 export function BudgetPage() {
   const month = useUiStore((s) => s.month)
   const { data: budget } = useBudgetMonth(month)
+  const { data: targets } = useTargets()
+  const [targetCat, setTargetCat] = useState<Category | null>(null)
 
   if (!budget) return <BudgetSkeleton />
+
+  const targetMap = targets ?? new Map<string, Target>()
 
   return (
     <div className="space-y-5">
       <RtaBanner budget={budget} />
-      <DesktopGrid groups={budget.groups} month={month} />
-      <MobileGroups groups={budget.groups} month={month} />
+      <DesktopGrid groups={budget.groups} month={month} targets={targetMap} onOpenTarget={setTargetCat} />
+      <MobileGroups groups={budget.groups} month={month} targets={targetMap} onOpenTarget={setTargetCat} />
+      <TargetDialog
+        category={targetCat}
+        target={targetCat ? targetMap.get(targetCat.id) ?? null : null}
+        onClose={() => setTargetCat(null)}
+      />
     </div>
   )
 }

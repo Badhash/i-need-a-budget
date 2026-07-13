@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Landmark, PieChart, PiggyBank, Settings, type LucideIcon } from 'lucide-react'
+import { ArrowLeftRight, Landmark, PieChart, PiggyBank, Settings, Wand2, type LucideIcon } from 'lucide-react'
 
 export interface NavItem {
   to: string
@@ -13,6 +13,9 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/rapports', label: 'Rapports', icon: PieChart },
 ]
 
+// Elements secondaires (hors bottom nav mobile) : accessibles depuis la sidebar
+// desktop et, pour les Règles, depuis une carte des Réglages sur mobile.
+export const RULES_ITEM: NavItem = { to: '/regles', label: 'Règles', icon: Wand2 }
 export const SETTINGS_ITEM: NavItem = { to: '/reglages', label: 'Réglages', icon: Settings }
 
 export const PAGE_TITLES: Record<string, string> = {
@@ -20,5 +23,6 @@ export const PAGE_TITLES: Record<string, string> = {
   '/transactions': 'Transactions',
   '/comptes': 'Comptes',
   '/rapports': 'Rapports',
+  '/regles': 'Règles',
   '/reglages': 'Réglages',
 }

@@ -1,10 +1,14 @@
-import { Check, Landmark } from 'lucide-react'
+import { Check, ChevronRight, ListChecks } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
 import { THEMES, type Mode, type ThemeMeta } from '@/styles/themes'
 import { useUiStore } from '@/stores/ui'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { BankSection } from '@/components/settings/BankSection'
+import { MfaSection } from '@/components/settings/MfaSection'
+import { ExportSection } from '@/components/settings/ExportSection'
+import { AccountSection } from '@/components/settings/AccountSection'
 
 function ThemePreview({ meta }: { meta: ThemeMeta }) {
   return (
@@ -115,33 +119,26 @@ function ThemeSection() {
   )
 }
 
-function BankSection() {
+function RulesCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Connexion bancaire</CardTitle>
+        <CardTitle>Regles de categorisation</CardTitle>
         <p className="text-[13px] text-soft">
-          Synchronisation automatique via Enable Banking (PSD2), trois fois par jour.
+          Categorise automatiquement les transactions importees selon leur libelle.
         </p>
       </CardHeader>
       <CardContent>
-        <div className="flex items-center gap-4 rounded-xl border border-line p-4">
-          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-surface2 text-soft">
-            <Landmark className="h-5 w-5" />
+        <Link
+          to="/regles"
+          className={cn(buttonVariants({ variant: 'outline' }), 'w-full justify-between sm:w-auto')}
+        >
+          <span className="flex items-center gap-2">
+            <ListChecks className="h-4 w-4" />
+            Gerer les regles
           </span>
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <p className="font-semibold">Ma banque</p>
-              <Badge variant="neutral">Non connectée</Badge>
-            </div>
-            <p className="text-[12.5px] text-soft">
-              Synchronisation automatique bientôt disponible.
-            </p>
-          </div>
-          <Button variant="outline" disabled>
-            Connecter
-          </Button>
-        </div>
+          <ChevronRight className="h-4 w-4 text-soft" />
+        </Link>
       </CardContent>
     </Card>
   )
@@ -152,6 +149,10 @@ export function SettingsPage() {
     <div className="space-y-5">
       <ThemeSection />
       <BankSection />
+      <MfaSection />
+      <RulesCard />
+      <ExportSection />
+      <AccountSection />
       <p className="px-1 text-center text-[12px] text-soft">
         I Need A Budget · version 0.1.0
       </p>

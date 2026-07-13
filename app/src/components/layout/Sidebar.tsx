@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { Wallet } from 'lucide-react'
-import { NAV_ITEMS, SETTINGS_ITEM } from '@/components/layout/nav'
+import { NAV_ITEMS, RULES_ITEM, SETTINGS_ITEM } from '@/components/layout/nav'
 import { useBudgetMonth, useTransactions } from '@/lib/queries'
 import { uncategorizedCount } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
@@ -51,6 +51,7 @@ export function Sidebar() {
             badge={item.to === '/transactions' ? badge : undefined}
           />
         ))}
+        <NavLink {...RULES_ITEM} />
         <NavLink {...SETTINGS_ITEM} />
       </nav>
 
