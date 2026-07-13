@@ -10,8 +10,9 @@ import {
   apiLinkBankAccount,
   type BankConnection,
 } from '@/lib/bank'
-import { fmtEUR } from '@/lib/format'
-import { useAccountsList } from '@/lib/data'
+import { fmtEUR, TODAY } from '@/lib/format'
+import { apiCreateAccount, useAccountsList } from '@/lib/data'
+import type { EbAccountLink } from '@/lib/bank'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
@@ -118,6 +119,31 @@ export function BankSection() {
     }
   }
 
+  // Cree le compte local qui correspond au compte bancaire (type deduit du
+  // libelle produit : carte a debit differe si ca ressemble a une carte),
+  // l'associe, puis laisse la reconciliation d'import fixer le solde.
+  async function handleCreateAndLink(c: BankConnection, acc: EbAccountLink) {
+    const label = `${acc.product ?? ''} ${acc.name ?? ''}`.toUpperCase()
+    const isCard = /\bDD\b|DEBIT DIFFERE|WORLD ELITE|CARTE|CARD|VISA|MASTERCARD|GOLD/.test(label)
+    try {
+      const { id } = await apiCreateAccount({
+        name: acc.product ?? acc.name ?? 'Compte bancaire',
+        institution: c.institution,
+        kind: isCard ? 'card_deferred' : 'checking',
+        onBudget: true,
+        openingBalance: 0,
+        openingDate: TODAY,
+      })
+      await apiLinkBankAccount({ connectionId: c.id, providerAccountUid: acc.uid, accountId: id })
+      await queryClient.invalidateQueries()
+      setSyncMessage(
+        `Compte « ${acc.product ?? acc.name ?? 'Compte bancaire'} » créé et associé. Lance « Importer l'historique » pour récupérer les transactions et caler le solde.`,
+      )
+    } catch {
+      setSyncMessage('Création du compte impossible pour le moment.')
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -193,7 +219,13 @@ export function BankSection() {
                           </div>
                           <Select
                             value={acc.linkedAccountId ?? ''}
-                            onChange={(e) => void handleLink(c.id, acc.uid, e.target.value || null)}
+                            onChange={(e) => {
+                              if (e.target.value === '__create__') {
+                                void handleCreateAndLink(c, acc)
+                              } else {
+                                void handleLink(c.id, acc.uid, e.target.value || null)
+                              }
+                            }}
                             className="min-w-[170px]"
                             aria-label="Associer a un compte local"
                           >
@@ -203,6 +235,7 @@ export function BankSection() {
                                 {a.name}
                               </option>
                             ))}
+                            <option value="__create__">+ Créer un compte pour ce compte bancaire</option>
                           </Select>
                         </div>
                       ))}
