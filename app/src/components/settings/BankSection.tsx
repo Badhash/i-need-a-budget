@@ -4,7 +4,7 @@ import { AlertTriangle, Landmark, Loader2, RefreshCw } from 'lucide-react'
 import { useBankConnections, useAspsps, bankStartAuth, bankSync, type BankConnection } from '@/lib/bank'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Select } from '@/components/ui/select'
+import { BankCombobox } from '@/components/settings/BankCombobox'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -45,8 +45,8 @@ export function BankSection() {
     try {
       const { url } = await bankStartAuth(window.location.origin + window.location.pathname, aspspName)
       window.location.assign(url)
-    } catch {
-      setConnectMessage('Connexion bancaire indisponible pour le moment.')
+    } catch (err) {
+      setConnectMessage(err instanceof Error ? err.message : 'Connexion bancaire indisponible.')
       setConnecting(false)
     }
   }
@@ -154,20 +154,12 @@ export function BankSection() {
                 </p>
               ) : (
                 <div className="flex flex-wrap items-center gap-2.5">
-                  <Select
+                  <BankCombobox
+                    aspsps={aspsps ?? []}
                     value={selectedBank}
-                    onChange={(e) => setSelectedBank(e.target.value)}
-                    disabled={aspspsLoading}
-                    className="min-w-[200px] flex-1"
-                    aria-label="Choisir ta banque"
-                  >
-                    <option value="">{aspspsLoading ? 'Chargement des banques…' : 'Choisis ta banque'}</option>
-                    {(aspsps ?? []).map((a) => (
-                      <option key={a.name} value={a.name}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </Select>
+                    onSelect={setSelectedBank}
+                    loading={aspspsLoading}
+                  />
                   <Button onClick={() => void handleConnect(selectedBank)} disabled={connecting || !selectedBank}>
                     {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connecter'}
                   </Button>
