@@ -30,6 +30,18 @@ jobs:
       - name: Installer les dependances
         working-directory: app
         run: npm ci
+      # Sans ces secrets, le front se construit avec des valeurs placeholder
+      # (https://placeholder.supabase.co) : le login echoue avec un CORS Failed
+      # trompeur. On echoue tot et clairement plutot que de deployer un front casse.
+      - name: Verifier la configuration Supabase
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "::error::Secrets SUPABASE_URL et/ou SUPABASE_ANON_KEY absents. Ajoute-les dans Settings > Secrets and variables > Actions, puis relance ce workflow."
+            exit 1
+          fi
       - name: Build
         working-directory: app
         run: npm run build
