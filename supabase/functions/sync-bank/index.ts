@@ -80,7 +80,7 @@ interface RulePayload {
 interface BankConnectionPayload {
   institution: string
   sessionId: string
-  accounts: { uid: string; name?: string }[]
+  accounts: { uid: string; name?: string; iban?: string; product?: string }[]
   validUntil: string | null // ISO 8601
   sessionState: 'active' | 'expired'
 }
@@ -754,19 +754,33 @@ async function actionFinalizeAuth(userId: string, params: Params) {
   // name/account_id }. On gere les deux formes.
   const session = (await ebFetch('/sessions', { method: 'POST', body: { code } })) as {
     session_id?: string
-    accounts?: Array<string | { uid?: string; name?: string; account_id?: { name?: string } }>
+    accounts?: Array<
+      | string
+      | {
+          uid?: string
+          name?: string
+          product?: string
+          account_id?: { iban?: string; name?: string; other?: { identification?: string } }
+        }
+    >
     access?: { valid_until?: string }
     aspsp?: { name?: string }
   }
   if (!session.session_id) throw new ApiError(502, 'Enable Banking : session_id absent')
 
-  const accounts: { uid: string; name?: string }[] = []
+  const accounts: { uid: string; name?: string; iban?: string; product?: string }[] = []
   for (const entry of session.accounts ?? []) {
     if (typeof entry === 'string') {
       accounts.push({ uid: entry })
     } else if (entry && typeof entry.uid === 'string') {
       const name = entry.name ?? entry.account_id?.name
-      accounts.push(name ? { uid: entry.uid, name } : { uid: entry.uid })
+      const iban = entry.account_id?.iban ?? entry.account_id?.other?.identification
+      accounts.push({
+        uid: entry.uid,
+        ...(name ? { name } : {}),
+        ...(iban ? { iban } : {}),
+        ...(entry.product ? { product: entry.product } : {}),
+      })
     }
   }
 

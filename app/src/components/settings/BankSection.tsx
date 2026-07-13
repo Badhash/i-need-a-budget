@@ -31,6 +31,13 @@ function fmtValidUntil(iso: string | null): string | null {
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
+// IBAN masque : garde le pays et les 4 derniers chiffres (FR76 •••• 1234).
+function maskIban(iban: string): string {
+  const clean = iban.replace(/\s+/g, '')
+  if (clean.length <= 8) return clean
+  return `${clean.slice(0, 4)} •••• ${clean.slice(-4)}`
+}
+
 export function BankSection() {
   const queryClient = useQueryClient()
   const { data: connections, isLoading } = useBankConnections()
@@ -149,9 +156,11 @@ export function BankSection() {
                         <div key={acc.uid} className="flex flex-wrap items-center gap-2.5">
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-[13.5px] font-medium">
-                              {acc.name ?? 'Compte bancaire'}
+                              {acc.product ?? acc.name ?? 'Compte bancaire'}
                             </p>
-                            <p className="truncate text-[11px] text-soft">{acc.uid}</p>
+                            <p className="truncate text-[11.5px] text-soft tnum">
+                              {acc.iban ? maskIban(acc.iban) : (acc.name ?? acc.uid)}
+                            </p>
                           </div>
                           <Select
                             value={acc.linkedAccountId ?? ''}

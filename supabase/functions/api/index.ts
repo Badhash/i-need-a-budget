@@ -110,7 +110,7 @@ interface BankConnectionPayload {
   validUntil?: string | null
   sessionState?: string
   sessionId?: string
-  accounts?: { uid: string; name?: string }[]
+  accounts?: { uid: string; name?: string; iban?: string; product?: string }[]
 }
 
 type BankConnectionStatus = 'active' | 'expiring' | 'expired' | 'pending'
@@ -893,6 +893,8 @@ async function actionGetBankConnections(userId: string) {
       return {
         uid: acc.uid,
         name: acc.name ?? null,
+        iban: acc.iban ?? null,
+        product: acc.product ?? null,
         linkedAccountId: linked?.id ?? null,
         linkedAccountName: linked?.name ?? null,
       }

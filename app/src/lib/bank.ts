@@ -13,6 +13,8 @@ const ANON_KEY = SUPABASE_ANON_KEY
 export interface EbAccountLink {
   uid: string
   name: string | null
+  iban: string | null
+  product: string | null
   linkedAccountId: string | null
   linkedAccountName: string | null
 }
