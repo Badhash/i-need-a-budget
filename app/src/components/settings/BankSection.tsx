@@ -147,6 +147,14 @@ export function BankSection() {
                         {until ? `Consentement valide jusqu'au ${until}.` : 'Consentement actif.'}
                       </p>
                     </div>
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleConnect(c.institution)}
+                      disabled={connecting}
+                      className="h-9 px-3 text-[13px]"
+                    >
+                      {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Reconnecter'}
+                    </Button>
                   </div>
 
                   {c.accounts.length > 0 && (
