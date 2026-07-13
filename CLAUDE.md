@@ -17,15 +17,18 @@ Application de budget par enveloppes (zero-based) pour usage personnel, inspiré
 
 ```
 /app                    → front React (déployé sur Pages)
+/packages
+  /engine               → moteur d'enveloppes YNAB pur (+ tests Vitest)
+  /crypto               → chiffrement AES-256-GCM + index aveugles (+ tests Vitest)
 /supabase
-  /migrations           → schéma SQL versionné (jamais de modif manuelle dashboard)
   /functions
     /sync-bank          → poll Enable Banking, dédup, chiffrement, insert
     /api                → lecture/écriture déchiffrée (endpoint unique, actions typées)
-/docs
-  /design-references    → captures Copilot Money (north star visuelle)
-/.github/workflows      → deploy pages, db push, backup pg_dump hebdo, ping anti-pause quotidien
+/.github/workflows      → deploy pages, deploy Edge Functions, ping anti-pause quotidien
 ```
+
+Le schéma SQL n'est pas versionné dans le dépôt : il est appliqué directement
+dans le SQL Editor (source de vérité = base de production, voir supabase/README.md).
 
 ## Architecture de chiffrement (décision figée : TOUT CHIFFRÉ, zéro champ métier en clair)
 
@@ -119,7 +122,7 @@ Toutes les tables : (id, user_id, enc_payload bytea, created_at) + index aveugle
 * Réponses et commits en français, code/identifiants en anglais.
 * Pas d'emojis nulle part (UI, commits, docs).
 * Conventional commits (feat:, fix:, chore:).
-* Toute modif de schéma = nouvelle migration via Supabase CLI.
+* Toute modif de schéma = appliquée dans le SQL Editor (source de vérité = base de production, non versionnée).
 * Ne jamais installer de dépendance non listée dans la stack sans la proposer d'abord.
 * Chaque vue livrée : vérifier light + dark + mobile + desktop.
 * Sécurité : jamais de secrets en dur, jamais de données bancaires réelles dans les fixtures de test.

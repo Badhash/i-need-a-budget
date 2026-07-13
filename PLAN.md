@@ -1,38 +1,40 @@
-# PLAN.md — Sessions restantes
+# PLAN.md — Reste à faire
 
-Les fondations sont en place (moteur d'enveloppes + tests, schéma Supabase
-entièrement chiffré + RLS, module crypto, Edge Function `/api`, signal Realtime,
-front mocké avec 3 thèmes). Ce fichier ne liste que ce qu'il reste à faire.
-La spécification complète et les conventions restent dans `CLAUDE.md`.
+Les fondations et le produit sont en place : moteur d'enveloppes + tests, schéma
+Supabase entièrement chiffré + RLS (appliqué en prod), module crypto, Edge
+Function `/api` (budget, transactions, comptes, rapports, règles, objectifs,
+connexions, export), signal Realtime, authentification email/password + MFA TOTP,
+front branché sur `/api` (données réelles), objectifs par catégorie, page Règles,
+Réglages complets (thème, MFA, connexion bancaire, export, déconnexion), et la
+fonction `sync-bank` Enable Banking (écrite, NON encore testée).
 
-## Session 6 — Branchement du front (1 j)
+Ce fichier ne liste que ce qu'il reste. La spécification complète reste dans
+`CLAUDE.md`.
 
-Remplacer les mocks par des appels TanStack Query vers l'Edge Function `/api`.
-Ajouter l'auth (login email/password + MFA TOTP, page de login au même niveau de
-finition que le reste). Abonner le front au canal Realtime privé
-(`config: { private: true }`) : à chaque signal, invalider les queries.
-Optimistic updates sur l'assignation budget et l'ajout de transaction.
-Onboarding minimal : création des comptes (solde d'ouverture) et des catégories
-par défaut via l'action `seedDefaults`.
+## 1. Configuration (à faire par l'utilisateur, aucun code)
 
-## Session 7 — Sync bancaire Enable Banking (1,5 j)
+Renseigner les secrets et réglages pour un déploiement fonctionnel :
 
-Implémenter l'Edge Function `sync-bank` selon la section Connexion bancaire du
-`CLAUDE.md` : auth JWT RS256 Enable Banking, flow de consentement (redirect +
-callback), stockage session dans `bank_connections`, fetch des transactions,
-dédup par `tx_hash`, application des règles de catégorisation, chiffrement,
-insert, log dans `sync_logs`. Planifier via pg_cron (07:30, 12:30, 19:30
-Europe/Paris). UI : page Réglages > Connexions bancaires avec état de session,
-bannière J-14 et bouton Reconnecter.
+- Secrets GitHub Actions : `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_ID`
+  (deploy Edge Functions), `SUPABASE_URL`, `SUPABASE_ANON_KEY` (build Pages + ping).
+- Secrets d'exécution Edge Functions (dashboard Supabase) : `ENCRYPTION_KEY`
+  (32 bytes base64, à sauvegarder AUSSI hors Supabase), `ALLOWED_USER_EMAILS`,
+  `ALLOWED_ORIGINS`.
+- Réglages projet : désactiver l'inscription, créer le compte unique, activer le
+  MFA depuis l'app ; Data API activée, exposition auto des tables désactivée.
 
-## Session 8 — Finitions (1 j)
+## 2. Activation Enable Banking (sync bancaire)
 
-Moteur de règles de catégorisation éditable dans l'UI (matcher sur libellé,
-priorités), targets par catégorie avec barre de progression dans la budget grid,
-empty states et skeletons manquants, page Réglages complète (thème, export JSON
-chiffré, gestion des règles), audit responsive final des vues.
+La fonction `sync-bank` est écrite mais non testable tant que l'app Enable Banking
+n'est pas validée (production restreinte). Une fois validée :
 
----
+- Secrets EB : `ENABLE_BANKING_APP_ID`, `ENABLE_BANKING_PRIVATE_KEY`,
+  `ENABLE_BANKING_ASPSP_NAME`, `ENABLE_BANKING_REDIRECT_URL`, `SYNC_CRON_SECRET`.
+- Vérifier le flow réel (consentement, mapping des transactions, dédup) contre
+  l'API EB et ajuster les hypothèses marquées `HYP EB` dans `sync-bank/index.ts`.
+- Planifier via pg_cron (07:30 / 12:30 / 19:30 Europe/Paris) : SQL prêt à coller
+  dans `supabase/functions/sync-bank/README.md`.
+- Lier chaque compte à son `providerAccountUid` Enable Banking.
 
 ## Backlog phase 2 (après usage réel)
 
@@ -41,3 +43,5 @@ chiffré, gestion des règles), audit responsive final des vues.
 - Connexions supplémentaires (Trade Republic, livrets)
 - PWA installable + notifications locales ("X transactions à catégoriser")
 - Widget "âge de l'argent" (age of money YNAB)
+- Transferts liés + réconciliation
+- Réordonnancement atomique des règles côté serveur (échange de priorités)

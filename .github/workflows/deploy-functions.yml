@@ -13,27 +13,37 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Secrets requis : SUPABASE_ACCESS_TOKEN (compte Supabase) et
+    # SUPABASE_PROJECT_ID (ref du projet). Les secrets d'execution des fonctions
+    # (ENCRYPTION_KEY, ALLOWED_USER_EMAILS, ALLOWED_ORIGINS, ENABLE_BANKING_*,
+    # SYNC_CRON_SECRET...) se configurent dans le dashboard Supabase, pas ici.
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v4
+      # Tant que les secrets ne sont pas configures, on IGNORE proprement le
+      # deploiement (CI verte) au lieu de faire echouer le workflow.
+      - name: Verifier la configuration
+        id: guard
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$SUPABASE_PROJECT_ID" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Secrets SUPABASE_ACCESS_TOKEN / SUPABASE_PROJECT_ID absents : deploiement ignore."
+            echo "Renseigner ces secrets dans Settings > Secrets and variables > Actions."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: supabase/setup-cli@v1
+        if: steps.guard.outputs.configured == 'true'
         with:
           version: latest
       # Deploie l'Edge Function /api (verify_jwt vient de config.toml).
-      # Secrets requis : SUPABASE_ACCESS_TOKEN (compte Supabase) et
-      # SUPABASE_PROJECT_ID (ref du projet). Les secrets d'execution de la
-      # fonction (ENCRYPTION_KEY, ALLOWED_USER_EMAILS, ALLOWED_ORIGINS) se
-      # configurent dans le dashboard, pas ici.
       - name: Deployer la fonction api
+        if: steps.guard.outputs.configured == 'true'
         run: supabase functions deploy api --project-ref "$SUPABASE_PROJECT_ID"
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
       # Deploie l'Edge Function sync-bank (verify_jwt = false via config.toml : la
       # fonction verifie a la main le JWT utilisateur ou le secret x-cron-secret).
-      # Secrets d'execution (ENABLE_BANKING_*, SYNC_CRON_SECRET, ENCRYPTION_KEY...)
-      # se configurent dans le dashboard Supabase, pas ici.
       - name: Deployer la fonction sync-bank
+        if: steps.guard.outputs.configured == 'true'
         run: supabase functions deploy sync-bank --project-ref "$SUPABASE_PROJECT_ID"
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}

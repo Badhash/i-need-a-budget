@@ -35,9 +35,19 @@ sign up" = OFF (compte unique cree a la main).
 ## Edge Function /api
 
 Endpoint unique a actions typees (POST JSON `{ action, params }`, JWT obligatoire).
-Actions : bootstrap, getBudgetMonth, getTransactions, getReports, addTransaction,
-categorizeTransaction, setAssigned, createAccount, seedDefaults. Dechiffrement en
-memoire, calculs via packages/engine, aucune donnee metier dans les logs.
+Actions : bootstrap, getBudgetMonth, getTransactions, listTransactions, getReports,
+addTransaction, categorizeTransaction, setAssigned, createAccount, seedDefaults,
+listRules, createRule, updateRule, deleteRule, applyRulesToUncategorized,
+listTargets, setTarget, deleteTarget, getBankConnections, exportData. Dechiffrement
+en memoire, calculs via packages/engine, aucune donnee metier dans les logs.
+
+## Edge Function sync-bank (Enable Banking)
+
+Synchronisation bancaire PSD2 (verify_jwt = false ; verification interne du JWT
+utilisateur ou du secret x-cron-secret). Actions : startAuth, finalizeAuth, sync.
+Secrets, SQL pg_cron et flow de consentement : voir
+`supabase/functions/sync-bank/README.md`. NON active tant que l'app Enable Banking
+n'est pas validee.
 
 Signal Realtime : broadcast vide sur le topic prive `changes:<user_id>`, deduplique
 par transaction. Le front s'abonne ainsi :

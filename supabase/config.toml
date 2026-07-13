@@ -1,5 +1,7 @@
-# Configuration Supabase CLI (minimale : le schema vit dans /migrations,
-# deploye automatiquement par l'integration GitHub sur push main).
+# Configuration Supabase CLI (minimale). Le schema n'est PAS versionne dans le
+# depot : il est applique directement dans le SQL Editor (source de verite = base
+# de production, voir supabase/README.md). Ce fichier ne sert qu'au deploiement
+# des Edge Functions.
 project_id = "i-need-a-budget"
 
 # Doit correspondre a la version du projet INAB (dashboard > Settings >
