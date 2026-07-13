@@ -10,6 +10,9 @@ import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
 import { AssignSheet } from '@/components/budget/AssignSheet'
+import { CategoryActionSheet } from '@/components/budget/CategoryActionSheet'
+import { useLongPress } from '@/hooks/useLongPress'
+import { useReorderCategoriesMutation } from '@/lib/taxonomy'
 import { AvailablePill } from '@/components/budget/AvailablePill'
 import { TargetBar } from '@/components/budget/TargetBar'
 import { TargetDialog } from '@/components/budget/TargetDialog'
@@ -247,11 +250,82 @@ function GroupRows({
   )
 }
 
+/**
+ * Ligne d'enveloppe mobile, volontairement minimale : nom + disponible (et la
+ * barre d'objectif s'il y en a un). Tape = feuille d'assignation ; appui long
+ * = menu contextuel (renommer, objectif, deplacer, supprimer). Tout le detail
+ * (assigne, activite) vit dans la feuille, pas dans la liste.
+ */
+function MobileCategoryRow({
+  row,
+  block,
+  target,
+  onTap,
+  onLongPress,
+}: {
+  row: BudgetRow
+  block: BudgetGroupBlock
+  target: Target | undefined
+  onTap: () => void
+  onLongPress: () => void
+}) {
+  const { handlers, firedRecently } = useLongPress(onLongPress)
+
+  return (
+    <button
+      type="button"
+      {...handlers}
+      onClick={() => {
+        if (!firedRecently()) onTap()
+      }}
+      className="flex min-h-[56px] w-full select-none items-center gap-3 px-4 py-3 text-left transition-colors [-webkit-touch-callout:none] active:bg-surface2/60"
+      aria-label={`${row.category.name} : assigner (appui long pour plus d'actions)`}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-medium">{row.category.name}</p>
+        {target && (
+          <TargetBar
+            target={target}
+            assigned={row.assigned}
+            available={row.available}
+            color={block.group.color}
+          />
+        )}
+      </div>
+      <AvailablePill cents={row.available} />
+    </button>
+  )
+}
+
 function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
   const assign = useAssignMutation(month)
-  // Feuille d'assignation : sur mobile, taper le montant ouvre un panneau bas
-  // d'ecran (grand champ + raccourcis), bien plus confortable que l'inline.
+  const queryClient = useQueryClient()
+  const reorder = useReorderCategoriesMutation()
+  // Feuille d'assignation (tape) et menu contextuel (appui long).
   const [assignRow, setAssignRow] = useState<BudgetRow | null>(null)
+  const [actionCtx, setActionCtx] = useState<{ block: BudgetGroupBlock; index: number } | null>(null)
+
+  // Deplace la categorie dans son groupe : reordonne le cache budget
+  // immediatement (optimiste) et pousse l'ordre complet cote serveur.
+  const moveCategory = (block: BudgetGroupBlock, index: number, direction: -1 | 1) => {
+    const to = index + direction
+    if (to < 0 || to >= block.rows.length) return
+    const ids = block.rows.map((r) => r.category.id)
+    ;[ids[index], ids[to]] = [ids[to]!, ids[index]!]
+    reorder.mutate({ groupId: block.group.id, orderedIds: ids })
+    queryClient.setQueryData<BudgetMonth>(['budget', month], (old) => {
+      if (!old) return old
+      return {
+        ...old,
+        groups: old.groups.map((g) => {
+          if (g.group.id !== block.group.id) return g
+          const rows = [...g.rows]
+          ;[rows[index], rows[to]] = [rows[to]!, rows[index]!]
+          return { ...g, rows }
+        }),
+      }
+    })
+  }
 
   return (
     <div className="space-y-4 lg:hidden">
@@ -259,56 +333,20 @@ function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
         <Card key={block.group.id} className="overflow-hidden">
           <div className="flex items-center gap-3 border-b border-line px-4 py-3">
             <GroupPill group={block.group} size="md" />
-            <div className="flex-1">
-              <p className="font-semibold">{block.group.name}</p>
-              <p className="text-[12px] text-soft">
-                Dépensé <Amount cents={-block.totals.activity} />
-              </p>
-            </div>
+            <p className="min-w-0 flex-1 truncate font-semibold">{block.group.name}</p>
             <AvailablePill cents={block.totals.available} />
           </div>
           <div className="divide-y divide-line/60">
-            {block.rows.map((row) => {
-              const target = targets.get(row.category.id)
-              return (
-                <div key={row.category.id} className="flex min-h-[56px] items-center gap-2 px-4 py-2.5">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium">{row.category.name}</p>
-                    {target && (
-                      <TargetBar
-                        target={target}
-                        assigned={row.assigned}
-                        available={row.available}
-                        color={block.group.color}
-                      />
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setAssignRow(row)}
-                      className="mt-1 inline-flex h-9 max-w-full items-center gap-1.5 rounded-lg border border-line/70 bg-surface px-2.5 text-[13px] transition-colors active:bg-surface2"
-                      aria-label={`Modifier le montant assigné de ${row.category.name}`}
-                    >
-                      <span className="text-soft">Assigné</span>
-                      <span className={cn('font-medium tnum', row.assigned === 0 && 'text-soft')}>
-                        {fmtEUR(row.assigned)}
-                      </span>
-                    </button>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <AvailablePill cents={row.available} />
-                    <p className="mt-1 text-[11.5px] text-soft tnum">
-                      Activité <Amount cents={row.activity} />
-                    </p>
-                  </div>
-                  <TargetTrigger
-                    category={row.category}
-                    hasTarget={target !== undefined}
-                    onOpen={onOpenTarget}
-                    variant="mobile"
-                  />
-                </div>
-              )
-            })}
+            {block.rows.map((row, index) => (
+              <MobileCategoryRow
+                key={row.category.id}
+                row={row}
+                block={block}
+                target={targets.get(row.category.id)}
+                onTap={() => setAssignRow(row)}
+                onLongPress={() => setActionCtx({ block, index })}
+              />
+            ))}
           </div>
         </Card>
       ))}
@@ -317,6 +355,16 @@ function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
         target={assignRow ? (targets.get(assignRow.category.id) ?? null) : null}
         onCommit={(categoryId, amount) => assign.mutate({ categoryId, amount })}
         onClose={() => setAssignRow(null)}
+      />
+      <CategoryActionSheet
+        category={actionCtx ? actionCtx.block.rows[actionCtx.index]?.category ?? null : null}
+        canMoveUp={actionCtx !== null && actionCtx.index > 0}
+        canMoveDown={actionCtx !== null && actionCtx.index < actionCtx.block.rows.length - 1}
+        onMove={(direction) => {
+          if (actionCtx) moveCategory(actionCtx.block, actionCtx.index, direction)
+        }}
+        onOpenTarget={onOpenTarget}
+        onClose={() => setActionCtx(null)}
       />
     </div>
   )

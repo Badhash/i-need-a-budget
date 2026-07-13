@@ -76,6 +76,23 @@ export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps
           <DialogTitle>{row.category.name}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 p-5 pt-1">
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-xl bg-surface2/60 px-3.5 py-2.5">
+              <p className="label-caps">Activité</p>
+              <p className="mt-0.5 text-[15px] font-semibold tnum">{fmtEUR(row.activity)}</p>
+            </div>
+            <div className="rounded-xl bg-surface2/60 px-3.5 py-2.5">
+              <p className="label-caps">Disponible</p>
+              <p
+                className={cn(
+                  'mt-0.5 text-[15px] font-semibold tnum',
+                  row.available < 0 ? 'text-danger' : row.available > 0 ? 'text-success' : 'text-soft',
+                )}
+              >
+                {fmtEUR(row.available)}
+              </p>
+            </div>
+          </div>
           <div>
             <label className="label-caps mb-1.5 block">Montant assigné ce mois</label>
             <input
@@ -90,8 +107,8 @@ export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps
               autoComplete="off"
               placeholder="0,00"
               className={cn(
-                'h-14 w-full rounded-xl border bg-surface px-4 text-center text-[28px] font-semibold tnum outline-none placeholder:text-soft/50',
-                valid ? 'border-accent/60' : 'border-danger/60',
+                'h-16 w-full rounded-2xl border-2 bg-surface2/40 px-4 text-center text-[30px] font-semibold tnum outline-none transition-colors placeholder:text-soft/50 focus:bg-surface',
+                valid ? 'border-accent/50 focus:border-accent' : 'border-danger/60',
               )}
             />
           </div>
