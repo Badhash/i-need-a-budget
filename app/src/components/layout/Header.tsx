@@ -124,9 +124,15 @@ function UserMenu() {
   )
 }
 
+// Le selecteur de mois ne s'affiche que la ou il agit : Budget et Rapports.
+// Sur Transactions (liste complete paginee), Comptes et Reglages il ne pilote
+// rien, on le masque.
+const MONTH_PAGES = new Set(['/budget', '/rapports'])
+
 export function Header() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const title = PAGE_TITLES[pathname] ?? 'Budget'
+  const showMonth = MONTH_PAGES.has(pathname)
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-bg/85 backdrop-blur-md">
@@ -139,7 +145,7 @@ export function Header() {
         <h1 className={cn('text-[19px] font-semibold tracking-tight', 'hidden lg:block')}>{title}</h1>
 
         <div className="flex flex-1 items-center justify-center lg:justify-end">
-          <MonthSelector />
+          {showMonth && <MonthSelector />}
         </div>
 
         <div className="flex items-center gap-0.5">
