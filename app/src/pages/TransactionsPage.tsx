@@ -8,13 +8,23 @@ import {
   useReactTable,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDownUp, ArrowLeftRight, Inbox, Plus, Search } from 'lucide-react'
+import { ArrowDownUp, ArrowLeftRight, Inbox, MoreHorizontal, Plus, Search } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/mocks/data'
 import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesMap, useGroupsMap } from '@/lib/data'
+import { apiCall } from '@/lib/api'
+import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
 import { fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
+import { TxKindChip } from '@/components/transactions/TxKindChip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Amount } from '@/components/shared/Amount'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -31,6 +41,7 @@ interface TxRow {
   account: Account
   category: Category | null
   group: CategoryGroup | null
+  parsed: ParsedLabel
 }
 
 type Maps = {
@@ -44,16 +55,98 @@ function toRow(tx: Transaction, maps: Maps): TxRow | null {
   if (!account) return null
   const category = tx.categoryId ? (maps.categoryById.get(tx.categoryId) ?? null) : null
   const group = category ? (maps.groupById.get(category.groupId) ?? null) : null
-  return { tx, account, category, group }
+  return { tx, account, category, group, parsed: parseBankLabel(tx.label) }
 }
 
+// Categorisation optimiste : le cache TanStack est mis a jour immediatement,
+// l'appel reseau part en arriere-plan, rollback discret en cas d'echec.
 function useCategorize() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ txId, categoryId }: { txId: string; categoryId: string | null }) =>
       apiCategorize(txId, categoryId),
+    onMutate: async ({ txId, categoryId }) => {
+      await queryClient.cancelQueries({ queryKey: ['transactions'] })
+      const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
+      queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
+        old?.map((t) => (t.id === txId ? { ...t, categoryId } : t)),
+      )
+      return { snapshot }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
+    },
+    // Reconciliation silencieuse en arriere-plan (budget, compteurs, etc.)
     onSettled: () => queryClient.invalidateQueries(),
   })
+}
+
+// Menu discret par ligne : conversion transaction <-> virement entre comptes.
+function RowMenu({ row, className }: { row: TxRow; className?: string }) {
+  const queryClient = useQueryClient()
+  const accounts = useAccountsList()
+  const [error, setError] = useState<string | null>(null)
+  const isTransfer = Boolean(row.tx.transferGroupId)
+  const targets = accounts.filter((a) => a.id !== row.tx.accountId)
+
+  const convert = useMutation({
+    mutationFn: (targetAccountId: string) =>
+      apiCall('convertToTransfer', { transactionId: row.tx.id, targetAccountId }),
+    onSuccess: () => queryClient.invalidateQueries(),
+    onError: (err) => showError(err),
+  })
+  const revert = useMutation({
+    mutationFn: () => apiCall('convertTransferToNormal', { transactionId: row.tx.id }),
+    onSuccess: () => queryClient.invalidateQueries(),
+    onError: (err) => showError(err),
+  })
+
+  function showError(err: unknown) {
+    setError(err instanceof Error ? err.message : 'Une erreur est survenue.')
+    window.setTimeout(() => setError(null), 4000)
+  }
+
+  return (
+    <div className={cn('relative', className)}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Actions sur la transaction"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink focus-visible:opacity-100 data-[state=open]:opacity-100 lg:opacity-0 lg:group-hover:opacity-100"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {isTransfer ? (
+            <DropdownMenuItem onSelect={() => revert.mutate()}>
+              Annuler le virement
+            </DropdownMenuItem>
+          ) : targets.length > 0 ? (
+            <>
+              <DropdownMenuLabel>Convertir en virement vers…</DropdownMenuLabel>
+              {targets.map((acc) => (
+                <DropdownMenuItem key={acc.id} onSelect={() => convert.mutate(acc.id)}>
+                  {acc.name}
+                </DropdownMenuItem>
+              ))}
+            </>
+          ) : (
+            <DropdownMenuLabel>Aucun autre compte</DropdownMenuLabel>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {error && (
+        <p
+          role="status"
+          className="absolute right-0 top-full z-10 mt-1 max-w-[220px] whitespace-normal rounded-lg border border-line bg-surface px-2.5 py-1.5 text-left text-[12px] text-danger shadow-card"
+        >
+          {error}
+        </p>
+      )}
+    </div>
+  )
 }
 
 function CategoryBadge({ row }: { row: TxRow }) {
@@ -119,12 +212,21 @@ const columns = [
     id: 'label',
     header: 'Libellé',
     enableSorting: false,
-    cell: (info) => (
-      <div className="min-w-0">
-        <p className="truncate font-medium">{info.getValue()}</p>
-        <p className="text-[12px] text-soft">{info.row.original.account.name}</p>
-      </div>
-    ),
+    cell: (info) => {
+      const row = info.row.original
+      return (
+        <div className="min-w-0">
+          <p className="truncate font-medium" title={row.tx.label}>
+            {row.parsed.short}
+          </p>
+          <div className="mt-0.5 flex items-center gap-1.5">
+            {/* Les transferts gardent leur badge dedie : pas de double chip */}
+            {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
+            <p className="truncate text-[12px] text-soft">{row.account.name}</p>
+          </div>
+        </div>
+      )
+    },
   }),
   columnHelper.display({
     id: 'category',
@@ -141,6 +243,10 @@ const columns = [
         className={cn('font-semibold', info.getValue() > 0 ? 'text-success' : undefined, info.getValue() < 0 && 'text-ink')}
       />
     ),
+  }),
+  columnHelper.display({
+    id: 'actions',
+    cell: (info) => <RowMenu row={info.row.original} />,
   }),
 ]
 
@@ -172,6 +278,7 @@ function DesktopTable({ rows }: { rows: TxRow[] }) {
                     header.id === 'date' && 'w-28',
                     header.id === 'category' && 'w-48',
                     header.id === 'amount' && 'w-36',
+                    header.id === 'actions' && 'w-12',
                   )}
                 >
                   {header.column.getCanSort() ? (
@@ -195,7 +302,7 @@ function DesktopTable({ rows }: { rows: TxRow[] }) {
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} className="border-t border-line/60 transition-colors hover:bg-surface2/40">
+            <tr key={row.id} className="group border-t border-line/60 transition-colors hover:bg-surface2/40">
               {row.getVisibleCells().map((cell) => (
                 <td
                   key={cell.id}
@@ -239,9 +346,13 @@ function MobileList({ rows }: { rows: TxRow[] }) {
               <div key={row.tx.id} className="flex min-h-[60px] items-center gap-3 px-4 py-3">
                 <GroupPill group={row.group ?? undefined} size="md" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium">{row.tx.label}</p>
-                  <div className="mt-0.5">
+                  <p className="truncate font-medium" title={row.tx.label}>
+                    {row.parsed.short}
+                  </p>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                     <CategoryBadge row={row} />
+                    {/* Les transferts gardent leur badge dedie : pas de double chip */}
+                    {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
                   </div>
                 </div>
                 <Amount
@@ -249,6 +360,7 @@ function MobileList({ rows }: { rows: TxRow[] }) {
                   signed={row.tx.amount > 0}
                   className={cn('font-semibold', row.tx.amount > 0 && 'text-success')}
                 />
+                <RowMenu row={row} className="-mr-1" />
               </div>
             ))}
           </Card>
@@ -306,6 +418,7 @@ export function TransactionsPage() {
         (r) =>
           !q ||
           r.tx.label.toLowerCase().includes(q) ||
+          r.parsed.short.toLowerCase().includes(q) ||
           (r.category?.name.toLowerCase().includes(q) ?? false),
       )
   }, [txs, boot.data, month, search, accountFilter, onlyUncat])
