@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import { fmtEUR } from '@/lib/format'
 import type { BudgetRow } from '@/lib/budget'
 import type { Target } from '@/lib/targets'
@@ -33,6 +34,9 @@ function toDraft(cents: number): string {
 export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps) {
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  // iOS : le clavier recouvre les feuilles fixed bottom-0. On remonte la
+  // feuille de la hauteur du clavier mesuree via visualViewport.
+  const keyboardInset = useKeyboardInset()
 
   // (Re)initialise le brouillon a l'ouverture pour la categorie visee.
   useEffect(() => {
@@ -71,54 +75,45 @@ export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent aria-describedby={undefined}>
-        <DialogHeader>
-          <DialogTitle>{row.category.name}</DialogTitle>
+      <DialogContent
+        aria-describedby={undefined}
+        // Cale la feuille au-dessus du clavier iOS ; transition douce pour
+        // suivre son apparition sans saut.
+        style={keyboardInset > 0 ? { bottom: keyboardInset, transition: 'bottom 120ms ease-out' } : undefined}
+      >
+        <DialogHeader className="pb-1">
+          <DialogTitle className="flex items-baseline justify-between gap-3 pr-8">
+            <span className="truncate">{row.category.name}</span>
+            <span className="shrink-0 text-[12.5px] font-normal text-soft">
+              Activité <span className="tnum">{fmtEUR(row.activity)}</span>
+            </span>
+          </DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 p-5 pt-1">
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-xl bg-surface2/60 px-3.5 py-2.5">
-              <p className="label-caps">Activité</p>
-              <p className="mt-0.5 text-[15px] font-semibold tnum">{fmtEUR(row.activity)}</p>
-            </div>
-            <div className="rounded-xl bg-surface2/60 px-3.5 py-2.5">
-              <p className="label-caps">Disponible</p>
-              <p
-                className={cn(
-                  'mt-0.5 text-[15px] font-semibold tnum',
-                  row.available < 0 ? 'text-danger' : row.available > 0 ? 'text-success' : 'text-soft',
-                )}
-              >
-                {fmtEUR(row.available)}
-              </p>
-            </div>
-          </div>
-          <div>
-            <label className="label-caps mb-1.5 block">Montant assigné ce mois</label>
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commit()
-              }}
-              inputMode="decimal"
-              enterKeyHint="done"
-              autoComplete="off"
-              placeholder="0,00"
-              className={cn(
-                'h-16 w-full rounded-2xl border-2 bg-surface2/40 px-4 text-center text-[30px] font-semibold tnum outline-none transition-colors placeholder:text-soft/50 focus:bg-surface',
-                valid ? 'border-accent/50 focus:border-accent' : 'border-danger/60',
-              )}
-            />
-          </div>
+        <div className="space-y-3 overflow-y-auto p-5 pt-0">
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commit()
+            }}
+            inputMode="decimal"
+            enterKeyHint="done"
+            autoComplete="off"
+            placeholder="0,00"
+            aria-label="Montant assigné ce mois"
+            className={cn(
+              'h-14 w-full rounded-2xl border-2 bg-surface2/40 px-4 text-center text-[28px] font-semibold tnum outline-none transition-colors placeholder:text-soft/50 focus:bg-surface',
+              valid ? 'border-accent/50 focus:border-accent' : 'border-danger/60',
+            )}
+          />
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex gap-2 overflow-x-auto pb-0.5 scrollbar-none">
             {target && target.amount !== row.assigned && (
               <button
                 type="button"
                 onClick={() => setCents(target.amount)}
-                className="h-9 rounded-full border border-accent/40 bg-accent/10 px-3.5 text-[13px] font-medium text-accent active:bg-accent/20"
+                className="h-9 shrink-0 whitespace-nowrap rounded-full border border-accent/40 bg-accent/10 px-3.5 text-[13px] font-medium text-accent active:bg-accent/20"
               >
                 Objectif : {fmtEUR(target.amount)}
               </button>
@@ -126,40 +121,33 @@ export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps
             <button
               type="button"
               onClick={() => addCents(5000)}
-              className="h-9 rounded-full border border-line bg-surface px-3.5 text-[13px] font-medium text-ink active:bg-surface2"
+              className="h-9 shrink-0 rounded-full border border-line bg-surface px-3.5 text-[13px] font-medium text-ink active:bg-surface2"
             >
               +50 €
             </button>
             <button
               type="button"
               onClick={() => addCents(10000)}
-              className="h-9 rounded-full border border-line bg-surface px-3.5 text-[13px] font-medium text-ink active:bg-surface2"
+              className="h-9 shrink-0 rounded-full border border-line bg-surface px-3.5 text-[13px] font-medium text-ink active:bg-surface2"
             >
               +100 €
             </button>
             <button
               type="button"
               onClick={() => setCents(0)}
-              className="h-9 rounded-full border border-line bg-surface px-3.5 text-[13px] font-medium text-soft active:bg-surface2"
+              className="h-9 shrink-0 whitespace-nowrap rounded-full border border-line bg-surface px-3.5 text-[13px] font-medium text-soft active:bg-surface2"
             >
               Remettre à 0
             </button>
           </div>
 
-          <div className="flex items-center justify-between rounded-xl bg-surface2/60 px-4 py-3 text-[13.5px]">
-            <span className="text-soft">Disponible après</span>
-            <span
-              className={cn(
-                'font-semibold tnum',
-                availableAfter < 0 ? 'text-danger' : availableAfter > 0 ? 'text-success' : 'text-soft',
-              )}
-            >
-              {fmtEUR(availableAfter)}
-            </span>
-          </div>
-
           <Button className="h-12 w-full text-[15px]" onClick={commit} disabled={!valid}>
-            Assigner
+            <span className="flex w-full items-center justify-between">
+              <span>Assigner</span>
+              <span className={cn('text-[13px] font-medium tnum opacity-90')}>
+                Disponible après : {fmtEUR(availableAfter)}
+              </span>
+            </span>
           </Button>
         </div>
       </DialogContent>

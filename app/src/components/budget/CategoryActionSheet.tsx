@@ -6,6 +6,7 @@ import {
   useUpdateCategoryMutation,
 } from '@/lib/taxonomy'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -70,6 +71,7 @@ export function CategoryActionSheet({
   const [draft, setDraft] = useState('')
   const rename = useUpdateCategoryMutation()
   const remove = useDeleteCategoryMutation()
+  const keyboardInset = useKeyboardInset()
 
   useEffect(() => {
     if (category) {
@@ -90,7 +92,10 @@ export function CategoryActionSheet({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent aria-describedby={mode === 'delete' ? undefined : undefined}>
+      <DialogContent
+        aria-describedby={undefined}
+        style={keyboardInset > 0 ? { bottom: keyboardInset, transition: 'bottom 120ms ease-out' } : undefined}
+      >
         <DialogHeader>
           <DialogTitle>{category.name}</DialogTitle>
           {mode === 'delete' && (
