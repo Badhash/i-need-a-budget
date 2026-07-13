@@ -140,6 +140,7 @@ export function OnboardingPage() {
                 <option value="checking">Compte courant</option>
                 <option value="savings">Épargne</option>
                 <option value="investment">Investissement</option>
+                <option value="card_deferred">Carte à débit différé</option>
               </Select>
             </div>
           </div>

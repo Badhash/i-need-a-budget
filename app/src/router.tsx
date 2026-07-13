@@ -43,11 +43,38 @@ const protectedRoute = createRoute({
   },
 })
 
+// Persistance de la page courante : au hard refresh, on revient sur la
+// derniere page visitee au lieu de retomber sur /budget.
+const LAST_PATH_KEY = 'inab:last-path'
+const LAST_PATH_WHITELIST = [
+  '/budget',
+  '/transactions',
+  '/comptes',
+  '/rapports',
+  '/regles',
+  '/reglages',
+] as const
+
+type LastPath = (typeof LAST_PATH_WHITELIST)[number]
+
+/** Chemin sauvegarde s'il est en liste blanche, sinon /budget. */
+export function readLastPath(): LastPath {
+  try {
+    const saved = window.localStorage.getItem(LAST_PATH_KEY)
+    if (saved && (LAST_PATH_WHITELIST as readonly string[]).includes(saved)) {
+      return saved as LastPath
+    }
+  } catch {
+    // localStorage indisponible : on retombe sur le budget.
+  }
+  return '/budget'
+}
+
 const indexRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: '/',
   beforeLoad: () => {
-    throw redirect({ to: '/budget' })
+    throw redirect({ to: readLastPath() })
   },
 })
 
@@ -104,6 +131,19 @@ export const router = createRouter({
   routeTree,
   history: createHashHistory(),
   context: { auth: { isAuthenticated: false, userId: null } },
+})
+
+// Sauvegarde du chemin courant a chaque navigation aboutie (uniquement les
+// pages metier en liste blanche : ni /login ni la racine).
+router.subscribe('onResolved', ({ toLocation }) => {
+  const path = toLocation.pathname
+  if ((LAST_PATH_WHITELIST as readonly string[]).includes(path)) {
+    try {
+      window.localStorage.setItem(LAST_PATH_KEY, path)
+    } catch {
+      // localStorage indisponible : la persistance est un confort, pas un besoin.
+    }
+  }
 })
 
 declare module '@tanstack/react-router' {

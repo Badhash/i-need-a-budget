@@ -6,7 +6,7 @@ import type { CatColor } from '@/styles/themes'
 import { monthRange, MIN_MONTH, CURRENT_MONTH } from '@/lib/format'
 
 export type GroupIcon = 'home' | 'car' | 'sparkles' | 'repeat' | 'piggy' | 'banknote'
-export type AccountKind = 'checking' | 'savings' | 'investment'
+export type AccountKind = 'checking' | 'savings' | 'investment' | 'card_deferred'
 
 export interface Account {
   id: string

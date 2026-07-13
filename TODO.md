@@ -2,52 +2,46 @@
 
 Liste des chantiers restants / idees, hors specification figee du CLAUDE.md.
 
-## Bancaire
+## Restant
 
-### Cartes a debit differe (ex. carte World Elite)
-Probleme : une carte a debit differe genere des achats au fil du mois, puis un
-SEUL gros prelevement en fin de mois sur le compte de depot. Si on importe les
-deux comptes et qu'on categorise a la fois les achats carte ET le prelevement
-groupe, on compte les depenses DEUX fois.
-
-Solution (methode YNAB) :
-- Lier la carte a un compte local distinct (deja possible via « Associer a… »).
-- Chaque achat carte = transaction sur le compte carte, categorisee → impacte le budget.
-- Le prelevement mensuel groupe sur le compte de depot n'est PAS une depense :
-  c'est un VIREMENT (transfer, sans categorie) du compte de depot vers le compte
-  carte. Il solde la carte, sans re-impacter les enveloppes → chaque depense n'est
-  comptee qu'une fois.
-
-A implementer :
-- [ ] Detection auto du prelevement carte (libelle + montant = somme des
-      transactions carte du cycle) → le marquer automatiquement comme virement
-      (transferGroupId) vers le compte carte, sans categorie.
-- [ ] Action UI « convertir une transaction en virement » (pour le faire a la main
-      en attendant l'auto-detection).
-- [ ] Type de compte « carte a debit differe » avec cycle de facturation.
-
-En attendant (manuel) : lier les deux comptes, categoriser les achats carte, et
-NE PAS categoriser le prelevement mensuel (le marquer virement ou l'exclure).
-
-### Import de l'historique + solde d'ouverture
-Aujourd'hui la synchro n'importe que les transactions POSTERIEURES a la date de
-connexion (pour ne pas doubler avec le solde d'ouverture saisi a la main). Donc
-pas d'historique visible au depart.
-- [ ] Import optionnel des N derniers jours a la premiere synchro.
-- [ ] Reconciliation : fixer le solde d'ouverture au solde a la date de debut
-      d'import (via les balances Enable Banking) pour eviter le double comptage.
-
-## Produit / UX
-
-- [ ] Rendre categories et groupes editables : renommer, ajouter, supprimer,
-      reordonner (actions /api + ecran d'edition).
-- [ ] Persister la page courante au hard refresh (Ctrl+Shift+R) et au retour du
-      consentement bancaire (ne pas retomber systematiquement sur Budget).
-- [ ] Categorisation optimiste (comme l'assignation) : la categorie s'applique
-      instantanement, POST en arriere-plan.
+- [ ] Cycle de facturation configurable par carte a debit differe (verification
+      montant du prelevement = somme des achats du cycle) — raffinement futur.
+- [ ] File de mutations optimistes : renommer/supprimer une categorie pendant la
+      micro-fenetre du POST de creation peut renvoyer 400 (rollback discret).
+- [ ] Import CSV historique (phase 2 du CLAUDE.md).
 
 ## Fait recemment
 
+### Cartes a debit differe (methode YNAB)
+Le prelevement mensuel groupe n'est pas une depense : c'est un virement du compte
+de depot vers le compte carte, sans categorie, pour ne compter chaque achat qu'une fois.
+- [x] Detection auto du prelevement carte apres chaque synchro : un debit
+      « CARTE DEPENSES » sans categorie est apparie au credit oppose sur un autre
+      compte (±5 jours, match unique) et les deux sont lies en virement. Repli :
+      s'il existe un unique compte « carte a debit differe » NON lie a Enable
+      Banking, la transaction miroir est creee dessus.
+- [x] Action UI « convertir en virement vers… » et « annuler le virement »
+      (menu par ligne dans Transactions).
+- [x] Type de compte « carte a debit differe » (kind card_deferred).
+
+### Import de l'historique + solde d'ouverture
+- [x] Import des N derniers jours (30/90/180/365) depuis Reglages > Connexion
+      bancaire > « Importer l'historique ».
+- [x] Reconciliation automatique : le solde d'ouverture est recale pour que le
+      solde local corresponde au solde reel Enable Banking (action reconcile,
+      enchainee cote serveur a tout sync avec sinceDays).
+
+### Produit / UX
+- [x] Libelles bancaires courts : parseur d'affichage (app/src/lib/bankLabel.ts)
+      qui classe chaque transaction (virement recu/emis, prelevement, carte,
+      retrait, versement, pret, reglement, cotisation, interets, cheque) avec
+      pastille coloree ; libelle brut conserve (tooltip + dedup + regles).
+- [x] Categories et groupes editables : renommer, ajouter, supprimer, reordonner
+      (Reglages > Categories, actions /api, mises a jour optimistes).
+- [x] Page courante persistee au hard refresh et au retour du consentement
+      bancaire (localStorage inab:last-path, liste blanche de routes).
+- [x] Categorisation optimiste : la categorie s'applique instantanement,
+      POST en arriere-plan, rollback discret en cas d'echec.
 - [x] Connexion Enable Banking : selecteur de banque avec recherche + logo.
 - [x] Liaison compte bancaire ↔ compte local, IBAN masque (cote serveur).
 - [x] Message de synchro explicite (0 compte associe / 0 transaction / N importees).

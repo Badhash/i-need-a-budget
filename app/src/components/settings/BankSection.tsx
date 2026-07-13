@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Landmark, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Download, Landmark, Loader2, RefreshCw } from 'lucide-react'
 import {
   useBankConnections,
   useAspsps,
   bankStartAuth,
   bankSync,
+  bankReconcile,
   apiLinkBankAccount,
   type BankConnection,
 } from '@/lib/bank'
+import { fmtEUR } from '@/lib/format'
 import { useAccountsList } from '@/lib/data'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -42,6 +44,9 @@ export function BankSection() {
   const [syncing, setSyncing] = useState(false)
   const [connectMessage, setConnectMessage] = useState<string | null>(null)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
+  const [importDays, setImportDays] = useState('90')
+  const [importing, setImporting] = useState(false)
+  const [importMessage, setImportMessage] = useState<string | null>(null)
 
   const list = connections ?? []
   const hasConnections = list.length > 0
@@ -79,6 +84,27 @@ export function BankSection() {
       setSyncMessage('Synchronisation indisponible pour le moment.')
     } finally {
       setSyncing(false)
+    }
+  }
+
+  // Importe l'historique bancaire (sinceDays), puis reconcilie les soldes
+  // d'ouverture pour coller au solde bancaire reel.
+  async function handleImportHistory() {
+    setImportMessage(null)
+    setImporting(true)
+    try {
+      const { imported } = await bankSync(Number(importDays))
+      const { adjusted } = await bankReconcile()
+      const totalDelta = adjusted.reduce((s, a) => s + a.delta, 0)
+      const importedPart = `${imported} transaction${imported > 1 ? 's' : ''} importée${imported > 1 ? 's' : ''}`
+      const deltaPart =
+        totalDelta === 0 ? 'solde déjà exact' : `solde ajusté de ${fmtEUR(totalDelta)}`
+      setImportMessage(`${importedPart}, ${deltaPart}.`)
+      await queryClient.invalidateQueries()
+    } catch {
+      setImportMessage("Import de l'historique indisponible pour le moment.")
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -197,6 +223,40 @@ export function BankSection() {
                 Synchroniser maintenant
               </Button>
               {syncMessage && <p className="text-[13px] text-soft">{syncMessage}</p>}
+            </div>
+
+            <div className="space-y-2 rounded-xl border border-line p-4">
+              <p className="label-caps">Importer l'historique</p>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <Select
+                  value={importDays}
+                  onChange={(e) => setImportDays(e.target.value)}
+                  className="min-w-[140px]"
+                  aria-label="Profondeur d'import de l'historique"
+                >
+                  <option value="30">30 jours</option>
+                  <option value="90">90 jours</option>
+                  <option value="180">180 jours</option>
+                  <option value="365">365 jours</option>
+                </Select>
+                <Button
+                  variant="outline"
+                  onClick={() => void handleImportHistory()}
+                  disabled={importing}
+                >
+                  {importing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  Importer
+                </Button>
+                {importMessage && <p className="text-[13px] text-soft">{importMessage}</p>}
+              </div>
+              <p className="text-[12px] text-soft">
+                L'import ajuste automatiquement le solde d'ouverture de chaque compte associé
+                pour correspondre au solde bancaire réel.
+              </p>
             </div>
           </div>
         )}

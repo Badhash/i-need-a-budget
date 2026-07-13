@@ -1,4 +1,4 @@
-import { Landmark, PiggyBank, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
+import { CreditCard, Landmark, PiggyBank, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
 import type { AccountKind } from '@/mocks/data'
 import { useAccounts, type AccountWithBalance } from '@/lib/data'
 import { Amount } from '@/components/shared/Amount'
@@ -10,6 +10,7 @@ const KIND_META: Record<AccountKind, { icon: LucideIcon; label: string }> = {
   checking: { icon: Wallet, label: 'Compte courant' },
   savings: { icon: PiggyBank, label: 'Épargne' },
   investment: { icon: TrendingUp, label: 'Investissement' },
+  card_deferred: { icon: CreditCard, label: 'Carte à débit différé' },
 }
 
 function AccountCard({ account }: { account: AccountWithBalance }) {

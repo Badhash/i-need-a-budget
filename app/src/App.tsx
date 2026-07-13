@@ -58,6 +58,9 @@ export function App() {
       try {
         await bankFinalizeAuth(code)
         await queryClient.invalidateQueries({ queryKey: ['bankConnections'] })
+        // Retour de consentement : ramener l'utilisateur sur les reglages
+        // (section bancaire), pas sur le budget.
+        void router.navigate({ to: '/reglages' })
       } catch (err) {
         // Echec silencieux : un retour de consentement ne doit jamais casser l'app.
         console.error('Finalisation de la connexion bancaire echouee', err)

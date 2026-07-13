@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useThemeController } from '@/hooks/useTheme'
+import { readLastPath } from '@/router'
 
 type Step = 'password' | 'mfa'
 
@@ -26,7 +27,7 @@ export function LoginPage() {
       if (!data.session) return
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
       if (!aal || aal.nextLevel === aal.currentLevel) {
-        void navigate({ to: '/budget' })
+        void navigate({ to: readLastPath() })
       }
     })
   }, [navigate])
@@ -42,7 +43,7 @@ export function LoginPage() {
         return
       }
     }
-    void navigate({ to: '/budget' })
+    void navigate({ to: readLastPath() })
   }
 
   async function onSubmitPassword(e: FormEvent) {
@@ -84,7 +85,7 @@ export function LoginPage() {
       setError('Code incorrect.')
       return
     }
-    void navigate({ to: '/budget' })
+    void navigate({ to: readLastPath() })
   }
 
   return (

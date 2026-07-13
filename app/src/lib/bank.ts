@@ -116,10 +116,29 @@ export async function bankFinalizeAuth(code: string): Promise<{ ok: boolean; con
   return syncBankCall<{ ok: boolean; connectionId: string }>('finalizeAuth', { code })
 }
 
+export interface BankSyncResult {
+  imported: number
+  linked: number
+  transfersLinked?: number
+}
+
 /**
  * Declenche une synchronisation immediate. `imported` = transactions importees,
  * `linked` = comptes bancaires associes a un compte local (0 = rien a importer).
+ * `sinceDays` (optionnel) : profondeur d'import de l'historique en jours.
  */
-export async function bankSync(): Promise<{ imported: number; linked: number }> {
-  return syncBankCall<{ imported: number; linked: number }>('sync')
+export async function bankSync(sinceDays?: number): Promise<BankSyncResult> {
+  return syncBankCall<BankSyncResult>('sync', sinceDays !== undefined ? { sinceDays } : {})
+}
+
+export interface BankReconcileResult {
+  adjusted: { accountId: string; accountName: string; delta: number }[]
+}
+
+/**
+ * Reconciliation des soldes : ajuste le solde d'ouverture de chaque compte lie
+ * pour que le solde local corresponde au solde bancaire reel. `delta` en centimes.
+ */
+export async function bankReconcile(): Promise<BankReconcileResult> {
+  return syncBankCall<BankReconcileResult>('reconcile')
 }
