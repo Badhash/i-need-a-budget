@@ -7,6 +7,8 @@
 @layer base {
   html {
     -webkit-tap-highlight-color: transparent;
+    /* iOS : empeche le grossissement automatique du texte en paysage. */
+    -webkit-text-size-adjust: 100%;
     color-scheme: light;
   }
 
@@ -16,6 +18,19 @@
 
   body {
     @apply bg-bg font-sans text-[15px] leading-normal text-ink antialiased;
+    /* iOS : pas de pull-to-refresh accidentel qui secoue le header sticky. */
+    overscroll-behavior-y: contain;
+  }
+
+  /* iOS : supprime le delai de double-tap et les zooms accidentels sur les
+     controles, sans bloquer le pinch-zoom sur le reste de la page. */
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  label {
+    touch-action: manipulation;
   }
 
   ::selection {

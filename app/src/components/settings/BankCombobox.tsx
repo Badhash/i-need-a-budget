@@ -43,7 +43,7 @@ export function BankCombobox({ aspsps, value, onSelect, loading, disabled }: Ban
           disabled={disabled || loading}
           placeholder={loading ? 'Chargement des banques…' : 'Cherche ta banque…'}
           aria-label="Cherche ta banque"
-          className="h-11 w-full rounded-xl border border-line bg-surface pl-9 pr-9 text-[14px] outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
+          className="h-11 w-full rounded-xl border border-line bg-surface pl-9 pr-9 text-[16px] outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 lg:text-[14px]"
         />
         <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-soft" />
       </div>

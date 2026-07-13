@@ -8,7 +8,12 @@ interface AssignedEditorProps {
   className?: string
 }
 
-/** Montant assigne editable inline : clic -> input, Entree valide, Echap annule. */
+/**
+ * Montant assigne editable inline : clic -> input, Entree valide, Echap annule.
+ * iOS : police 16px sur mobile (empeche le zoom automatique de Safari au
+ * focus), cible tactile 40px, clavier decimal avec touche OK, contenu
+ * pre-selectionne pour remplacer d'un geste.
+ */
 export function AssignedEditor({ value, onCommit, className }: AssignedEditorProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -17,21 +22,30 @@ export function AssignedEditor({ value, onCommit, className }: AssignedEditorPro
 
   useEffect(() => {
     if (editing) {
-      inputRef.current?.focus()
-      inputRef.current?.select()
+      const input = inputRef.current
+      input?.focus()
+      // iOS ignore parfois select() au montage : re-selectionne au frame suivant.
+      requestAnimationFrame(() => {
+        try {
+          input?.setSelectionRange(0, input.value.length)
+        } catch {
+          input?.select()
+        }
+      })
     }
   }, [editing])
 
   const start = () => {
     cancelled.current = false
-    setDraft((value / 100).toFixed(2).replace('.', ','))
+    setDraft(value === 0 ? '' : (value / 100).toFixed(2).replace('.', ','))
     setEditing(true)
   }
 
   const commit = () => {
     setEditing(false)
     if (cancelled.current) return
-    const parsed = Number.parseFloat(draft.replace(/\s/g, '').replace(',', '.'))
+    const raw = draft.trim()
+    const parsed = raw === '' ? 0 : Number.parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
     if (Number.isNaN(parsed) || parsed < 0) return
     const cents = Math.round(parsed * 100)
     if (cents !== value) onCommit(cents)
@@ -45,15 +59,21 @@ export function AssignedEditor({ value, onCommit, className }: AssignedEditorPro
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') commit()
+          if (e.key === 'Enter') {
+            // Sur iOS, blur() referme le clavier ; commit part via onBlur.
+            e.currentTarget.blur()
+          }
           if (e.key === 'Escape') {
             cancelled.current = true
             setEditing(false)
           }
         }}
         inputMode="decimal"
+        enterKeyHint="done"
+        autoComplete="off"
+        placeholder="0,00"
         className={cn(
-          'h-8 w-28 rounded-lg border border-accent/60 bg-surface px-2 text-right text-[14px] tnum outline-none',
+          'h-10 w-28 rounded-lg border border-accent/60 bg-surface px-2 text-right text-[16px] tnum outline-none placeholder:text-soft/60 lg:h-8 lg:text-[14px]',
           className,
         )}
       />
@@ -64,7 +84,9 @@ export function AssignedEditor({ value, onCommit, className }: AssignedEditorPro
     <button
       onClick={start}
       className={cn(
-        'h-8 rounded-lg px-2 text-right text-[14px] tnum transition-colors hover:bg-surface2 hover:ring-1 hover:ring-line',
+        // Mobile : bordure discrete pour signaler que le montant est editable.
+        'h-10 rounded-lg border border-line/70 bg-surface px-2.5 text-right text-[15px] tnum transition-colors active:bg-surface2',
+        'lg:h-8 lg:border-transparent lg:bg-transparent lg:px-2 lg:text-[14px] lg:hover:bg-surface2 lg:hover:ring-1 lg:hover:ring-line',
         value === 0 && 'text-soft',
         className,
       )}
