@@ -31,13 +31,6 @@ function fmtValidUntil(iso: string | null): string | null {
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
-// IBAN masque : garde le pays et les 4 derniers chiffres (FR76 •••• 1234).
-function maskIban(iban: string): string {
-  const clean = iban.replace(/\s+/g, '')
-  if (clean.length <= 8) return clean
-  return `${clean.slice(0, 4)} •••• ${clean.slice(-4)}`
-}
-
 export function BankSection() {
   const queryClient = useQueryClient()
   const { data: connections, isLoading } = useBankConnections()
@@ -73,11 +66,13 @@ export function BankSection() {
     setSyncMessage(null)
     setSyncing(true)
     try {
-      const { imported } = await bankSync()
+      const { imported, linked } = await bankSync()
       setSyncMessage(
-        imported > 0
-          ? `${imported} transaction${imported > 1 ? 's' : ''} importee${imported > 1 ? 's' : ''}.`
-          : 'Aucune nouvelle transaction.',
+        linked === 0
+          ? "Associe d'abord un compte bancaire à un compte local (menu « Associer à… »), puis synchronise."
+          : imported > 0
+            ? `${imported} transaction${imported > 1 ? 's' : ''} importée${imported > 1 ? 's' : ''}.`
+            : "Aucune nouvelle transaction depuis l'activation de la connexion.",
       )
       await queryClient.invalidateQueries()
     } catch {
@@ -167,7 +162,7 @@ export function BankSection() {
                               {acc.product ?? acc.name ?? 'Compte bancaire'}
                             </p>
                             <p className="truncate text-[11.5px] text-soft tnum">
-                              {acc.iban ? maskIban(acc.iban) : (acc.name ?? acc.uid)}
+                              {acc.iban ?? acc.name ?? acc.uid}
                             </p>
                           </div>
                           <Select

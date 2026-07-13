@@ -530,7 +530,7 @@ function lastSuccessfulRunDate(
 // Synchronisation d'un utilisateur
 // ---------------------------------------------------------------------------
 
-async function syncUser(userId: string): Promise<number> {
+async function syncUser(userId: string): Promise<{ imported: number; linked: number }> {
   const keys = await getKeys()
 
   // Connexions bancaires actives de l'utilisateur.
@@ -569,7 +569,7 @@ async function syncUser(userId: string): Promise<number> {
     }
     activeConnections.push(conn)
   }
-  if (activeConnections.length === 0) return 0
+  if (activeConnections.length === 0) return { imported: 0, linked: 0 }
 
   // Comptes (pour lier uid EB -> id compte interne) et regles de categorisation.
   const [accounts, rules] = await Promise.all([
@@ -600,6 +600,7 @@ async function syncUser(userId: string): Promise<number> {
   const recentLogs = await loadRecentSyncLogs(userId)
 
   let importedTotal = 0
+  let linkedCount = 0
 
   for (const conn of activeConnections) {
     let importedForConn = 0
@@ -619,6 +620,7 @@ async function syncUser(userId: string): Promise<number> {
         // Un compte EB non encore lie a un compte interne est ignore : la
         // liaison (providerAccountUid) se fait cote /api.
         if (!localAccount) continue
+        linkedCount += 1
 
         // Pagination EB via continuation_key. Bornee pour eviter toute boucle
         // infinie : nombre de pages plafonne et arret si la cle se repete.
@@ -698,7 +700,7 @@ async function syncUser(userId: string): Promise<number> {
     }
   }
 
-  return importedTotal
+  return { imported: importedTotal, linked: linkedCount }
 }
 
 // ---------------------------------------------------------------------------
@@ -837,9 +839,12 @@ async function actionListAspsps() {
 // user isole faire echouer les autres.
 async function actionSync(targetUserIds: string[], isCron: boolean) {
   let imported = 0
+  let linked = 0
   for (const userId of targetUserIds) {
     try {
-      imported += await syncUser(userId)
+      const r = await syncUser(userId)
+      imported += r.imported
+      linked += r.linked
     } catch (err) {
       // Erreur "dure" (chargement impossible) : journalisee, puis on continue en
       // mode cron. En mode user, on la propage pour un retour d'erreur explicite.
@@ -852,7 +857,9 @@ async function actionSync(targetUserIds: string[], isCron: boolean) {
       if (!isCron) throw err
     }
   }
-  return { imported }
+  // `linked` = nombre de comptes bancaires effectivement associes a un compte
+  // local : permet au front de dire "associe d'abord un compte" si 0.
+  return { imported, linked }
 }
 
 // ---------------------------------------------------------------------------

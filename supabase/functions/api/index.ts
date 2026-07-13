@@ -866,6 +866,14 @@ async function actionDeleteTarget(userId: string, params: Params) {
 
 const EXPIRY_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
 
+// IBAN masque cote serveur : seuls le pays et les 4 derniers chiffres quittent
+// le serveur (l'IBAN complet reste chiffre en base, jamais expose au front).
+function maskIban(iban: string): string {
+  const clean = iban.replace(/\s+/g, '')
+  if (clean.length <= 8) return clean
+  return `${clean.slice(0, 4)} •••• ${clean.slice(-4)}`
+}
+
 async function actionGetBankConnections(userId: string) {
   const [rows, accounts] = await Promise.all([
     loadAll<BankConnectionPayload>('bank_connections', userId),
@@ -893,7 +901,7 @@ async function actionGetBankConnections(userId: string) {
       return {
         uid: acc.uid,
         name: acc.name ?? null,
-        iban: acc.iban ?? null,
+        iban: acc.iban ? maskIban(acc.iban) : null,
         product: acc.product ?? null,
         linkedAccountId: linked?.id ?? null,
         linkedAccountName: linked?.name ?? null,

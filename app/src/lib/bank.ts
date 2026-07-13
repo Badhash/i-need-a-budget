@@ -116,7 +116,10 @@ export async function bankFinalizeAuth(code: string): Promise<{ ok: boolean; con
   return syncBankCall<{ ok: boolean; connectionId: string }>('finalizeAuth', { code })
 }
 
-/** Declenche une synchronisation immediate ; retourne le nombre d'imports. */
-export async function bankSync(): Promise<{ imported: number }> {
-  return syncBankCall<{ imported: number }>('sync')
+/**
+ * Declenche une synchronisation immediate. `imported` = transactions importees,
+ * `linked` = comptes bancaires associes a un compte local (0 = rien a importer).
+ */
+export async function bankSync(): Promise<{ imported: number; linked: number }> {
+  return syncBankCall<{ imported: number; linked: number }>('sync')
 }
