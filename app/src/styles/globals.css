@@ -51,6 +51,13 @@
   .pb-safe {
     padding-bottom: env(safe-area-inset-bottom);
   }
+
+  /* Hauteur pleine avec repli : 100dvh sur les navigateurs recents (barre
+     dynamique iOS), 100vh sinon. Evite les ecrans "non centres" sur iOS. */
+  .min-h-app {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
 }
 
 /* Transition douce lors du changement de theme ou de mode */

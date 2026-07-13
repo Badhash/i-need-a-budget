@@ -88,7 +88,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-bg px-4">
+    <div className="flex min-h-app items-center justify-center bg-bg px-4 py-8">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center gap-3 text-center">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-accentfg">
