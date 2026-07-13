@@ -2,10 +2,10 @@
 // Chaque appel joint le JWT de la session Supabase courante. Le serveur
 // dechiffre en memoire et renvoie du JSON en clair sur TLS.
 
-import { supabase } from '@/lib/supabase'
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '@/lib/supabase'
 
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/api`
-const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1/api`
+const ANON_KEY = SUPABASE_ANON_KEY
 
 export class ApiError extends Error {
   constructor(

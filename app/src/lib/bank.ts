@@ -4,11 +4,11 @@
 // try/catch. Rien ici ne doit faire crasher l'UI.
 
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
-import { supabase } from '@/lib/supabase'
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '@/lib/supabase'
 import { apiCall } from '@/lib/api'
 
-const SYNC_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sync-bank`
-const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+const SYNC_URL = `${SUPABASE_URL}/functions/v1/sync-bank`
+const ANON_KEY = SUPABASE_ANON_KEY
 
 export interface BankConnection {
   id: string

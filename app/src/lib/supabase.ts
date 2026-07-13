@@ -4,10 +4,17 @@
 
 import { createClient } from '@supabase/supabase-js'
 
-const url = import.meta.env.VITE_SUPABASE_URL
-const anon = import.meta.env.VITE_SUPABASE_ANON_KEY
+// URL et cle publiques injectees au build (workflow deploy-pages). On retire tout
+// slash final de l'URL : sinon "${URL}/functions/v1/api" et les appels Auth
+// produisent un double slash ("...co//auth/v1") que le routeur Supabase rejette
+// (PGRST125 "Invalid path specified in request URL").
+const rawUrl = import.meta.env.VITE_SUPABASE_URL
+const rawAnon = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (!url || !anon) {
+export const SUPABASE_URL = (rawUrl ?? '').replace(/\/+$/, '')
+export const SUPABASE_ANON_KEY = rawAnon ?? ''
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   // Ne pas jeter au chargement (sinon l'app entiere casse en dev/CI sans .env) :
   // on log clairement et les appels reels echoueront avec un message parlant.
   console.error(
@@ -16,8 +23,8 @@ if (!url || !anon) {
 }
 
 export const supabase = createClient(
-  url || 'https://placeholder.supabase.co',
-  anon || 'placeholder-anon-key',
+  SUPABASE_URL || 'https://placeholder.supabase.co',
+  SUPABASE_ANON_KEY || 'placeholder-anon-key',
   {
     auth: {
       persistSession: true,
