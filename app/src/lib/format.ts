@@ -1,9 +1,17 @@
 // Formatage fr-FR : montants en centimes -> "1 234,56 €", dates, mois.
 
+// Dates dynamiques (fuseau local) : l'app doit rester juste au fil des jours.
+function isoLocal(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+export const TODAY = isoLocal(new Date())
+export const CURRENT_MONTH = TODAY.slice(0, 7)
 export const MIN_MONTH = '2026-02'
-export const MAX_MONTH = '2026-12'
-export const CURRENT_MONTH = '2026-07'
-export const TODAY = '2026-07-12'
+// Assignation sur les mois futurs autorisee : horizon glissant de 6 mois.
+export const MAX_MONTH = isoLocal(new Date(new Date().getFullYear(), new Date().getMonth() + 6, 1)).slice(0, 7)
 
 const eur = new Intl.NumberFormat('fr-FR', {
   style: 'currency',

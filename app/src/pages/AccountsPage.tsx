@@ -1,9 +1,22 @@
-import { CreditCard, Landmark, PiggyBank, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { CreditCard, Landmark, PiggyBank, Plus, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
 import type { AccountKind } from '@/mocks/data'
-import { useAccounts, type AccountWithBalance } from '@/lib/data'
+import { apiCreateAccount, useAccounts, type AccountWithBalance } from '@/lib/data'
+import { TODAY } from '@/lib/format'
 import { Amount } from '@/components/shared/Amount'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 
 const KIND_META: Record<AccountKind, { icon: LucideIcon; label: string }> = {
@@ -32,11 +45,141 @@ function AccountCard({ account }: { account: AccountWithBalance }) {
       </div>
       <div className="text-right">
         <Amount cents={account.balance} className="block text-[18px] font-semibold" colored={account.balance < 0} />
-        {account.kind === 'checking' && (
-          <p className="mt-0.5 text-[11.5px] text-soft">Synchronisé il y a 2 h</p>
-        )}
       </div>
     </Card>
+  )
+}
+
+const MIN_DATE = '2026-01-01'
+
+function parseEuros(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return 0
+  const parsed = Number.parseFloat(trimmed.replace(/\s/g, '').replace(',', '.'))
+  if (Number.isNaN(parsed)) return null
+  return Math.round(parsed * 100)
+}
+
+/** Dialog de creation de compte (hors onboarding) : type carte a debit differe inclus. */
+function AddAccountDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const queryClient = useQueryClient()
+  const [name, setName] = useState('')
+  const [institution, setInstitution] = useState('')
+  const [kind, setKind] = useState<AccountKind>('checking')
+  const [onBudget, setOnBudget] = useState(true)
+  const [balance, setBalance] = useState('')
+  const [openingDate, setOpeningDate] = useState(TODAY)
+  const [error, setError] = useState<string | null>(null)
+
+  const create = useMutation({
+    mutationFn: apiCreateAccount,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries()
+      setName('')
+      setBalance('')
+      setError(null)
+      onOpenChange(false)
+    },
+    onError: () => setError('Création impossible pour le moment. Réessayez.'),
+  })
+
+  const submit = () => {
+    if (!name.trim() || !institution.trim()) {
+      setError('Renseignez le nom du compte et la banque.')
+      return
+    }
+    const cents = parseEuros(balance)
+    if (cents === null) {
+      setError('Saisissez un solde valide, par exemple 1234,56 (négatif autorisé pour une carte).')
+      return
+    }
+    if (openingDate < MIN_DATE || openingDate > TODAY) {
+      setError("La date d'ouverture doit être antérieure ou égale à aujourd'hui.")
+      return
+    }
+    setError(null)
+    create.mutate({
+      name: name.trim(),
+      institution: institution.trim(),
+      kind,
+      onBudget,
+      openingBalance: cents,
+      openingDate,
+    })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Ajouter un compte</DialogTitle>
+          <DialogDescription>
+            Saisissez le solde actuel comme solde d'ouverture. Pour une carte à débit différé,
+            l'encours non prélevé (souvent négatif).
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 overflow-y-auto p-5 pt-2">
+          <div>
+            <label className="label-caps mb-1.5 block">Nom du compte</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Carte World Elite" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label-caps mb-1.5 block">Banque</label>
+              <Input
+                value={institution}
+                onChange={(e) => setInstitution(e.target.value)}
+                placeholder="Ma banque"
+              />
+            </div>
+            <div>
+              <label className="label-caps mb-1.5 block">Type</label>
+              <Select value={kind} onChange={(e) => setKind(e.target.value as AccountKind)}>
+                <option value="checking">Compte courant</option>
+                <option value="savings">Épargne</option>
+                <option value="investment">Investissement</option>
+                <option value="card_deferred">Carte à débit différé</option>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label-caps mb-1.5 block">Solde d'ouverture (€)</label>
+              <Input
+                value={balance}
+                onChange={(e) => setBalance(e.target.value)}
+                placeholder="0,00"
+                inputMode="decimal"
+                className="text-right tnum"
+              />
+            </div>
+            <div>
+              <label className="label-caps mb-1.5 block">Date d'ouverture</label>
+              <Input
+                type="date"
+                value={openingDate}
+                min={MIN_DATE}
+                max={TODAY}
+                onChange={(e) => setOpeningDate(e.target.value)}
+              />
+            </div>
+          </div>
+          <label className="flex min-h-[44px] items-center gap-2.5 text-[14px]">
+            <input
+              type="checkbox"
+              checked={onBudget}
+              onChange={(e) => setOnBudget(e.target.checked)}
+              className="h-4 w-4 rounded"
+            />
+            Compte inclus dans le budget
+          </label>
+          {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
+          <Button className="w-full" onClick={submit} disabled={create.isPending}>
+            {create.isPending ? 'Création…' : 'Créer le compte'}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -53,6 +196,7 @@ function AccountsSkeleton() {
 
 export function AccountsPage() {
   const { data: accounts } = useAccounts()
+  const [addOpen, setAddOpen] = useState(false)
 
   if (!accounts) return <AccountsSkeleton />
 
@@ -84,6 +228,14 @@ export function AccountsPage() {
           </div>
         </div>
       </Card>
+
+      <div className="flex justify-end">
+        <Button variant="secondary" onClick={() => setAddOpen(true)}>
+          <Plus className="h-4 w-4" />
+          Ajouter un compte
+        </Button>
+      </div>
+      <AddAccountDialog open={addOpen} onOpenChange={setAddOpen} />
 
       <section className="space-y-3">
         <h2 className="label-caps px-1">Comptes budget</h2>
