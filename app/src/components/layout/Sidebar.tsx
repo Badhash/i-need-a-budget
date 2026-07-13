@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { Wallet } from 'lucide-react'
 import { NAV_ITEMS, RULES_ITEM, SETTINGS_ITEM } from '@/components/layout/nav'
 import { useBudgetMonth, useTransactions } from '@/lib/queries'
-import { uncategorizedCount } from '@/lib/data'
+import { uncategorizedCount, useBootstrap } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
 import { Amount } from '@/components/shared/Amount'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -27,9 +27,13 @@ function NavLink({ to, label, icon: Icon, badge }: { to: string; label: string; 
 
 export function Sidebar() {
   const month = useUiStore((s) => s.month)
-  const { data: budget } = useBudgetMonth(month)
+  const boot = useBootstrap()
+  const { data: budget, isError: budgetError } = useBudgetMonth(month)
   const { data: txs } = useTransactions()
   const badge = txs ? uncategorizedCount(txs) : 0
+  // Une erreur du bootstrap desactive la query budget : on la surveille aussi
+  // pour ne pas rester bloque en skeleton dans la nav.
+  const hasBudgetError = budgetError || boot.isError
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-line bg-surface px-4 py-6 lg:flex">
@@ -66,6 +70,10 @@ export function Sidebar() {
                 budget.rta >= 0 ? 'text-success' : 'text-danger',
               )}
             />
+          ) : hasBudgetError ? (
+            <span className="mt-1 block text-[22px] font-semibold text-soft" aria-hidden="true">
+              —
+            </span>
           ) : (
             <Skeleton className="mt-2 h-7 w-28" />
           )}

@@ -69,6 +69,14 @@ export async function bankStartAuth(redirectUrl: string): Promise<{ url: string 
   return syncBankCall<{ url: string }>('startAuth', { redirectUrl })
 }
 
+/**
+ * Finalise le flow d'auth PSD2 : echange le code OAuth renvoye par Enable
+ * Banking (au retour de redirection) contre une connexion bancaire persistee.
+ */
+export async function bankFinalizeAuth(code: string): Promise<{ ok: boolean; connectionId: string }> {
+  return syncBankCall<{ ok: boolean; connectionId: string }>('finalizeAuth', { code })
+}
+
 /** Declenche une synchronisation immediate ; retourne le nombre d'imports. */
 export async function bankSync(): Promise<{ imported: number }> {
   return syncBankCall<{ imported: number }>('sync')

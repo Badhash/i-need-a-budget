@@ -68,6 +68,7 @@ function ThemeSection() {
             <button
               key={meta.id}
               onClick={() => setTheme(meta.id)}
+              aria-pressed={theme === meta.id}
               className={cn(
                 'rounded-2xl border p-3 text-left transition-all',
                 theme === meta.id
@@ -104,6 +105,7 @@ function ThemeSection() {
               <button
                 key={value}
                 onClick={() => setMode(value)}
+                aria-pressed={mode === value}
                 className={cn(
                   'h-9 rounded-lg text-[13.5px] font-medium transition-colors',
                   mode === value ? 'bg-surface text-ink shadow-sm' : 'text-soft hover:text-ink',

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Target as TargetIcon } from 'lucide-react'
+import { AlertTriangle, Target as TargetIcon } from 'lucide-react'
 import type { BudgetGroupBlock } from '@/lib/budget'
 import type { Category } from '@/mocks/data'
-import { useBudgetMonth, apiSetAssigned } from '@/lib/data'
+import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
 import { useTargets, type Target } from '@/lib/targets'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
@@ -12,6 +12,7 @@ import { AvailablePill } from '@/components/budget/AvailablePill'
 import { TargetBar } from '@/components/budget/TargetBar'
 import { TargetDialog } from '@/components/budget/TargetDialog'
 import { GroupPill } from '@/components/shared/GroupPill'
+import { EmptyState } from '@/components/shared/EmptyState'
 import { Amount } from '@/components/shared/Amount'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -71,7 +72,7 @@ function TargetTrigger({
               "relative h-7 w-7 rounded-lg after:absolute after:-inset-1.5 after:content-['']",
               hasTarget
                 ? 'text-accent hover:bg-surface2'
-                : 'text-soft/50 opacity-0 hover:bg-surface2 hover:text-ink focus-visible:opacity-100 group-hover:opacity-100',
+                : 'text-soft/50 opacity-0 hover:bg-surface2 hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100',
             )
           : cn('h-11 w-11 hover:bg-surface2 active:bg-surface2', hasTarget ? 'text-accent' : 'text-soft'),
       )}
@@ -258,6 +259,21 @@ function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
   )
 }
 
+/** Etat d'erreur du budget : evite un skeleton infini si le chargement echoue. */
+function BudgetError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Card>
+      <EmptyState
+        icon={AlertTriangle}
+        title="Impossible de charger le budget"
+        description="Une erreur est survenue lors du chargement de vos données. Vérifiez votre connexion, puis réessayez."
+        actionLabel="Réessayer"
+        onAction={onRetry}
+      />
+    </Card>
+  )
+}
+
 function BudgetSkeleton() {
   return (
     <div className="space-y-5">
@@ -280,9 +296,23 @@ function BudgetSkeleton() {
 
 export function BudgetPage() {
   const month = useUiStore((s) => s.month)
-  const { data: budget } = useBudgetMonth(month)
+  const boot = useBootstrap()
+  const { data: budget, isError, refetch } = useBudgetMonth(month)
   const { data: targets } = useTargets()
   const [targetCat, setTargetCat] = useState<Category | null>(null)
+
+  // L'erreur du bootstrap desactive la query budget : on la surveille aussi
+  // pour ne pas rester bloque en skeleton.
+  if (boot.isError || isError) {
+    return (
+      <BudgetError
+        onRetry={() => {
+          void boot.refetch()
+          void refetch()
+        }}
+      />
+    )
+  }
 
   if (!budget) return <BudgetSkeleton />
 

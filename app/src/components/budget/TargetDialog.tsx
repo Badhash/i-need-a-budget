@@ -117,8 +117,14 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
 
         <div className="flex-1 space-y-4 overflow-y-auto p-5 pt-2">
           <div>
-            <label className="label-caps mb-1.5 block">Type d'objectif</label>
-            <Select value={type} onChange={(e) => setType(e.target.value as TargetType)}>
+            <label htmlFor="target-type" className="label-caps mb-1.5 block">
+              Type d'objectif
+            </label>
+            <Select
+              id="target-type"
+              value={type}
+              onChange={(e) => setType(e.target.value as TargetType)}
+            >
               <option value="monthly">Chaque mois</option>
               <option value="byDate">Pour une date</option>
             </Select>
@@ -126,9 +132,12 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
 
           <div className={cn('gap-3', type === 'byDate' && 'grid grid-cols-2')}>
             <div>
-              <label className="label-caps mb-1.5 block">Montant</label>
+              <label htmlFor="target-amount" className="label-caps mb-1.5 block">
+                Montant
+              </label>
               <div className="relative">
                 <Input
+                  id="target-amount"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   placeholder="0,00"
@@ -143,8 +152,11 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
             </div>
             {type === 'byDate' && (
               <div>
-                <label className="label-caps mb-1.5 block">Mois cible</label>
+                <label htmlFor="target-due" className="label-caps mb-1.5 block">
+                  Mois cible
+                </label>
                 <Input
+                  id="target-due"
                   type="month"
                   value={dueMonth}
                   min={CURRENT_MONTH}

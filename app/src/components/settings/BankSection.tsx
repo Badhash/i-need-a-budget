@@ -129,19 +129,24 @@ export function BankSection() {
         )}
 
         {!isLoading && !hasConnections && (
-          <div className="flex flex-wrap items-center gap-4 rounded-xl border border-line p-4">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface2 text-soft">
-              <Landmark className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold">Aucune banque connectee</p>
-              <p className="text-[12.5px] text-soft">
-                {connectMessage ?? 'Connecte ta banque pour importer tes transactions automatiquement.'}
-              </p>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-4 rounded-xl border border-line p-4">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface2 text-soft">
+                <Landmark className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">Aucune banque connectee</p>
+                <p className="text-[12.5px] text-soft">
+                  {connectMessage ?? 'Connecte ta banque pour importer tes transactions automatiquement.'}
+                </p>
+              </div>
+              <Button onClick={() => void handleConnect()} disabled={connecting}>
+                {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connecter'}
+              </Button>
             </div>
-            <Button onClick={() => void handleConnect()} disabled={connecting}>
-              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connecter'}
-            </Button>
+            <p className="text-[12.5px] text-soft">
+              Apres avoir autorise l'acces chez ta banque, tu seras redirige vers l'application pour finaliser la connexion.
+            </p>
           </div>
         )}
       </CardContent>

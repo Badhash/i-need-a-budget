@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, ChevronDown, ChevronUp, Pencil, Trash2, Wand2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ChevronDown, ChevronUp, Pencil, Trash2, Wand2 } from 'lucide-react'
 import { useCategoriesMap, useGroupsMap } from '@/lib/data'
 import {
   apiApplyRules,
@@ -55,7 +55,7 @@ function RuleRow({
           type="button"
           onClick={() => onMove(index, -1)}
           disabled={index === 0 || reordering}
-          className="flex h-6 w-7 items-center justify-center rounded-md transition-colors hover:bg-surface2 hover:text-ink disabled:pointer-events-none disabled:opacity-30"
+          className="flex h-11 w-11 items-center justify-center rounded-md transition-colors hover:bg-surface2 hover:text-ink disabled:pointer-events-none disabled:opacity-30 sm:h-6 sm:w-7"
           aria-label="Priorité plus haute"
         >
           <ChevronUp className="h-4 w-4" />
@@ -64,7 +64,7 @@ function RuleRow({
           type="button"
           onClick={() => onMove(index, 1)}
           disabled={index === count - 1 || reordering}
-          className="flex h-6 w-7 items-center justify-center rounded-md transition-colors hover:bg-surface2 hover:text-ink disabled:pointer-events-none disabled:opacity-30"
+          className="flex h-11 w-11 items-center justify-center rounded-md transition-colors hover:bg-surface2 hover:text-ink disabled:pointer-events-none disabled:opacity-30 sm:h-6 sm:w-7"
           aria-label="Priorité plus basse"
         >
           <ChevronDown className="h-4 w-4" />
@@ -90,7 +90,13 @@ function RuleRow({
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
-        <Button variant="ghost" size="icon" onClick={() => onEdit(rule)} aria-label="Modifier la règle">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => onEdit(rule)}
+          aria-label="Modifier la règle"
+          className="h-11 w-11 sm:h-10 sm:w-10"
+        >
           <Pencil className="h-[18px] w-[18px]" />
         </Button>
         <Button
@@ -98,7 +104,7 @@ function RuleRow({
           size="icon"
           onClick={() => onDelete(rule)}
           aria-label="Supprimer la règle"
-          className="text-soft hover:text-danger"
+          className="h-11 w-11 text-soft hover:text-danger sm:h-10 sm:w-10"
         >
           <Trash2 className="h-[18px] w-[18px]" />
         </Button>
@@ -123,10 +129,11 @@ function RulesSkeleton() {
 
 export function RulesPage() {
   const queryClient = useQueryClient()
-  const { data: rules } = useRules()
+  const { data: rules, isError: rulesError, refetch: refetchRules } = useRules()
   const [editing, setEditing] = useState<Rule | null>(null)
   const [applyResult, setApplyResult] = useState<number | null>(null)
   const [formKey, setFormKey] = useState(0)
+  const [reorderError, setReorderError] = useState(false)
 
   const invalidate = () => queryClient.invalidateQueries()
 
@@ -166,7 +173,16 @@ export function RulesPage() {
       await apiUpdateRule({ id: a.id, matcher: a.matcher, categoryId: a.categoryId, priority: b.priority })
       await apiUpdateRule({ id: b.id, matcher: b.matcher, categoryId: b.categoryId, priority: a.priority })
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setReorderError(false)
+      invalidate()
+    },
+    // L'echange n'est pas atomique : si un des deux updates echoue, on
+    // resynchronise l'UI sur l'ordre reel du serveur et on signale l'echec.
+    onError: () => {
+      setReorderError(true)
+      queryClient.invalidateQueries({ queryKey: ['rules'] })
+    },
   })
 
   const applyMut = useMutation({
@@ -181,6 +197,7 @@ export function RulesPage() {
     if (!rules) return
     const j = i + direction
     if (j < 0 || j >= rules.length) return
+    setReorderError(false)
     swapMut.mutate({ a: rules[i], b: rules[j] })
   }
 
@@ -231,7 +248,17 @@ export function RulesPage() {
         </CardContent>
       </Card>
 
-      {!rules ? (
+      {rulesError ? (
+        <Card>
+          <EmptyState
+            icon={AlertTriangle}
+            title="Impossible de charger les règles"
+            description="Une erreur est survenue lors du chargement de vos règles. Vérifiez votre connexion, puis réessayez."
+            actionLabel="Réessayer"
+            onAction={() => refetchRules()}
+          />
+        </Card>
+      ) : !rules ? (
         <RulesSkeleton />
       ) : rules.length === 0 ? (
         <Card>
@@ -242,20 +269,28 @@ export function RulesPage() {
           />
         </Card>
       ) : (
-        <Card className="divide-y divide-line/60 overflow-hidden">
-          {rules.map((rule, i) => (
-            <RuleRow
-              key={rule.id}
-              rule={rule}
-              index={i}
-              count={rules.length}
-              reordering={swapMut.isPending}
-              onMove={move}
-              onEdit={setEditing}
-              onDelete={(r) => deleteMut.mutate(r.id)}
-            />
-          ))}
-        </Card>
+        <div className="space-y-2">
+          {reorderError && (
+            <p className="flex items-center gap-1.5 px-1 text-[13px] font-medium text-danger">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              La réorganisation a échoué. L'ordre affiché a été resynchronisé.
+            </p>
+          )}
+          <Card className="divide-y divide-line/60 overflow-hidden">
+            {rules.map((rule, i) => (
+              <RuleRow
+                key={rule.id}
+                rule={rule}
+                index={i}
+                count={rules.length}
+                reordering={swapMut.isPending}
+                onMove={move}
+                onEdit={setEditing}
+                onDelete={(r) => deleteMut.mutate(r.id)}
+              />
+            ))}
+          </Card>
+        </div>
       )}
 
       <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
