@@ -10,7 +10,11 @@
 //   - finalizeAuth: echange le code de retour contre une session EB, chiffre et
 //                   stocke la bank_connection (session_id, comptes, expiration).
 //   - sync        : poll des transactions, mapping -> payload chiffre, dedup via
-//                   tx_hash, categorisation par regles, journalisation.
+//                   tx_hash, categorisation par regles, liaison des reglements
+//                   de carte a debit differe, journalisation.
+//   - reconcile   : compare le solde Enable Banking de chaque compte lie au
+//                   solde local (somme des transactions dechiffrees) et absorbe
+//                   l'ecart dans la transaction "Solde d'ouverture".
 //
 // verify_jwt = false cote plateforme (voir config.toml) : on verifie a la main.
 //   - header 'x-cron-secret' == SYNC_CRON_SECRET (non vide) -> mode CRON (tous
@@ -42,7 +46,7 @@ import {
 interface AccountPayload {
   name: string
   institution: string
-  kind: 'checking' | 'savings' | 'investment'
+  kind: 'checking' | 'savings' | 'investment' | 'card_deferred'
   onBudget: boolean
   closed: boolean
   connectionId?: string | null
@@ -200,6 +204,31 @@ async function insertEncrypted(
     .single()
   if (error) throw new ApiError(500, `ecriture ${table} impossible`)
   return data.id
+}
+
+// Transaction dechiffree accompagnee de son tx_hash en clair : permet de
+// distinguer les saisies manuelles (tx_hash null) des imports bancaires.
+interface DecryptedTx {
+  id: string
+  txHash: string | null
+  payload: TxPayload
+}
+
+async function decryptTxRows(
+  userId: string,
+  rows: { id: string; enc_payload: string; tx_hash: string | null }[],
+): Promise<DecryptedTx[]> {
+  const keys = await getKeys()
+  return Promise.all(
+    rows.map(async (row) => ({
+      id: row.id,
+      txHash: row.tx_hash,
+      payload: await decryptJson<TxPayload>(keys, pgHexToBytes(row.enc_payload), [
+        'transactions',
+        userId,
+      ]),
+    })),
+  )
 }
 
 // Mise a jour du payload chiffre d'une ligne existante (calque de /api). Conserve
@@ -463,6 +492,43 @@ function mapEbTransaction(tx: EbTransaction): MappedTx | null {
 }
 
 // ---------------------------------------------------------------------------
+// Soldes Enable Banking (reconciliation)
+// ---------------------------------------------------------------------------
+
+// HYP EB : GET /accounts/{uid}/balances -> { balances: [...] }. Chaque balance
+// porte un type (name ou balance_type selon les ASPSP) et balance_amount
+// { currency, amount: chaine decimale en euros }.
+interface EbBalance {
+  name?: string
+  balance_type?: string
+  balance_amount?: { currency?: string; amount?: string }
+}
+
+function ebBalanceType(b: EbBalance): string {
+  return String(b.balance_type ?? b.name ?? '').toUpperCase()
+}
+
+// Prefere le solde comptable arrete (CLBD, closing booked), sinon le solde
+// previsionnel (XPCD, expected), sinon la premiere balance disponible.
+function pickBalance(balances: EbBalance[]): EbBalance | null {
+  return (
+    balances.find((b) => ebBalanceType(b) === 'CLBD') ??
+    balances.find((b) => ebBalanceType(b) === 'XPCD') ??
+    balances[0] ??
+    null
+  )
+}
+
+// Solde EB en centimes, ou null si inexploitable. Contrairement aux montants de
+// transactions, un solde peut etre negatif : parseFloat puis arrondi.
+function ebBalanceToCents(balance: EbBalance): number | null {
+  const raw = balance.balance_amount?.amount
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const cents = Math.round(parseFloat(raw) * 100)
+  return Number.isFinite(cents) ? cents : null
+}
+
+// ---------------------------------------------------------------------------
 // Dates : marqueur incremental de sync
 // ---------------------------------------------------------------------------
 
@@ -474,6 +540,12 @@ function shiftDays(dateStr: string, days: number): string {
 
 function maxDate(a: string, b: string): string {
   return a >= b ? a : b
+}
+
+// Ecart absolu en jours entre deux dates YYYY-MM-DD (interpretees en UTC).
+function dayDiff(a: string, b: string): number {
+  const ms = Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`))
+  return Math.round(ms / 86_400_000)
 }
 
 // Nombre de jours de recouvrement volontaire entre deux syncs : on re-demande un
@@ -528,13 +600,167 @@ function lastSuccessfulRunDate(
 }
 
 // ---------------------------------------------------------------------------
+// Cartes a debit differe : liaison automatique du prelevement mensuel
+// ---------------------------------------------------------------------------
+
+// Libelles typiques du prelevement de reglement d'une carte a debit differe
+// (ex. "CARTE DEPENSES", "DEPENSES CARTE", "CARTE X1234 AU 05/07"). Applique au
+// libelle passe par normalizeLabel (accents retires, espaces normalises).
+const CARD_SETTLEMENT_RE = /CARTE\s+DEPENSES|DEPENSES\s+CARTE|CARTE\s+X?\d{4}\s+AU\s+\d{2}\/\d{2}/i
+
+// Detecte les prelevements de reglement de carte a debit differe importes et
+// les transforme en transferts (sans categorie, hors activity/RTA) :
+//   1. debit sans categorie ni transfert dont le libelle matche ci-dessus ;
+//   2. credit exactement oppose sur un AUTRE compte, sans categorie ni
+//      transfert, a +/- 5 jours -> liaison si le match est UNIQUE et non
+//      ambigu dans les deux sens ;
+//   3. sinon, s'il existe EXACTEMENT UN compte 'card_deferred', creation de la
+//      transaction miroir crediteuse sur ce compte puis liaison.
+// Conservateur par construction : au moindre doute (plusieurs matches
+// possibles), on ne touche a rien. Renvoie le nombre de paires liees.
+
+// Mois suivant (YYYY-MM) : enumere la fenetre d'analyse ci-dessous.
+function nextMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number)
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`
+}
+
+async function linkDeferredCardSettlements(userId: string, sinceDays?: number): Promise<number> {
+  const keys = await getKeys()
+
+  // Fenetre d'analyse : par defaut les 2 derniers mois (~45 jours). Si la sync
+  // vient d'importer un historique plus profond (sinceDays), on couvre TOUS les
+  // mois de la fenetre importee : le meme historique doit produire la meme
+  // semantique (reglements carte -> transferts) quelle que soit sa date.
+  const now = new Date()
+  const currentMonth = now.toISOString().slice(0, 7)
+  const today = now.toISOString().slice(0, 10)
+  const startMonth =
+    sinceDays != null
+      ? shiftDays(today, -sinceDays).slice(0, 7)
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
+          .toISOString()
+          .slice(0, 7)
+  const months: string[] = []
+  // Borne de securite : sinceDays est plafonne a 730 jours en amont (~25 mois).
+  for (let m = startMonth; m <= currentMonth && months.length < 40; m = nextMonth(m)) {
+    months.push(m)
+  }
+  const monthIdxs = await Promise.all(months.map((m) => txMonthIdx(keys, userId, m)))
+  const { data, error } = await admin
+    .from('transactions')
+    .select('id, enc_payload, tx_hash')
+    .eq('user_id', userId)
+    .in('month_idx', monthIdxs)
+    .limit(50000)
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  const txs = await decryptTxRows(userId, data ?? [])
+
+  // Compte miroir de repli : uniquement s'il en existe EXACTEMENT UN.
+  const accounts = await loadAll<AccountPayload>('accounts', userId)
+  const cardAccounts = accounts.filter((a) => a.kind === 'card_deferred' && !a.closed)
+  const cardAccount = cardAccounts.length === 1 ? cardAccounts[0] : null
+
+  // Candidats : debits sans categorie ni transfert au libelle de reglement carte.
+  const candidates = txs.filter(
+    (t) =>
+      t.payload.amount < 0 &&
+      !t.payload.categoryId &&
+      !t.payload.transferGroupId &&
+      CARD_SETTLEMENT_RE.test(normalizeLabel(t.payload.label)),
+  )
+
+  // Credit lie a un candidat : montant exactement oppose, autre compte, sans
+  // categorie ni transfert, a +/- 5 jours.
+  const isCounterpart = (credit: DecryptedTx, debit: DecryptedTx): boolean =>
+    credit.id !== debit.id &&
+    credit.payload.accountId !== debit.payload.accountId &&
+    credit.payload.amount === -debit.payload.amount &&
+    !credit.payload.categoryId &&
+    !credit.payload.transferGroupId &&
+    dayDiff(credit.payload.bookingDate, debit.payload.bookingDate) <= 5
+
+  const used = new Set<string>()
+  let linkedPairs = 0
+
+  for (const candidate of candidates) {
+    if (used.has(candidate.id)) continue
+
+    const matches = txs.filter((t) => !used.has(t.id) && isCounterpart(t, candidate))
+
+    if (matches.length === 1) {
+      const credit = matches[0]
+      // Ambiguite inverse : si ce credit pourrait aussi solder un AUTRE
+      // candidat encore libre, on s'abstient (aucun faux positif tolere).
+      const rivals = candidates.filter(
+        (c) => c.id !== candidate.id && !used.has(c.id) && isCounterpart(credit, c),
+      )
+      if (rivals.length > 0) continue
+
+      const transferGroupId = crypto.randomUUID()
+      await updateEncrypted('transactions', userId, candidate.id, {
+        ...candidate.payload,
+        categoryId: null,
+        transferGroupId,
+      })
+      await updateEncrypted('transactions', userId, credit.id, {
+        ...credit.payload,
+        categoryId: null,
+        transferGroupId,
+      })
+      used.add(candidate.id)
+      used.add(credit.id)
+      linkedPairs += 1
+    } else if (
+      matches.length === 0 &&
+      cardAccount &&
+      // Un compte carte lui-meme synchronise via Enable Banking recevra le
+      // credit de reglement REEL a un import ulterieur (tx_hash propre, non
+      // dedupliquable contre un miroir tx_hash null) : creer le miroir
+      // produirait un doublon. Le repli est reserve aux comptes carte manuels.
+      !cardAccount.providerAccountUid &&
+      cardAccount.id !== candidate.payload.accountId
+    ) {
+      // Aucun credit correspondant : le releve de la carte n'est pas (encore)
+      // importe. On cree la transaction miroir sur l'unique compte carte
+      // (saisie systeme : tx_hash null, pas de dedup bancaire).
+      const transferGroupId = crypto.randomUUID()
+      const mirror: TxPayload = {
+        accountId: cardAccount.id,
+        categoryId: null,
+        bookingDate: candidate.payload.bookingDate,
+        bookingMonth: candidate.payload.bookingMonth,
+        amount: -candidate.payload.amount,
+        label: candidate.payload.label,
+        counterparty: null,
+        transferGroupId,
+        notes: null,
+      }
+      await insertEncrypted('transactions', userId, mirror, {
+        month_idx: await txMonthIdx(keys, userId, mirror.bookingMonth),
+      })
+      await updateEncrypted('transactions', userId, candidate.id, {
+        ...candidate.payload,
+        categoryId: null,
+        transferGroupId,
+      })
+      used.add(candidate.id)
+      linkedPairs += 1
+    }
+    // matches.length > 1 : ambigu, on ne fait rien (conservateur).
+  }
+
+  return linkedPairs
+}
+
+// ---------------------------------------------------------------------------
 // Synchronisation d'un utilisateur
 // ---------------------------------------------------------------------------
 
 async function syncUser(
   userId: string,
   sinceDays?: number,
-): Promise<{ imported: number; linked: number; errors: string[] }> {
+): Promise<{ imported: number; linked: number; transfersLinked: number; errors: string[] }> {
   const keys = await getKeys()
 
   // Connexions bancaires actives de l'utilisateur.
@@ -573,7 +799,9 @@ async function syncUser(
     }
     activeConnections.push(conn)
   }
-  if (activeConnections.length === 0) return { imported: 0, linked: 0, errors: [] }
+  if (activeConnections.length === 0) {
+    return { imported: 0, linked: 0, transfersLinked: 0, errors: [] }
+  }
 
   // Comptes (pour lier uid EB -> id compte interne) et regles de categorisation.
   const [accounts, rules] = await Promise.all([
@@ -712,7 +940,19 @@ async function syncUser(
     }
   }
 
-  return { imported: importedTotal, linked: linkedCount, errors }
+  // Liaison des prelevements de carte a debit differe : uniquement si du neuf a
+  // ete importe. Best-effort : un echec de liaison ne doit pas masquer un
+  // import reussi, on le remonte comme simple erreur.
+  let transfersLinked = 0
+  if (importedTotal > 0) {
+    try {
+      transfersLinked = await linkDeferredCardSettlements(userId, sinceDays)
+    } catch (err) {
+      errors.push(err instanceof ApiError ? err.message : 'liaison carte differee echouee')
+    }
+  }
+
+  return { imported: importedTotal, linked: linkedCount, transfersLinked, errors }
 }
 
 // ---------------------------------------------------------------------------
@@ -852,12 +1092,14 @@ async function actionListAspsps() {
 async function actionSync(targetUserIds: string[], isCron: boolean, sinceDays?: number) {
   let imported = 0
   let linked = 0
+  let transfersLinked = 0
   const errors: string[] = []
   for (const userId of targetUserIds) {
     try {
       const r = await syncUser(userId, sinceDays)
       imported += r.imported
       linked += r.linked
+      transfersLinked += r.transfersLinked
       errors.push(...r.errors)
     } catch (err) {
       // Erreur "dure" (chargement impossible) : journalisee, puis on continue en
@@ -875,7 +1117,141 @@ async function actionSync(targetUserIds: string[], isCron: boolean, sinceDays?: 
   }
   // `linked` = nombre de comptes bancaires effectivement associes a un compte
   // local : permet au front de dire "associe d'abord un compte" si 0.
-  return { imported, linked, errors }
+  // `transfersLinked` = paires de reglements de carte differee liees en transfert.
+  return { imported, linked, transfersLinked, errors }
+}
+
+// Libelle de la transaction de solde d'ouverture semee par /api
+// (actionCreateAccount) : contrat partage, ne pas modifier d'un seul cote.
+const OPENING_BALANCE_LABEL = "Solde d'ouverture"
+
+// reconcile : pour chaque compte lie a Enable Banking, compare le solde EB
+// (CLBD de preference) a la somme des transactions locales dechiffrees, et
+// absorbe l'ecart dans la transaction "Solde d'ouverture" (ajustee ou creee).
+// Reserve au mode utilisateur (JWT) : action explicite, jamais lancee par cron.
+async function actionReconcile(userId: string) {
+  const keys = await getKeys()
+
+  // Connexions bancaires actives (session non expiree). Pas de write-back du
+  // statut ici : c'est le role de la sync, reconcile reste en lecture cote EB.
+  const { data: connRows, error: connErr } = await admin
+    .from('bank_connections')
+    .select('id, enc_payload')
+    .eq('user_id', userId)
+    .limit(100)
+  if (connErr) throw new ApiError(500, 'lecture bank_connections impossible')
+  const connections = await decryptRows<BankConnectionPayload>(
+    'bank_connections',
+    userId,
+    connRows ?? [],
+  )
+  const now = Date.now()
+  const activeConnections = connections.filter(
+    (c) =>
+      c.sessionState === 'active' && (!c.validUntil || Date.parse(c.validUntil) >= now),
+  )
+  if (activeConnections.length === 0) return { adjusted: [] }
+
+  const [accounts, categories] = await Promise.all([
+    loadAll<AccountPayload>('accounts', userId),
+    loadAll<CategoryPayload>('categories', userId),
+  ])
+  const accountByUid = new Map<string, WithId<AccountPayload>>()
+  for (const acc of accounts) {
+    if (acc.providerAccountUid) accountByUid.set(acc.providerAccountUid, acc)
+  }
+
+  // Meme choix de categorie que /api actionCreateAccount : la categorie de
+  // revenus "Solde d'ouverture" de preference, sinon n'importe quel revenu.
+  const incomeCategory =
+    categories.find((c) => c.isIncome && c.name === OPENING_BALANCE_LABEL) ??
+    categories.find((c) => c.isIncome)
+
+  // TOUTES les transactions du user (tx_hash en clair pour reperer les saisies
+  // manuelles), dechiffrees une fois puis regroupees par compte local.
+  const { data: txRows, error: txErr } = await admin
+    .from('transactions')
+    .select('id, enc_payload, tx_hash')
+    .eq('user_id', userId)
+    .limit(200000)
+  if (txErr) throw new ApiError(500, 'lecture transactions impossible')
+  const allTxs = await decryptTxRows(userId, txRows ?? [])
+  const txsByAccount = new Map<string, DecryptedTx[]>()
+  for (const tx of allTxs) {
+    const list = txsByAccount.get(tx.payload.accountId)
+    if (list) list.push(tx)
+    else txsByAccount.set(tx.payload.accountId, [tx])
+  }
+
+  const adjusted: { accountId: string; accountName: string; delta: number }[] = []
+  const processed = new Set<string>()
+
+  for (const conn of activeConnections) {
+    for (const ebAccount of conn.accounts) {
+      const localAccount = accountByUid.get(ebAccount.uid)
+      // Compte EB non lie, ou deja traite via une autre connexion : ignore.
+      if (!localAccount || processed.has(localAccount.id)) continue
+      processed.add(localAccount.id)
+
+      // HYP EB : GET /accounts/{uid}/balances -> { balances: [...] }.
+      const res = (await ebFetch(
+        `/accounts/${encodeURIComponent(ebAccount.uid)}/balances`,
+      )) as { balances?: EbBalance[] }
+      const balance = pickBalance(res.balances ?? [])
+      const ebCents = balance ? ebBalanceToCents(balance) : null
+      // Solde inexploitable : on n'ajuste rien plutot que de deviner.
+      if (ebCents === null) continue
+
+      const accountTxs = txsByAccount.get(localAccount.id) ?? []
+      const localCents = accountTxs.reduce((sum, tx) => sum + tx.payload.amount, 0)
+      const delta = ebCents - localCents
+      if (delta === 0) continue
+
+      // Transaction de solde d'ouverture : saisie manuelle (tx_hash null) au
+      // libelle seme par /api. En cas de doublon, la plus ancienne gagne.
+      const opening = accountTxs
+        .filter((tx) => tx.txHash === null && tx.payload.label === OPENING_BALANCE_LABEL)
+        .sort((a, b) => (a.payload.bookingDate < b.payload.bookingDate ? -1 : 1))[0]
+
+      if (opening) {
+        // Ajustement : l'ecart est absorbe dans le montant d'ouverture. Pas
+        // d'extra : month_idx et tx_hash de la ligne restent intacts.
+        await updateEncrypted('transactions', userId, opening.id, {
+          ...opening.payload,
+          amount: opening.payload.amount + delta,
+        })
+      } else {
+        // Aucune ouverture : on en cree une datee de la veille de la plus
+        // ancienne transaction du compte (ou aujourd'hui si compte vide),
+        // meme forme de payload que /api actionCreateAccount.
+        const oldestDate = accountTxs.reduce<string | null>(
+          (min, tx) => (min === null || tx.payload.bookingDate < min ? tx.payload.bookingDate : min),
+          null,
+        )
+        const bookingDate = oldestDate
+          ? shiftDays(oldestDate, -1)
+          : new Date().toISOString().slice(0, 10)
+        const bookingMonth = bookingDate.slice(0, 7)
+        const payload: TxPayload = {
+          accountId: localAccount.id,
+          categoryId: localAccount.onBudget ? (incomeCategory?.id ?? null) : null,
+          bookingDate,
+          bookingMonth,
+          amount: delta,
+          label: OPENING_BALANCE_LABEL,
+          transferGroupId: null,
+        }
+        // tx_hash reste NULL : saisie systeme, pas de dedup bancaire.
+        await insertEncrypted('transactions', userId, payload, {
+          month_idx: await txMonthIdx(keys, userId, bookingMonth),
+        })
+      }
+
+      adjusted.push({ accountId: localAccount.id, accountName: localAccount.name, delta })
+    }
+  }
+
+  return { adjusted }
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,9 +1399,29 @@ Deno.serve(async (req) => {
           !isCron && typeof rawSince === 'number' && rawSince > 0
             ? Math.min(Math.floor(rawSince), 730)
             : undefined
-        result = await actionSync(targets, isCron, sinceDays)
+        const syncResult = await actionSync(targets, isCron, sinceDays)
+        // sinceDays peut importer des transactions ANTERIEURES a la date
+        // d'activation (donc au solde d'ouverture saisi manuellement) : la
+        // reconciliation est enchainee COTE SERVEUR pour garantir des soldes
+        // justes sans dependre d'un second appel du front. Best-effort : un
+        // echec de reconciliation ne masque pas un import reussi.
+        if (!isCron && userId && sinceDays != null) {
+          try {
+            const rec = await actionReconcile(userId)
+            result = { ...syncResult, adjusted: rec.adjusted }
+          } catch (err) {
+            const message = err instanceof ApiError ? err.message : 'reconciliation echouee'
+            result = { ...syncResult, errors: [...syncResult.errors, message] }
+          }
+        } else {
+          result = syncResult
+        }
         break
       }
+      case 'reconcile':
+        if (isCron || !userId) throw new ApiError(401, 'action reservee a un utilisateur')
+        result = await actionReconcile(userId)
+        break
       default:
         throw new ApiError(400, 'action inconnue')
     }
