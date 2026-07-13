@@ -22,8 +22,10 @@ import {
   decryptJson,
   deriveKeys,
   encryptJson,
+  normalizeLabel,
   pgHexToBytes,
   bytesToPgHex,
+  targetIdx,
   txMonthIdx,
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
@@ -77,6 +79,39 @@ interface AssignmentPayload {
   month: string
   amount: number
 }
+
+const RULE_OPS = ['contains', 'equals', 'startsWith'] as const
+type RuleOp = (typeof RULE_OPS)[number]
+
+interface RuleMatcher {
+  field: 'label'
+  op: RuleOp
+  value: string
+}
+
+interface RulePayload {
+  matcher: RuleMatcher
+  categoryId: string
+  priority: number
+}
+
+type TargetType = 'monthly' | 'byDate'
+
+interface TargetPayload {
+  categoryId: string
+  type: TargetType
+  amount: number
+  dueMonth: string | null
+}
+
+// Payload tolerant : sync-bank peut n'avoir pose que l'institution avant l'auth.
+interface BankConnectionPayload {
+  institution: string
+  validUntil?: string | null
+  sessionState?: string
+}
+
+type BankConnectionStatus = 'active' | 'expiring' | 'expired' | 'pending'
 
 type WithId<T> = T & { id: string }
 
@@ -177,6 +212,41 @@ function requireUuid(value: unknown, field: string): string {
     throw new ApiError(400, `champ ${field} invalide`)
   }
   return value
+}
+
+function requirePriority(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new ApiError(400, 'priority invalide')
+  }
+  return value
+}
+
+// Valide un matcher de regle : seul le champ 'label' est supporte pour l'instant.
+function requireMatcher(value: unknown): RuleMatcher {
+  if (typeof value !== 'object' || value === null) {
+    throw new ApiError(400, 'matcher invalide')
+  }
+  const m = value as Record<string, unknown>
+  if (m.field !== 'label') throw new ApiError(400, 'matcher.field invalide')
+  if (typeof m.op !== 'string' || !RULE_OPS.includes(m.op as RuleOp)) {
+    throw new ApiError(400, 'matcher.op invalide')
+  }
+  const opValue = requireText(m.value, 'matcher.value', 200)
+  return { field: 'label', op: m.op as RuleOp, value: opValue }
+}
+
+// Comparaison pure d'un libelle a un matcher : insensible casse/accents des deux cotes.
+function matchLabel(label: string, matcher: RuleMatcher): boolean {
+  const haystack = normalizeLabel(label)
+  const needle = normalizeLabel(matcher.value)
+  switch (matcher.op) {
+    case 'contains':
+      return haystack.includes(needle)
+    case 'equals':
+      return haystack === needle
+    case 'startsWith':
+      return haystack.startsWith(needle)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +721,188 @@ async function actionSeedDefaults(userId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Regles de categorisation automatique
+// ---------------------------------------------------------------------------
+
+// Garde partagee : la categorie doit exister et ne pas etre une categorie de revenus.
+async function requireNonIncomeCategory(userId: string, categoryId: string): Promise<void> {
+  const categories = await loadAll<CategoryPayload>('categories', userId)
+  const category = categories.find((c) => c.id === categoryId)
+  if (!category) throw new ApiError(404, 'categorie inconnue')
+  if (category.isIncome) throw new ApiError(400, 'categorie de revenus interdite')
+}
+
+async function actionListRules(userId: string) {
+  const rules = await loadAll<RulePayload>('rules', userId)
+  rules.sort((a, b) => a.priority - b.priority)
+  return { rules }
+}
+
+async function actionCreateRule(userId: string, params: Params) {
+  const matcher = requireMatcher(params.matcher)
+  const categoryId = requireUuid(params.categoryId, 'categoryId')
+  await requireNonIncomeCategory(userId, categoryId)
+
+  const rules = await loadAll<RulePayload>('rules', userId)
+  // Defaut : se place a la fin (priorite la plus basse) = max existant + 1.
+  const priority =
+    params.priority == null
+      ? rules.reduce((max, r) => Math.max(max, r.priority), -1) + 1
+      : requirePriority(params.priority)
+
+  const payload: RulePayload = { matcher, categoryId, priority }
+  const id = await insertEncrypted('rules', userId, payload)
+  return { id }
+}
+
+async function actionUpdateRule(userId: string, params: Params) {
+  const id = requireUuid(params.id, 'id')
+  const matcher = requireMatcher(params.matcher)
+  const categoryId = requireUuid(params.categoryId, 'categoryId')
+  const priority = requirePriority(params.priority)
+  await requireNonIncomeCategory(userId, categoryId)
+
+  // Charge la ligne pour verifier son existence avant de remplacer le payload.
+  const { data, error } = await admin
+    .from('rules')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('id', id)
+    .maybeSingle()
+  if (error) throw new ApiError(500, 'lecture rules impossible')
+  if (!data) throw new ApiError(404, 'regle inconnue')
+
+  const payload: RulePayload = { matcher, categoryId, priority }
+  await updateEncrypted('rules', userId, id, payload)
+  return { ok: true }
+}
+
+async function actionDeleteRule(userId: string, params: Params) {
+  const id = requireUuid(params.id, 'id')
+  const { error } = await admin.from('rules').delete().eq('user_id', userId).eq('id', id)
+  if (error) throw new ApiError(500, 'suppression rules impossible')
+  return { ok: true }
+}
+
+async function actionApplyRulesToUncategorized(userId: string) {
+  const [rules, transactions] = await Promise.all([
+    loadAll<RulePayload>('rules', userId),
+    loadAll<TxPayload>('transactions', userId),
+  ])
+  rules.sort((a, b) => a.priority - b.priority)
+
+  let categorized = 0
+  for (const tx of transactions) {
+    // On ne touche qu'aux transactions non categorisees et hors transfert.
+    if (tx.categoryId || tx.transferGroupId) continue
+    const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
+    if (!rule) continue
+    // On retire id du payload et on ne passe PAS d'extra : month_idx et
+    // tx_hash de la ligne restent intacts.
+    const { id, ...payload } = tx
+    await updateEncrypted('transactions', userId, id, { ...payload, categoryId: rule.categoryId })
+    categorized += 1
+  }
+  return { categorized }
+}
+
+// ---------------------------------------------------------------------------
+// Objectifs (targets)
+// ---------------------------------------------------------------------------
+
+async function actionListTargets(userId: string) {
+  const targets = await loadAll<TargetPayload>('targets', userId)
+  return { targets }
+}
+
+async function actionSetTarget(userId: string, params: Params) {
+  const categoryId = requireUuid(params.categoryId, 'categoryId')
+  const type = params.type
+  if (type !== 'monthly' && type !== 'byDate') {
+    throw new ApiError(400, 'type d objectif invalide')
+  }
+  const amount = requireAmount(params.amount)
+  if (amount <= 0) throw new ApiError(400, 'montant d objectif invalide')
+  const dueMonth = type === 'byDate' ? requireMonth(params.dueMonth) : null
+  await requireNonIncomeCategory(userId, categoryId)
+
+  const keys = await getKeys()
+  const payload: TargetPayload = { categoryId, type, amount, dueMonth }
+  // Upsert par target_idx : un seul objectif par categorie (modele actionSetAssigned).
+  const { error } = await admin.from('targets').upsert(
+    {
+      user_id: userId,
+      target_idx: await targetIdx(keys, userId, categoryId),
+      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['targets', userId])),
+    },
+    { onConflict: 'user_id,target_idx' },
+  )
+  if (error) throw new ApiError(500, 'ecriture targets impossible')
+  return { ok: true }
+}
+
+async function actionDeleteTarget(userId: string, params: Params) {
+  const categoryId = requireUuid(params.categoryId, 'categoryId')
+  const keys = await getKeys()
+  const idx = await targetIdx(keys, userId, categoryId)
+  const { error } = await admin.from('targets').delete().eq('user_id', userId).eq('target_idx', idx)
+  if (error) throw new ApiError(500, 'suppression targets impossible')
+  return { ok: true }
+}
+
+// ---------------------------------------------------------------------------
+// Connexions bancaires (lecture de statut)
+// ---------------------------------------------------------------------------
+
+const EXPIRY_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
+
+async function actionGetBankConnections(userId: string) {
+  const rows = await loadAll<BankConnectionPayload>('bank_connections', userId)
+  const now = Date.now()
+  const connections = rows.map((p) => {
+    const validUntil = p.validUntil ?? null
+    let status: BankConnectionStatus
+    if (!validUntil) {
+      status = 'pending'
+    } else {
+      const expiry = new Date(validUntil).getTime()
+      if (expiry < now) status = 'expired'
+      else if (expiry < now + EXPIRY_WINDOW_MS) status = 'expiring'
+      else status = 'active'
+    }
+    return { id: p.id, institution: p.institution, validUntil, status }
+  })
+  return { connections }
+}
+
+// ---------------------------------------------------------------------------
+// Export complet (donnees dechiffrees, avec id)
+// ---------------------------------------------------------------------------
+
+async function actionExportData(userId: string) {
+  const [accounts, groups, categories, transactions, assignments, targets, rules] =
+    await Promise.all([
+      loadAll<AccountPayload>('accounts', userId),
+      loadAll<GroupPayload>('category_groups', userId),
+      loadAll<CategoryPayload>('categories', userId),
+      loadAll<TxPayload>('transactions', userId),
+      loadAll<AssignmentPayload>('assignments', userId),
+      loadAll<TargetPayload>('targets', userId),
+      loadAll<RulePayload>('rules', userId),
+    ])
+  return {
+    exportedAt: new Date().toISOString(),
+    accounts,
+    groups,
+    categories,
+    transactions,
+    assignments,
+    targets,
+    rules,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Routeur
 // ---------------------------------------------------------------------------
 
@@ -665,6 +917,16 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   setAssigned: actionSetAssigned,
   createAccount: actionCreateAccount,
   seedDefaults: (u) => actionSeedDefaults(u),
+  listRules: (u) => actionListRules(u),
+  createRule: actionCreateRule,
+  updateRule: actionUpdateRule,
+  deleteRule: actionDeleteRule,
+  applyRulesToUncategorized: (u) => actionApplyRulesToUncategorized(u),
+  listTargets: (u) => actionListTargets(u),
+  setTarget: actionSetTarget,
+  deleteTarget: actionDeleteTarget,
+  getBankConnections: (u) => actionGetBankConnections(u),
+  exportData: (u) => actionExportData(u),
 }
 
 // Lecture du corps bornee sur les octets REELLEMENT recus : l'en-tete

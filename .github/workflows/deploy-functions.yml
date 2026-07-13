@@ -28,3 +28,12 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      # Deploie l'Edge Function sync-bank (verify_jwt = false via config.toml : la
+      # fonction verifie a la main le JWT utilisateur ou le secret x-cron-secret).
+      # Secrets d'execution (ENABLE_BANKING_*, SYNC_CRON_SECRET, ENCRYPTION_KEY...)
+      # se configurent dans le dashboard Supabase, pas ici.
+      - name: Deployer la fonction sync-bank
+        run: supabase functions deploy sync-bank --project-ref "$SUPABASE_PROJECT_ID"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}

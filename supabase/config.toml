@@ -11,3 +11,10 @@ major_version = 17
 # (identite utilisateur via auth.getUser()).
 [functions.api]
 verify_jwt = true
+
+# sync-bank accepte DEUX modes d'appel : un JWT utilisateur (flow de consentement
+# manuel) ou un secret partage x-cron-secret (declenchement pg_cron pour tous les
+# users). La verification plateforme du JWT est donc desactivee et l'identite /
+# le secret sont controles a la main dans la fonction (voir index.ts).
+[functions.sync-bank]
+verify_jwt = false
