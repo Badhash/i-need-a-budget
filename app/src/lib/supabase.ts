@@ -11,8 +11,21 @@ import { createClient } from '@supabase/supabase-js'
 const rawUrl = import.meta.env.VITE_SUPABASE_URL
 const rawAnon = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-export const SUPABASE_URL = (rawUrl ?? '').replace(/\/+$/, '')
-export const SUPABASE_ANON_KEY = rawAnon ?? ''
+// On ne garde que l'ORIGINE (schema + hote) : retire un slash final ET un chemin
+// colle par erreur (ex. ".../rest/v1"), qui feraient router les appels Auth /
+// Functions vers PostgREST -> PGRST125 "Invalid path specified in request URL".
+function toOrigin(raw: string | undefined): string {
+  const trimmed = (raw ?? '').trim()
+  if (!trimmed) return ''
+  try {
+    return new URL(trimmed).origin
+  } catch {
+    return trimmed.replace(/\/+$/, '')
+  }
+}
+
+export const SUPABASE_URL = toOrigin(rawUrl)
+export const SUPABASE_ANON_KEY = (rawAnon ?? '').trim()
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   // Ne pas jeter au chargement (sinon l'app entiere casse en dev/CI sans .env) :
