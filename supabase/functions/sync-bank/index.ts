@@ -709,10 +709,12 @@ type Params = Record<string, unknown>
 
 // startAuth : ouvre une session d'autorisation PSD2, renvoie l'URL de la banque.
 async function actionStartAuth(userId: string, params: Params) {
+  // On privilegie l'URL du secret ENABLE_BANKING_REDIRECT_URL : elle DOIT etre
+  // identique a la Redirect URL enregistree dans l'app Enable Banking, sinon EB
+  // renvoie REDIRECT_URI_NOT_ALLOWED. Le param du front n'est qu'un repli.
   const redirectUrl =
-    typeof params.redirectUrl === 'string' && params.redirectUrl.trim()
-      ? params.redirectUrl.trim()
-      : Deno.env.get('ENABLE_BANKING_REDIRECT_URL') ?? ''
+    (Deno.env.get('ENABLE_BANKING_REDIRECT_URL') ?? '').trim() ||
+    (typeof params.redirectUrl === 'string' ? params.redirectUrl.trim() : '')
   if (!redirectUrl) throw new ApiError(400, 'redirectUrl manquante')
 
   // Le nom d'ASPSP est configurable : param optionnel (aspspName) ou secret
