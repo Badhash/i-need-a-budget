@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Download, Landmark, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Download, Landmark, Loader2, RefreshCw, Scale } from 'lucide-react'
 import {
   useBankConnections,
   useAspsps,
@@ -104,6 +104,27 @@ export function BankSection() {
       await queryClient.invalidateQueries()
     } catch {
       setImportMessage("Import de l'historique indisponible pour le moment.")
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Reconciliation seule : recale le solde de chaque compte associe sur le
+  // solde bancaire reel (l'ecart est absorbe dans le solde d'ouverture).
+  async function handleReconcile() {
+    setImportMessage(null)
+    setImporting(true)
+    try {
+      const { adjusted } = await bankReconcile()
+      if (adjusted.length === 0) {
+        setImportMessage('Les soldes sont déjà exacts.')
+      } else {
+        const parts = adjusted.map((a) => `${a.accountName} : ${fmtEUR(a.delta)}`)
+        setImportMessage(`Solde recalé — ${parts.join(', ')}.`)
+      }
+      await queryClient.invalidateQueries()
+    } catch {
+      setImportMessage('Recalcul des soldes indisponible pour le moment.')
     } finally {
       setImporting(false)
     }
@@ -284,11 +305,16 @@ export function BankSection() {
                   )}
                   Importer
                 </Button>
+                <Button variant="outline" onClick={() => void handleReconcile()} disabled={importing}>
+                  {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scale className="h-4 w-4" />}
+                  Recalculer les soldes
+                </Button>
                 {importMessage && <p className="text-[13px] text-soft">{importMessage}</p>}
               </div>
               <p className="text-[12px] text-soft">
                 L'import ajuste automatiquement le solde d'ouverture de chaque compte associé
-                pour correspondre au solde bancaire réel.
+                pour correspondre au solde bancaire réel. « Recalculer les soldes » fait ce
+                recalage seul, sans réimporter de transactions.
               </p>
             </div>
           </div>

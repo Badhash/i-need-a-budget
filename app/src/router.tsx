@@ -84,10 +84,13 @@ const budgetRoute = createRoute({
   component: BudgetPage,
 })
 
-const transactionsRoute = createRoute({
+export const transactionsRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: '/transactions',
   component: TransactionsPage,
+  // ?compte=<id> : pre-filtre la liste sur un compte (navigation depuis Comptes).
+  validateSearch: (search: Record<string, unknown>): { compte?: string } =>
+    typeof search.compte === 'string' && search.compte ? { compte: search.compte } : {},
 })
 
 const accountsRoute = createRoute({

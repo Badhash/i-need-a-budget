@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSearch } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   createColumnHelper,
@@ -100,6 +101,25 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
     onSuccess: () => queryClient.invalidateQueries(),
     onError: (err) => showError(err),
   })
+  // Suppression optimiste : la ligne disparait immediatement, rollback si echec.
+  const remove = useMutation({
+    mutationFn: () => apiCall('deleteTransaction', { transactionId: row.tx.id }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ['transactions'] })
+      const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
+      queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
+        old?.filter((t) => t.id !== row.tx.id),
+      )
+      return { snapshot }
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
+      showError(err)
+    },
+    onSettled: () => queryClient.invalidateQueries(),
+  })
+  // Confirmation en deux temps dans le menu : premier clic arme, second supprime.
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   function showError(err: unknown) {
     setError(err instanceof Error ? err.message : 'Une erreur est survenue.')
@@ -108,7 +128,7 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
 
   return (
     <div className={cn('relative', className)}>
-      <DropdownMenu>
+      <DropdownMenu onOpenChange={(open) => !open && setConfirmDelete(false)}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -135,6 +155,21 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
           ) : (
             <DropdownMenuLabel>Aucun autre compte</DropdownMenuLabel>
           )}
+          <DropdownMenuItem
+            className="text-danger"
+            onSelect={(e) => {
+              if (!confirmDelete) {
+                // Garde le menu ouvert pour le second clic de confirmation.
+                e.preventDefault()
+                setConfirmDelete(true)
+              } else {
+                setConfirmDelete(false)
+                remove.mutate()
+              }
+            }}
+          >
+            {confirmDelete ? 'Confirmer la suppression' : 'Supprimer la transaction'}
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       {error && (
@@ -431,9 +466,14 @@ export function TransactionsPage() {
   const categoryById = useCategoriesMap()
   const groupById = useGroupsMap()
 
+  // ?compte=<id> pose par la page Comptes : pre-filtre la liste sur ce compte.
+  const { compte } = useSearch({ from: '/_app/transactions' })
   const [search, setSearch] = useState('')
-  const [accountFilter, setAccountFilter] = useState('all')
+  const [accountFilter, setAccountFilter] = useState(compte ?? 'all')
   const [onlyUncat, setOnlyUncat] = useState(false)
+  useEffect(() => {
+    if (compte) setAccountFilter(compte)
+  }, [compte])
 
   const rows = useMemo(() => {
     if (!txs || !boot.data) return []

@@ -734,6 +734,67 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   return { ok: true }
 }
 
+async function actionDeleteTransaction(userId: string, params: Params) {
+  const transactionId = requireUuid(params.transactionId, 'transactionId')
+
+  const { data, error } = await admin
+    .from('transactions')
+    .select('id, enc_payload, tx_hash')
+    .eq('user_id', userId)
+    .eq('id', transactionId)
+    .maybeSingle()
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  if (!data) throw new ApiError(404, 'transaction inconnue')
+
+  const keys = await getKeys()
+  const payload = await decryptJson<TxPayload>(keys, pgHexToBytes(data.enc_payload), [
+    'transactions',
+    userId,
+  ])
+
+  // Transfert : le miroir est traite comme dans convertTransferToNormal —
+  // supprime s'il est synthetique (tx_hash NULL), simplement delie s'il s'agit
+  // d'un vrai import bancaire (jamais de perte de donnees bancaires implicite).
+  if (payload.transferGroupId) {
+    const { data: rows, error: listErr } = await admin
+      .from('transactions')
+      .select('id, enc_payload, tx_hash')
+      .eq('user_id', userId)
+      .limit(20000)
+    if (listErr) throw new ApiError(500, 'lecture transactions impossible')
+    for (const row of rows ?? []) {
+      if (row.id === transactionId) continue
+      const other = await decryptJson<TxPayload>(keys, pgHexToBytes(row.enc_payload), [
+        'transactions',
+        userId,
+      ])
+      if (other.transferGroupId !== payload.transferGroupId) continue
+      if ((row.tx_hash as string | null) === null) {
+        const { error: delErr } = await admin
+          .from('transactions')
+          .delete()
+          .eq('user_id', userId)
+          .eq('id', row.id)
+        if (delErr) throw new ApiError(500, 'suppression transactions impossible')
+      } else {
+        await updateEncrypted('transactions', userId, row.id as string, {
+          ...other,
+          transferGroupId: null,
+        })
+      }
+      break
+    }
+  }
+
+  const { error: delErr } = await admin
+    .from('transactions')
+    .delete()
+    .eq('user_id', userId)
+    .eq('id', transactionId)
+  if (delErr) throw new ApiError(500, 'suppression transactions impossible')
+  return { ok: true }
+}
+
 async function actionSetAssigned(userId: string, params: Params) {
   const categoryId = requireUuid(params.categoryId, 'categoryId')
   const month = requireMonth(params.month)
@@ -1416,6 +1477,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   reorderCategoryGroups: actionReorderCategoryGroups,
   convertToTransfer: actionConvertToTransfer,
   convertTransferToNormal: actionConvertTransferToNormal,
+  deleteTransaction: actionDeleteTransaction,
   listRules: (u) => actionListRules(u),
   createRule: actionCreateRule,
   updateRule: actionUpdateRule,

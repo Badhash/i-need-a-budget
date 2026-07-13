@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CreditCard, Landmark, PiggyBank, Plus, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { ChevronRight, CreditCard, Landmark, PiggyBank, Plus, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
 import type { AccountKind } from '@/mocks/data'
 import { apiCreateAccount, useAccounts, type AccountWithBalance } from '@/lib/data'
 import { TODAY } from '@/lib/format'
@@ -30,23 +31,26 @@ function AccountCard({ account }: { account: AccountWithBalance }) {
   const meta = KIND_META[account.kind]
   const Icon = meta.icon
   return (
-    <Card className="flex items-center gap-4 p-5 transition-transform hover:-translate-y-0.5 hover:shadow-card">
-      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
-        <Icon className="h-5 w-5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="truncate font-semibold">{account.name}</p>
-          {!account.onBudget && <Badge variant="neutral">Hors budget</Badge>}
+    <Link to="/transactions" search={{ compte: account.id }} className="block" aria-label={`Voir les transactions de ${account.name}`}>
+      <Card className="flex items-center gap-4 p-5 transition-transform hover:-translate-y-0.5 hover:shadow-card">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+          <Icon className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="truncate font-semibold">{account.name}</p>
+            {!account.onBudget && <Badge variant="neutral">Hors budget</Badge>}
+          </div>
+          <p className="text-[12.5px] text-soft">
+            {account.institution} · {meta.label}
+          </p>
         </div>
-        <p className="text-[12.5px] text-soft">
-          {account.institution} · {meta.label}
-        </p>
-      </div>
-      <div className="text-right">
-        <Amount cents={account.balance} className="block text-[18px] font-semibold" colored={account.balance < 0} />
-      </div>
-    </Card>
+        <div className="text-right">
+          <Amount cents={account.balance} className="block text-[18px] font-semibold" colored={account.balance < 0} />
+        </div>
+        <ChevronRight className="h-4 w-4 shrink-0 text-soft" />
+      </Card>
+    </Link>
   )
 }
 
