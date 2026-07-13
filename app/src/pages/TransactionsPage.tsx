@@ -8,7 +8,7 @@ import {
   useReactTable,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDownUp, ArrowLeftRight, Inbox, MoreHorizontal, Plus, Search } from 'lucide-react'
+import { ArrowDownUp, ArrowLeftRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/mocks/data'
 import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesMap, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
@@ -200,6 +200,36 @@ function CategoryBadge({ row }: { row: TxRow }) {
   )
 }
 
+// Pastille de compte : distingue d'un coup d'oeil les transactions de la carte
+// a debit differe (violet) de celles des autres comptes (neutre).
+const ACCOUNT_CHIP_META: Record<Account['kind'], { icon: typeof Wallet; card: boolean }> = {
+  checking: { icon: Wallet, card: false },
+  savings: { icon: PiggyBank, card: false },
+  investment: { icon: TrendingUp, card: false },
+  card_deferred: { icon: CreditCard, card: true },
+}
+
+function AccountChip({ account }: { account: Account }) {
+  const meta = ACCOUNT_CHIP_META[account.kind] ?? ACCOUNT_CHIP_META.checking
+  const Icon = meta.icon
+  return (
+    <span
+      className={cn(
+        'inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
+        !meta.card && 'bg-surface2 text-soft',
+      )}
+      style={
+        meta.card
+          ? { backgroundColor: 'var(--cat-purple-bg)', color: 'var(--cat-purple-fg)' }
+          : undefined
+      }
+    >
+      <Icon className="h-3 w-3 shrink-0" />
+      <span className="truncate">{account.name}</span>
+    </span>
+  )
+}
+
 const columnHelper = createColumnHelper<TxRow>()
 
 const columns = [
@@ -222,7 +252,7 @@ const columns = [
           <div className="mt-0.5 flex items-center gap-1.5">
             {/* Les transferts gardent leur badge dedie : pas de double chip */}
             {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
-            <p className="truncate text-[12px] text-soft">{row.account.name}</p>
+            <AccountChip account={row.account} />
           </div>
         </div>
       )
@@ -353,6 +383,7 @@ function MobileList({ rows }: { rows: TxRow[] }) {
                     <CategoryBadge row={row} />
                     {/* Les transferts gardent leur badge dedie : pas de double chip */}
                     {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
+                    <AccountChip account={row.account} />
                   </div>
                 </div>
                 <Amount

@@ -1,6 +1,9 @@
+import { useMemo } from 'react'
 import { Area, AreaChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts'
 import { BarChart3 } from 'lucide-react'
-import { useReports } from '@/lib/queries'
+import { useReports, useTransactions } from '@/lib/queries'
+import { useAccountsMap } from '@/lib/data'
+import { parseBankLabel } from '@/lib/bankLabel'
 import { useUiStore } from '@/stores/ui'
 import { useChartPalette } from '@/hooks/useTheme'
 import { fmtEUR, fmtMonthLong, fmtMonthShort, fmtPercent, CURRENT_MONTH } from '@/lib/format'
@@ -84,24 +87,53 @@ function SpendingDonut({ data }: { data: ReportsData }) {
 }
 
 function TopMerchants({ data }: { data: ReportsData }) {
-  const max = data.topMerchants[0]?.total ?? 1
+  // Calcule cote client a partir des libelles COURTS (parseBankLabel) : le
+  // serveur groupe par libelle brut, ce qui eclate un meme marchand (PayPal…)
+  // en dizaines d'entrees aux libelles interminables qui cassaient l'affichage
+  // mobile. Ici : depenses du mois, hors transferts, groupees par marchand.
+  const { data: txs } = useTransactions()
+  const accountById = useAccountsMap()
+
+  const merchants = useMemo(() => {
+    const byMerchant = new Map<string, { total: number; count: number }>()
+    for (const t of txs ?? []) {
+      if (t.amount >= 0 || t.transferGroupId) continue
+      if (t.date.slice(0, 7) !== data.month) continue
+      const account = accountById.get(t.accountId)
+      if (account && !account.onBudget) continue
+      const key = parseBankLabel(t.label).short
+      const entry = byMerchant.get(key) ?? { total: 0, count: 0 }
+      entry.total -= t.amount
+      entry.count += 1
+      byMerchant.set(key, entry)
+    }
+    return [...byMerchant.entries()]
+      .map(([label, v]) => ({ label, ...v }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5)
+  }, [txs, accountById, data.month])
+
+  const list = merchants.length > 0 ? merchants : data.topMerchants
+  const max = list[0]?.total ?? 1
   return (
     <WidgetCard question="Chez qui je dépense le plus ?">
-      <div className="flex items-baseline justify-between">
-        <p className="text-[26px] font-semibold tnum">{data.topMerchants.length}</p>
-        <p className="text-[12.5px] text-soft">marchands principaux · {fmtMonthLong(data.month)}</p>
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-[26px] font-semibold tnum">{list.length}</p>
+        <p className="min-w-0 truncate text-right text-[12.5px] text-soft">
+          marchands principaux · {fmtMonthLong(data.month)}
+        </p>
       </div>
       <ul className="space-y-2.5">
-        {data.topMerchants.map((m) => (
+        {list.map((m) => (
           <li key={m.label} className="relative overflow-hidden rounded-lg">
             <div
               className="absolute inset-y-0 left-0 rounded-lg bg-accent/10"
               style={{ width: `${(m.total / max) * 100}%` }}
             />
             <div className="relative flex items-center justify-between gap-3 px-3 py-2 text-[13.5px]">
-              <span className="min-w-0 truncate font-medium">{m.label}</span>
-              <span className="flex items-center gap-2">
-                <span className="text-[11.5px] text-soft">
+              <span className="min-w-0 flex-1 truncate font-medium">{m.label}</span>
+              <span className="flex shrink-0 items-center gap-2">
+                <span className="whitespace-nowrap text-[11.5px] text-soft">
                   {m.count} {m.count > 1 ? 'achats' : 'achat'}
                 </span>
                 <Amount cents={m.total} className="font-semibold" />
