@@ -34,7 +34,8 @@ import {
 // Types des payloads chiffres (contrat du CLAUDE.md, section modele de donnees)
 // ---------------------------------------------------------------------------
 
-type AccountKind = 'checking' | 'savings' | 'investment'
+const ACCOUNT_KINDS = ['checking', 'savings', 'investment', 'card_deferred'] as const
+type AccountKind = (typeof ACCOUNT_KINDS)[number]
 
 interface AccountPayload {
   name: string
@@ -221,6 +222,25 @@ function requirePriority(value: unknown): number {
     throw new ApiError(400, 'priority invalide')
   }
   return value
+}
+
+function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new ApiError(400, `champ ${field} invalide`)
+  }
+  return value
+}
+
+// Liste d'uuids non vide et sans doublon (reordonnancements).
+function requireUuidArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ApiError(400, `champ ${field} invalide`)
+  }
+  const ids = value.map((v) => requireUuid(v, field))
+  if (new Set(ids).size !== ids.length) {
+    throw new ApiError(400, `champ ${field} contient des doublons`)
+  }
+  return ids
 }
 
 // Valide un matcher de regle : seul le champ 'label' est supporte pour l'instant.
@@ -582,6 +602,138 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
   return { ok: true }
 }
 
+// ---------------------------------------------------------------------------
+// Transferts entre comptes (conversion d'une transaction existante)
+// ---------------------------------------------------------------------------
+
+async function actionConvertToTransfer(userId: string, params: Params) {
+  const transactionId = requireUuid(params.transactionId, 'transactionId')
+  const targetAccountId = requireUuid(params.targetAccountId, 'targetAccountId')
+
+  const { data, error } = await admin
+    .from('transactions')
+    .select('id, enc_payload')
+    .eq('user_id', userId)
+    .eq('id', transactionId)
+    .maybeSingle()
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  if (!data) throw new ApiError(404, 'transaction inconnue')
+
+  const keys = await getKeys()
+  const payload = await decryptJson<TxPayload>(keys, pgHexToBytes(data.enc_payload), [
+    'transactions',
+    userId,
+  ])
+  if (payload.transferGroupId) throw new ApiError(400, 'transaction deja liee a un transfert')
+  if (payload.accountId === targetAccountId) {
+    throw new ApiError(400, 'le compte cible doit etre different du compte d origine')
+  }
+  const accounts = await loadAll<AccountPayload>('accounts', userId)
+  const targetAccount = accounts.find((a) => a.id === targetAccountId)
+  if (!targetAccount) throw new ApiError(400, 'compte cible inconnu')
+  // Un compte clos ne recoit plus d'activite : meme regle que sync-bank.
+  if (targetAccount.closed) throw new ApiError(400, 'compte cible cloture')
+
+  const transferGroupId = crypto.randomUUID()
+  // Transaction miroir sur le compte cible : montant oppose, sans categorie.
+  // tx_hash reste NULL (ecriture non bancaire), month_idx comme actionAddTransaction.
+  const mirror: TxPayload = {
+    accountId: targetAccountId,
+    categoryId: null,
+    bookingDate: payload.bookingDate,
+    bookingMonth: payload.bookingMonth,
+    amount: -payload.amount,
+    label: payload.label,
+    counterparty: null,
+    transferGroupId,
+    notes: null,
+  }
+  // Ordre anti-orphelin : la transaction d'origine est mise a jour AVANT
+  // l'insertion du miroir. Si l'insert echoue, rollback compensatoire de
+  // l'origine ; un miroir orphelin fausserait silencieusement le solde du
+  // compte cible, alors qu'un demi-transfert sur l'origine reste visible et
+  // annulable via convertTransferToNormal.
+  await updateEncrypted('transactions', userId, transactionId, {
+    ...payload,
+    categoryId: null,
+    transferGroupId,
+  })
+  try {
+    await insertEncrypted('transactions', userId, mirror, {
+      month_idx: await txMonthIdx(keys, userId, payload.bookingMonth),
+    })
+  } catch (err) {
+    try {
+      await updateEncrypted('transactions', userId, transactionId, payload)
+    } catch {
+      // Rollback impossible : l'origine reste liee a un groupe sans miroir,
+      // etat reparable par convertTransferToNormal ou une nouvelle conversion.
+    }
+    throw err
+  }
+  return { ok: true, transferGroupId }
+}
+
+async function actionConvertTransferToNormal(userId: string, params: Params) {
+  const transactionId = requireUuid(params.transactionId, 'transactionId')
+
+  // tx_hash est charge en clair pour distinguer un miroir systeme (tx_hash
+  // NULL, ecriture synthetique) d'un vrai import bancaire (tx_hash non NULL,
+  // cas des paires liees par sync-bank) : un import reel ne doit JAMAIS etre
+  // supprime, sous peine de fausser durablement le solde du compte.
+  const { data, error } = await admin
+    .from('transactions')
+    .select('id, enc_payload, tx_hash')
+    .eq('user_id', userId)
+    .limit(20000)
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  const keys = await getKeys()
+  const rows = await Promise.all(
+    (data ?? []).map(async (row) => ({
+      id: row.id as string,
+      txHash: (row.tx_hash as string | null) ?? null,
+      payload: await decryptJson<TxPayload>(keys, pgHexToBytes(row.enc_payload), [
+        'transactions',
+        userId,
+      ]),
+    })),
+  )
+  const kept = rows.find((t) => t.id === transactionId)
+  if (!kept) throw new ApiError(404, 'transaction inconnue')
+  if (!kept.payload.transferGroupId) {
+    throw new ApiError(400, 'la transaction n est pas un transfert')
+  }
+
+  const mirror = rows.find(
+    (t) => t.payload.transferGroupId === kept.payload.transferGroupId && t.id !== transactionId,
+  )
+  if (mirror) {
+    if (mirror.txHash === null) {
+      // Miroir systeme : suppression sans perte de donnees bancaires.
+      const { error: delErr } = await admin
+        .from('transactions')
+        .delete()
+        .eq('user_id', userId)
+        .eq('id', mirror.id)
+      if (delErr) throw new ApiError(500, 'suppression transactions impossible')
+    } else {
+      // Import bancaire reel : on delie au lieu de supprimer, la transaction
+      // redevient une ecriture normale a recategoriser.
+      await updateEncrypted('transactions', userId, mirror.id, {
+        ...mirror.payload,
+        transferGroupId: null,
+      })
+    }
+  }
+  // La transaction conservee redevient normale ; categoryId reste null,
+  // l'utilisateur la recategorise ensuite.
+  await updateEncrypted('transactions', userId, transactionId, {
+    ...kept.payload,
+    transferGroupId: null,
+  })
+  return { ok: true }
+}
+
 async function actionSetAssigned(userId: string, params: Params) {
   const categoryId = requireUuid(params.categoryId, 'categoryId')
   const month = requireMonth(params.month)
@@ -612,7 +764,7 @@ async function actionCreateAccount(userId: string, params: Params) {
   const name = requireText(params.name, 'name', 80)
   const institution = requireText(params.institution, 'institution', 80)
   const kind = params.kind as AccountKind
-  if (!['checking', 'savings', 'investment'].includes(kind)) {
+  if (!ACCOUNT_KINDS.includes(kind)) {
     throw new ApiError(400, 'type de compte invalide')
   }
   const onBudget = params.onBudget !== false
@@ -727,6 +879,275 @@ async function actionSeedDefaults(userId: string) {
       } satisfies CategoryPayload)
     }
   }
+  return { ok: true }
+}
+
+// ---------------------------------------------------------------------------
+// Categories et groupes (CRUD, reordonnancement)
+// ---------------------------------------------------------------------------
+
+// Valeurs legales des groupes : memes couleurs/icones que le seed par defaut
+// (DEFAULT_STRUCTURE + groupe Revenus).
+const GROUP_COLORS = ['blue', 'amber', 'pink', 'purple', 'green', 'teal'] as const
+const GROUP_ICONS = ['home', 'car', 'sparkles', 'repeat', 'piggy', 'banknote'] as const
+
+function requireGroupColor(value: unknown): string {
+  if (typeof value !== 'string' || !(GROUP_COLORS as readonly string[]).includes(value)) {
+    throw new ApiError(400, 'champ color invalide')
+  }
+  return value
+}
+
+function requireGroupIcon(value: unknown): string {
+  if (typeof value !== 'string' || !(GROUP_ICONS as readonly string[]).includes(value)) {
+    throw new ApiError(400, 'champ icon invalide')
+  }
+  return value
+}
+
+// Position de fin de liste : max des sortOrder existants + 1.
+function nextSortOrder(rows: { sortOrder: number }[]): number {
+  return rows.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 1
+}
+
+async function actionCreateCategory(userId: string, params: Params) {
+  const groupId = requireUuid(params.groupId, 'groupId')
+  const name = requireText(params.name, 'name', 80)
+
+  const [groups, categories] = await Promise.all([
+    loadAll<GroupPayload>('category_groups', userId),
+    loadAll<CategoryPayload>('categories', userId),
+  ])
+  if (!groups.some((g) => g.id === groupId)) throw new ApiError(404, 'groupe inconnu')
+
+  const payload: CategoryPayload = {
+    groupId,
+    name,
+    isIncome: false,
+    sortOrder: nextSortOrder(categories.filter((c) => c.groupId === groupId)),
+    hidden: false,
+  }
+  const id = await insertEncrypted('categories', userId, payload)
+  return { id }
+}
+
+async function actionUpdateCategory(userId: string, params: Params) {
+  const categoryId = requireUuid(params.categoryId, 'categoryId')
+  const name = params.name == null ? null : requireText(params.name, 'name', 80)
+  const groupId = params.groupId == null ? null : requireUuid(params.groupId, 'groupId')
+  const hidden = params.hidden == null ? null : requireBoolean(params.hidden, 'hidden')
+
+  const categories = await loadAll<CategoryPayload>('categories', userId)
+  const category = categories.find((c) => c.id === categoryId)
+  if (!category) throw new ApiError(404, 'categorie inconnue')
+
+  // Une categorie de revenus peut etre renommee, mais jamais cachee ni deplacee.
+  if (category.isIncome && hidden === true) {
+    throw new ApiError(400, 'une categorie de revenus ne peut pas etre cachee')
+  }
+  if (category.isIncome && groupId !== null && groupId !== category.groupId) {
+    throw new ApiError(400, 'une categorie de revenus ne peut pas changer de groupe')
+  }
+
+  const { id, ...payload } = category
+  const next: CategoryPayload = { ...payload }
+  if (name !== null) next.name = name
+  if (hidden !== null) next.hidden = hidden
+  if (groupId !== null && groupId !== category.groupId) {
+    const groups = await loadAll<GroupPayload>('category_groups', userId)
+    if (!groups.some((g) => g.id === groupId)) throw new ApiError(404, 'groupe inconnu')
+    // Un deplacement place la categorie a la fin du groupe cible.
+    next.groupId = groupId
+    next.sortOrder = nextSortOrder(categories.filter((c) => c.groupId === groupId))
+  }
+  await updateEncrypted('categories', userId, id, next)
+  return { ok: true }
+}
+
+async function actionDeleteCategory(userId: string, params: Params) {
+  const categoryId = requireUuid(params.categoryId, 'categoryId')
+
+  const categories = await loadAll<CategoryPayload>('categories', userId)
+  const category = categories.find((c) => c.id === categoryId)
+  if (!category) throw new ApiError(404, 'categorie inconnue')
+  if (category.isIncome) throw new ApiError(400, 'les categories de revenus ne se suppriment pas')
+
+  const [transactions, assignments, targets, rules] = await Promise.all([
+    loadAll<TxPayload>('transactions', userId),
+    loadAll<AssignmentPayload>('assignments', userId),
+    loadAll<TargetPayload>('targets', userId),
+    loadAll<RulePayload>('rules', userId),
+  ])
+
+  // Decategorise chaque transaction referencant la categorie ; pas d'extra :
+  // month_idx et tx_hash des lignes restent intacts.
+  let uncategorized = 0
+  for (const tx of transactions) {
+    if (tx.categoryId !== categoryId) continue
+    const { id, ...payload } = tx
+    await updateEncrypted('transactions', userId, id, { ...payload, categoryId: null })
+    uncategorized += 1
+  }
+
+  // Purge les assignations et objectifs orphelins (reference dans le payload,
+  // suppression par id apres dechiffrement).
+  const assignmentIds = assignments.filter((a) => a.categoryId === categoryId).map((a) => a.id)
+  if (assignmentIds.length > 0) {
+    const { error } = await admin
+      .from('assignments')
+      .delete()
+      .eq('user_id', userId)
+      .in('id', assignmentIds)
+    if (error) throw new ApiError(500, 'suppression assignments impossible')
+  }
+  const targetIds = targets.filter((t) => t.categoryId === categoryId).map((t) => t.id)
+  if (targetIds.length > 0) {
+    const { error } = await admin
+      .from('targets')
+      .delete()
+      .eq('user_id', userId)
+      .in('id', targetIds)
+    if (error) throw new ApiError(500, 'suppression targets impossible')
+  }
+
+  // Purge les regles pointant vers la categorie supprimee : sans cela,
+  // sync-bank et applyRulesToUncategorized continueraient d'appliquer un
+  // categoryId inexistant aux nouveaux imports (integrite referentielle
+  // assuree ici, pas de FK SQL).
+  const ruleIds = rules.filter((r) => r.categoryId === categoryId).map((r) => r.id)
+  if (ruleIds.length > 0) {
+    const { error } = await admin
+      .from('rules')
+      .delete()
+      .eq('user_id', userId)
+      .in('id', ruleIds)
+    if (error) throw new ApiError(500, 'suppression rules impossible')
+  }
+
+  const { error } = await admin
+    .from('categories')
+    .delete()
+    .eq('user_id', userId)
+    .eq('id', categoryId)
+  if (error) throw new ApiError(500, 'suppression categories impossible')
+  return { ok: true, uncategorized }
+}
+
+async function actionCreateCategoryGroup(userId: string, params: Params) {
+  const name = requireText(params.name, 'name', 80)
+  // Defauts raisonnables si absents : couleur et icone neutres de la palette.
+  const color = params.color == null ? 'blue' : requireGroupColor(params.color)
+  const icon = params.icon == null ? 'sparkles' : requireGroupIcon(params.icon)
+
+  const groups = await loadAll<GroupPayload>('category_groups', userId)
+  const payload: GroupPayload = {
+    name,
+    color,
+    icon,
+    sortOrder: nextSortOrder(groups),
+    hidden: false,
+  }
+  const id = await insertEncrypted('category_groups', userId, payload)
+  return { id }
+}
+
+async function actionUpdateCategoryGroup(userId: string, params: Params) {
+  const groupId = requireUuid(params.groupId, 'groupId')
+  const name = params.name == null ? null : requireText(params.name, 'name', 80)
+  const color = params.color == null ? null : requireGroupColor(params.color)
+  const icon = params.icon == null ? null : requireGroupIcon(params.icon)
+  const hidden = params.hidden == null ? null : requireBoolean(params.hidden, 'hidden')
+
+  const groups = await loadAll<GroupPayload>('category_groups', userId)
+  const group = groups.find((g) => g.id === groupId)
+  if (!group) throw new ApiError(404, 'groupe inconnu')
+
+  const { id, ...payload } = group
+  const next: GroupPayload = { ...payload }
+  if (name !== null) next.name = name
+  if (color !== null) next.color = color
+  if (icon !== null) next.icon = icon
+  if (hidden !== null) next.hidden = hidden
+  await updateEncrypted('category_groups', userId, id, next)
+  return { ok: true }
+}
+
+async function actionDeleteCategoryGroup(userId: string, params: Params) {
+  const groupId = requireUuid(params.groupId, 'groupId')
+
+  const [groups, categories] = await Promise.all([
+    loadAll<GroupPayload>('category_groups', userId),
+    loadAll<CategoryPayload>('categories', userId),
+  ])
+  if (!groups.some((g) => g.id === groupId)) throw new ApiError(404, 'groupe inconnu')
+  // Refus si des categories (meme cachees) referencent encore le groupe.
+  if (categories.some((c) => c.groupId === groupId)) {
+    throw new ApiError(
+      400,
+      'le groupe contient encore des categories : deplacez-les ou supprimez-les d abord',
+    )
+  }
+
+  const { error } = await admin
+    .from('category_groups')
+    .delete()
+    .eq('user_id', userId)
+    .eq('id', groupId)
+  if (error) throw new ApiError(500, 'suppression category_groups impossible')
+  return { ok: true }
+}
+
+// Reecrit les sortOrder d'une liste : les ids fournis prennent leur index dans
+// la liste, les lignes absentes conservent leur ordre relatif apres celles
+// fournies. Seules les lignes dont l'ordre change sont reecrites.
+async function applyOrder<T extends { sortOrder: number }>(
+  table: string,
+  userId: string,
+  rows: WithId<T>[],
+  orderedIds: string[],
+): Promise<void> {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const provided = new Set(orderedIds)
+  const rest = rows
+    .filter((r) => !provided.has(r.id))
+    .sort((a, b) => a.sortOrder - b.sortOrder || (a.id < b.id ? -1 : 1))
+  const finalOrder = [...orderedIds.map((oid) => byId.get(oid)!), ...rest]
+  for (let i = 0; i < finalOrder.length; i++) {
+    if (finalOrder[i].sortOrder === i) continue
+    const { id, ...payload } = finalOrder[i]
+    await updateEncrypted(table, userId, id, { ...payload, sortOrder: i })
+  }
+}
+
+async function actionReorderCategories(userId: string, params: Params) {
+  const groupId = requireUuid(params.groupId, 'groupId')
+  const orderedIds = requireUuidArray(params.orderedIds, 'orderedIds')
+
+  const [groups, categories] = await Promise.all([
+    loadAll<GroupPayload>('category_groups', userId),
+    loadAll<CategoryPayload>('categories', userId),
+  ])
+  if (!groups.some((g) => g.id === groupId)) throw new ApiError(404, 'groupe inconnu')
+
+  // Chaque id fourni doit designer une categorie de l'utilisateur DANS ce groupe.
+  const inGroup = categories.filter((c) => c.groupId === groupId)
+  const inGroupIds = new Set(inGroup.map((c) => c.id))
+  for (const oid of orderedIds) {
+    if (!inGroupIds.has(oid)) throw new ApiError(400, 'categorie hors du groupe ou inconnue')
+  }
+  await applyOrder('categories', userId, inGroup, orderedIds)
+  return { ok: true }
+}
+
+async function actionReorderCategoryGroups(userId: string, params: Params) {
+  const orderedIds = requireUuidArray(params.orderedIds, 'orderedIds')
+
+  const groups = await loadAll<GroupPayload>('category_groups', userId)
+  const knownIds = new Set(groups.map((g) => g.id))
+  for (const oid of orderedIds) {
+    if (!knownIds.has(oid)) throw new ApiError(400, 'groupe inconnu dans orderedIds')
+  }
+  await applyOrder('category_groups', userId, groups, orderedIds)
   return { ok: true }
 }
 
@@ -985,6 +1406,16 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   setAssigned: actionSetAssigned,
   createAccount: actionCreateAccount,
   seedDefaults: (u) => actionSeedDefaults(u),
+  createCategory: actionCreateCategory,
+  updateCategory: actionUpdateCategory,
+  deleteCategory: actionDeleteCategory,
+  createCategoryGroup: actionCreateCategoryGroup,
+  updateCategoryGroup: actionUpdateCategoryGroup,
+  deleteCategoryGroup: actionDeleteCategoryGroup,
+  reorderCategories: actionReorderCategories,
+  reorderCategoryGroups: actionReorderCategoryGroups,
+  convertToTransfer: actionConvertToTransfer,
+  convertTransferToNormal: actionConvertTransferToNormal,
   listRules: (u) => actionListRules(u),
   createRule: actionCreateRule,
   updateRule: actionUpdateRule,
