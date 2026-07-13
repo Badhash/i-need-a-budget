@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Target as TargetIcon } from 'lucide-react'
-import type { BudgetGroupBlock, BudgetMonth } from '@/lib/budget'
+import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import type { Category } from '@/mocks/data'
 import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
+import { fmtEUR } from '@/lib/format'
 import { useTargets, type Target } from '@/lib/targets'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
+import { AssignSheet } from '@/components/budget/AssignSheet'
 import { AvailablePill } from '@/components/budget/AvailablePill'
 import { TargetBar } from '@/components/budget/TargetBar'
 import { TargetDialog } from '@/components/budget/TargetDialog'
@@ -247,6 +249,9 @@ function GroupRows({
 
 function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
   const assign = useAssignMutation(month)
+  // Feuille d'assignation : sur mobile, taper le montant ouvre un panneau bas
+  // d'ecran (grand champ + raccourcis), bien plus confortable que l'inline.
+  const [assignRow, setAssignRow] = useState<BudgetRow | null>(null)
 
   return (
     <div className="space-y-4 lg:hidden">
@@ -277,14 +282,17 @@ function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
                         color={block.group.color}
                       />
                     )}
-                    <div className="mt-0.5 flex items-center gap-1 text-[12px] text-soft">
-                      <span>Assigné</span>
-                      <AssignedEditor
-                        value={row.assigned}
-                        onCommit={(cents) => assign.mutate({ categoryId: row.category.id, amount: cents })}
-                        className="h-10 -my-2.5 px-2 text-[13px]"
-                      />
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAssignRow(row)}
+                      className="mt-1 inline-flex h-9 max-w-full items-center gap-1.5 rounded-lg border border-line/70 bg-surface px-2.5 text-[13px] transition-colors active:bg-surface2"
+                      aria-label={`Modifier le montant assigné de ${row.category.name}`}
+                    >
+                      <span className="text-soft">Assigné</span>
+                      <span className={cn('font-medium tnum', row.assigned === 0 && 'text-soft')}>
+                        {fmtEUR(row.assigned)}
+                      </span>
+                    </button>
                   </div>
                   <div className="shrink-0 text-right">
                     <AvailablePill cents={row.available} />
@@ -304,6 +312,12 @@ function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
           </div>
         </Card>
       ))}
+      <AssignSheet
+        row={assignRow}
+        target={assignRow ? (targets.get(assignRow.category.id) ?? null) : null}
+        onCommit={(categoryId, amount) => assign.mutate({ categoryId, amount })}
+        onClose={() => setAssignRow(null)}
+      />
     </div>
   )
 }
