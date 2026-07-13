@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Target as TargetIcon } from 'lucide-react'
-import type { BudgetGroupBlock } from '@/lib/budget'
+import type { BudgetGroupBlock, BudgetMonth } from '@/lib/budget'
 import type { Category } from '@/mocks/data'
 import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
 import { useTargets, type Target } from '@/lib/targets'
@@ -20,12 +20,61 @@ import { cn } from '@/lib/utils'
 
 function useAssignMutation(month: string) {
   const queryClient = useQueryClient()
+  const key = ['budget', month] as const
   return useMutation({
     mutationFn: (input: { categoryId: string; amount: number }) =>
       apiSetAssigned({ ...input, month }),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['budget'] })
+    // Mise a jour OPTIMISTE : la valeur assignee, le Disponible de la ligne, les
+    // totaux du groupe et le Pret a assigner changent INSTANTANEMENT dans le cache.
+    // Le POST /api part en arriere-plan ; la reconciliation serveur (signal
+    // Realtime) est silencieuse car elle renvoie les memes chiffres. Aucune valeur
+    // ne "saute" apres un aller-retour reseau (voir CLAUDE.md, reactivite percue).
+    onMutate: async ({ categoryId, amount }) => {
+      await queryClient.cancelQueries({ queryKey: key })
+      const previous = queryClient.getQueryData<BudgetMonth>(key)
+      queryClient.setQueryData<BudgetMonth>(key, (old) => {
+        if (!old) return old
+        // delta = nouveau montant - ancien montant. available = rollover +
+        // assigned + activity -> il varie du meme delta. RTA baisse du delta.
+        let delta = 0
+        const groups = old.groups.map((group) => {
+          let groupDelta = 0
+          const rows = group.rows.map((row) => {
+            if (row.category.id !== categoryId) return row
+            delta = amount - row.assigned
+            groupDelta = delta
+            return { ...row, assigned: amount, available: row.available + delta }
+          })
+          if (groupDelta === 0) return group
+          return {
+            ...group,
+            rows,
+            totals: {
+              ...group.totals,
+              assigned: group.totals.assigned + groupDelta,
+              available: group.totals.available + groupDelta,
+            },
+          }
+        })
+        if (delta === 0) return old
+        return {
+          ...old,
+          groups,
+          rta: old.rta - delta,
+          totals: {
+            ...old.totals,
+            assigned: old.totals.assigned + delta,
+            available: old.totals.available + delta,
+          },
+        }
+      })
+      return { previous }
     },
+    // Rollback discret si le reseau echoue : on restaure l'etat d'avant.
+    onError: (_err, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(key, context.previous)
+    },
+    // Pas d'invalidation ici : le signal Realtime (debounce) reconcilie en fond.
   })
 }
 

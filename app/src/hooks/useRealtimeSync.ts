@@ -13,6 +13,19 @@ export function useRealtimeSync() {
   useEffect(() => {
     let channel: RealtimeChannel | null = null
     let active = true
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    // Reconciliation debouncee : une rafale d'ecritures (ex. plusieurs
+    // assignations d'affilee, ou un import de 50 lignes) declenche UN seul
+    // refetch ~300ms apres la derniere. Combine aux mises a jour optimistes,
+    // l'UI reste instantanee et le reseau discret (voir CLAUDE.md, reactivite).
+    const scheduleInvalidate = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        void queryClient.invalidateQueries()
+      }, 300)
+    }
 
     void (async () => {
       const {
@@ -27,13 +40,14 @@ export function useRealtimeSync() {
       channel = supabase
         .channel(`changes:${session.user.id}`, { config: { private: true } })
         .on('broadcast', { event: 'db-change' }, () => {
-          void queryClient.invalidateQueries()
+          scheduleInvalidate()
         })
         .subscribe()
     })()
 
     return () => {
       active = false
+      if (timer) clearTimeout(timer)
       if (channel) void supabase.removeChannel(channel)
     }
   }, [queryClient])

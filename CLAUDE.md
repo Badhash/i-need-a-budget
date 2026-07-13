@@ -47,6 +47,10 @@ dans le SQL Editor (source de vérité = base de production, voir supabase/READM
 
 Objectif : finance chaleureuse, moderne, arrondie. PAS un back-office admin. Références : captures dans /docs/design-references. En cas de doute visuel, imiter Copilot.
 
+### Réactivité perçue (priorité absolue — le produit doit rendre accro)
+
+Toute action utilisateur (assignation, catégorisation, ajout de transaction, objectif, règle) doit se refléter INSTANTANÉMENT dans l'UI via une mise à jour OPTIMISTE du cache TanStack Query (`onMutate` : snapshot + `setQueryData`). L'appel réseau (POST vers `/api`) part en ARRIÈRE-PLAN. La réconciliation serveur (signal Realtime) doit être SILENCIEUSE : elle renvoie les mêmes chiffres, donc aucun changement visible. Jamais de valeur qui « saute » après un aller-retour serveur, jamais de spinner bloquant sur une micro-action. En cas d'échec réseau, rollback discret (`onError` : restauration du snapshot). Les invalidations Realtime sont débouncées pour coalescer les rafales d'écritures en un seul refetch de fond.
+
 ### Tokens (source unique : app/src/styles/tokens.css, mappés dans tailwind.config)
 
 * Mode : light ET dark, toggle, préférence système par défaut.
