@@ -202,6 +202,46 @@ async function insertEncrypted(
   return data.id
 }
 
+// Mise a jour du payload chiffre d'une ligne existante (calque de /api). Conserve
+// la ligne (donc son created_at) : utilise pour le re-consentement et l'expiration.
+async function updateEncrypted(
+  table: string,
+  userId: string,
+  id: string,
+  payload: unknown,
+  extra: Record<string, string> = {},
+): Promise<void> {
+  const keys = await getKeys()
+  const { error } = await admin
+    .from(table)
+    .update({ enc_payload: bytesToPgHex(await encryptJson(keys, payload, [table, userId])), ...extra })
+    .eq('user_id', userId)
+    .eq('id', id)
+  if (error) throw new ApiError(500, `mise a jour ${table} impossible`)
+}
+
+// Insertion d'une transaction importee, idempotente sur (user_id, tx_hash).
+// ignoreDuplicates : un doublon (run cron et run manuel concurrents) est ignore
+// silencieusement. Aucun .select() : sur conflit, aucune ligne n'est renvoyee.
+async function insertImportedTransaction(
+  userId: string,
+  payload: TxPayload,
+  monthIdx: string,
+  txHash: string,
+): Promise<void> {
+  const keys = await getKeys()
+  const { error } = await admin.from('transactions').upsert(
+    {
+      user_id: userId,
+      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['transactions', userId])),
+      month_idx: monthIdx,
+      tx_hash: txHash,
+    },
+    { onConflict: 'user_id,tx_hash', ignoreDuplicates: true },
+  )
+  if (error) throw new ApiError(500, 'ecriture transactions impossible')
+}
+
 // Journalisation d'une sync : ne throw jamais (best-effort). Un echec de log ne
 // doit pas masquer le resultat de la synchronisation elle-meme.
 async function logSyncSafe(userId: string, payload: SyncLogPayload): Promise<void> {
@@ -341,14 +381,22 @@ function categorize(rules: RulePayload[], label: string): string | null {
 // signe vient de credit_debit_indicator (CRDT = entrant, DBIT = sortant).
 // Parsing sans flottant pour eviter les erreurs d'arrondi.
 function amountStringToCents(raw: string): number {
-  const clean = String(raw).trim().replace(/[^0-9.]/g, '')
-  if (!clean) return 0
+  const clean = String(raw).trim()
+  // Format documente EB : entier, eventuellement suivi d'une fraction decimale.
+  // Toute autre forme est ecartee (NaN) plutot que devinee.
+  if (!/^\d+(\.\d+)?$/.test(clean)) return NaN
   const [intPart, fracRaw = ''] = clean.split('.')
-  const frac = (fracRaw + '00').slice(0, 2)
-  return Number(intPart || '0') * 100 + Number(frac || '0')
+  // Partie entiere et 2 premieres decimales : parsees sans flottant.
+  const frac2 = (fracRaw + '00').slice(0, 2)
+  let cents = Number(intPart) * 100 + Number(frac2)
+  // Arrondi (et non troncature) des decimales au-dela de la 2e.
+  const rest = fracRaw.slice(2)
+  if (rest && Math.round(Number(`0.${rest}`)) >= 1) cents += 1
+  return cents
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+// Format strict (identique a /api) : mois 01-12, jour 01-31.
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
 
 // Forme partielle d'une transaction EB (champs reellement utilises).
 interface EbTransaction {
@@ -373,6 +421,10 @@ interface MappedTx {
 
 // Renvoie null si la transaction n'est pas exploitable (date manquante).
 function mapEbTransaction(tx: EbTransaction): MappedTx | null {
+  // On n'importe que les operations comptabilisees (BOOK). Un provisoire (PDNG)
+  // serait reimporte au reglement : on l'ignore pour eviter un doublon.
+  if ((tx.status ?? 'BOOK').toUpperCase() !== 'BOOK') return null
+
   // HYP EB : booking_date au format YYYY-MM-DD. Repli sur value_date puis
   // transaction_date si absent (transactions en attente).
   const rawDate = tx.booking_date ?? tx.value_date ?? tx.transaction_date ?? ''
@@ -380,7 +432,10 @@ function mapEbTransaction(tx: EbTransaction): MappedTx | null {
   if (!DATE_RE.test(bookingDate)) return null
 
   const indicator = (tx.credit_debit_indicator ?? '').toUpperCase()
-  const magnitude = Math.abs(amountStringToCents(tx.transaction_amount?.amount ?? '0'))
+  // Montant non conforme au format documente : transaction ecartee.
+  const cents = amountStringToCents(tx.transaction_amount?.amount ?? '0')
+  if (Number.isNaN(cents)) return null
+  const magnitude = Math.abs(cents)
   // DBIT = debit (depense) -> negatif ; tout le reste (CRDT) -> positif.
   const amount = indicator === 'DBIT' ? -magnitude : magnitude
 
@@ -423,6 +478,52 @@ function maxDate(a: string, b: string): string {
 // que de la bande passante, jamais la justesse.
 const OVERLAP_DAYS = 7
 
+// Charge et dechiffre les derniers sync_logs du user (run_at en clair, status
+// chiffre). Retourne les entrees decodees, ordonnees du plus recent au plus
+// ancien. Une entree indechiffrable est ignoree (ne doit pas bloquer la sync).
+async function loadRecentSyncLogs(
+  userId: string,
+): Promise<{ runAt: string; payload: SyncLogPayload }[]> {
+  const keys = await getKeys()
+  const { data, error } = await admin
+    .from('sync_logs')
+    .select('id, enc_payload, run_at')
+    .eq('user_id', userId)
+    .order('run_at', { ascending: false })
+    .limit(500)
+  if (error) throw new ApiError(500, 'lecture sync_logs impossible')
+  const out: { runAt: string; payload: SyncLogPayload }[] = []
+  for (const row of data ?? []) {
+    try {
+      const payload = await decryptJson<SyncLogPayload>(
+        keys,
+        pgHexToBytes(row.enc_payload),
+        ['sync_logs', userId],
+      )
+      out.push({ runAt: String(row.run_at), payload })
+    } catch {
+      // Entree corrompue : ignoree, ne doit pas faire avancer le marqueur.
+    }
+  }
+  return out
+}
+
+// run_at (date YYYY-MM-DD) de la derniere sync REUSSIE de cette connexion, ou
+// null si aucune. Les logs sont supposes tries du plus recent au plus ancien :
+// la premiere correspondance gagne. Un run en echec ne fait donc jamais avancer
+// le marqueur, et une autre connexion saine n'influe pas sur celle-ci.
+function lastSuccessfulRunDate(
+  logs: { runAt: string; payload: SyncLogPayload }[],
+  connectionId: string,
+): string | null {
+  for (const log of logs) {
+    if (log.payload.status === 'ok' && log.payload.connectionId === connectionId) {
+      return log.runAt.slice(0, 10)
+    }
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Synchronisation d'un utilisateur
 // ---------------------------------------------------------------------------
@@ -449,7 +550,23 @@ async function syncUser(userId: string): Promise<number> {
       ),
     })),
   )
-  const activeConnections = connections.filter((c) => c.payload.sessionState === 'active')
+  // Re-consentement : une session encore 'active' mais dont la date d'expiration
+  // est passee est marquee 'expired' (write-back chiffre) et exclue du poll. Le
+  // front s'appuie sur ce statut pour afficher la banniere de reconnexion.
+  const now = Date.now()
+  const activeConnections: typeof connections = []
+  for (const conn of connections) {
+    if (conn.payload.sessionState !== 'active') continue
+    const validUntil = conn.payload.validUntil
+    if (validUntil && Date.parse(validUntil) < now) {
+      await updateEncrypted('bank_connections', userId, conn.id, {
+        ...conn.payload,
+        sessionState: 'expired',
+      })
+      continue
+    }
+    activeConnections.push(conn)
+  }
   if (activeConnections.length === 0) return 0
 
   // Comptes (pour lier uid EB -> id compte interne) et regles de categorisation.
@@ -474,31 +591,25 @@ async function syncUser(userId: string): Promise<number> {
   if (hashErr) throw new ApiError(500, 'lecture tx_hash impossible')
   const seenHashes = new Set<string>((hashRows ?? []).map((r) => r.tx_hash as string))
 
-  // Marqueur incremental : run_at (en clair) de la derniere sync du user.
-  // HYP fonctionnelle : avec une seule banque, un marqueur global par user
-  // suffit ; la dedup garantit la justesse meme si plusieurs connexions le
-  // partagent. On soustrait OVERLAP_DAYS pour ne rien manquer.
-  const { data: lastLog } = await admin
-    .from('sync_logs')
-    .select('run_at')
-    .eq('user_id', userId)
-    .order('run_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  const lastRunDate = lastLog?.run_at ? String(lastLog.run_at).slice(0, 10) : null
+  // Marqueur incremental : on charge et dechiffre les derniers sync_logs pour
+  // retrouver, par connexion, la derniere sync REUSSIE (status 'ok' relu apres
+  // dechiffrement). Un run en echec n'avance donc jamais la borne d'une
+  // connexion, et une connexion saine n'influe pas sur une connexion en panne.
+  const recentLogs = await loadRecentSyncLogs(userId)
 
   let importedTotal = 0
 
   for (const conn of activeConnections) {
     let importedForConn = 0
     try {
-      // Date de depart : soit la derniere sync (moins le recouvrement), soit la
-      // date d'activation de la connexion (created_at, en clair). On ne remonte
-      // jamais avant l'activation : seules les transactions posterieures sont
-      // importees (le solde d'ouverture est saisi manuellement).
+      // Date de depart : derniere sync REUSSIE de CETTE connexion (moins le
+      // recouvrement), sinon date d'activation (created_at, en clair). On ne
+      // remonte jamais avant l'activation : seules les transactions posterieures
+      // sont importees (le solde d'ouverture est saisi manuellement).
       const activationDate = conn.createdAt.slice(0, 10)
-      const dateFrom = lastRunDate
-        ? maxDate(shiftDays(lastRunDate, -OVERLAP_DAYS), activationDate)
+      const lastOkDate = lastSuccessfulRunDate(recentLogs, conn.id)
+      const dateFrom = lastOkDate
+        ? maxDate(shiftDays(lastOkDate, -OVERLAP_DAYS), activationDate)
         : activationDate
 
       for (const ebAccount of conn.payload.accounts) {
@@ -507,8 +618,10 @@ async function syncUser(userId: string): Promise<number> {
         // liaison (providerAccountUid) se fait cote /api.
         if (!localAccount) continue
 
-        // Pagination EB via continuation_key.
+        // Pagination EB via continuation_key. Bornee pour eviter toute boucle
+        // infinie : nombre de pages plafonne et arret si la cle se repete.
         let continuationKey: string | null = null
+        let pageCount = 0
         do {
           const query = new URLSearchParams({ date_from: dateFrom })
           if (continuationKey) query.set('continuation_key', continuationKey)
@@ -547,15 +660,21 @@ async function syncUser(userId: string): Promise<number> {
               transferGroupId: null,
               notes: null,
             }
-            await insertEncrypted('transactions', userId, payload, {
-              month_idx: await txMonthIdx(keys, userId, mapped.bookingMonth),
-              tx_hash: hash,
-            })
+            await insertImportedTransaction(
+              userId,
+              payload,
+              await txMonthIdx(keys, userId, mapped.bookingMonth),
+              hash,
+            )
             importedForConn += 1
           }
 
-          continuationKey = page.continuation_key ?? null
-        } while (continuationKey)
+          const nextKey = page.continuation_key ?? null
+          pageCount += 1
+          // Cle identique a celle envoyee : l'API tourne en rond, on arrete.
+          if (nextKey !== null && nextKey === continuationKey) break
+          continuationKey = nextKey
+        } while (continuationKey && pageCount < 1000)
       }
 
       importedTotal += importedForConn
@@ -655,6 +774,23 @@ async function actionFinalizeAuth(userId: string, params: Params) {
     validUntil: session.access?.valid_until ?? null,
     sessionState: 'active',
   }
+
+  // Re-consentement : si une connexion existe deja pour le meme ASPSP (meme
+  // institution) ou partageant au moins un uid de compte, on la MET A JOUR en
+  // conservant sa ligne (donc son created_at, pour ne pas re-borner dateFrom a
+  // aujourd'hui). Sinon on cree une nouvelle connexion.
+  const existing = await loadAll<BankConnectionPayload>('bank_connections', userId)
+  const newUids = new Set(accounts.map((a) => a.uid))
+  const match = existing.find(
+    (c) =>
+      c.institution === institution ||
+      c.accounts.some((a) => newUids.has(a.uid)),
+  )
+  if (match) {
+    await updateEncrypted('bank_connections', userId, match.id, payload)
+    return { ok: true, connectionId: match.id }
+  }
+
   const connectionId = await insertEncrypted('bank_connections', userId, payload)
   return { ok: true, connectionId }
 }
@@ -744,6 +880,27 @@ async function requireUser(req: Request): Promise<string> {
   return userData.user.id
 }
 
+// Comparaison a temps constant de deux chaines (secret cron). On ne compare pas
+// les chaines brutes (dont la longueur/le contenu fuiraient par le timing) mais
+// leurs HMAC-SHA256 sous une cle ephemere aleatoire : deux digests de 32 octets
+// compares par accumulation XOR sans court-circuit.
+async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+  const raw = crypto.getRandomValues(new Uint8Array(32))
+  const key = await crypto.subtle.importKey(
+    'raw',
+    raw,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const enc = new TextEncoder()
+  const da = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(a)))
+  const db = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(b)))
+  let diff = 0
+  for (let i = 0; i < da.length; i++) diff |= da[i] ^ db[i]
+  return diff === 0
+}
+
 // ---------------------------------------------------------------------------
 // Serveur
 // ---------------------------------------------------------------------------
@@ -763,7 +920,7 @@ Deno.serve(async (req) => {
     // Mode d'appel : cron (secret partage, tous les users) ou user (JWT).
     const cronSecret = Deno.env.get('SYNC_CRON_SECRET') ?? ''
     const providedCron = req.headers.get('x-cron-secret') ?? ''
-    const isCron = cronSecret.length > 0 && providedCron === cronSecret
+    const isCron = cronSecret.length > 0 && (await constantTimeEqual(providedCron, cronSecret))
 
     let userId: string | null = null
     if (!isCron) {

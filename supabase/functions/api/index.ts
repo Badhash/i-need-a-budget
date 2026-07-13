@@ -232,6 +232,7 @@ function requireMatcher(value: unknown): RuleMatcher {
     throw new ApiError(400, 'matcher.op invalide')
   }
   const opValue = requireText(m.value, 'matcher.value', 200)
+  if (!normalizeLabel(opValue)) throw new ApiError(400, 'valeur de regle vide apres normalisation')
   return { field: 'label', op: m.op as RuleOp, value: opValue }
 }
 
@@ -239,6 +240,7 @@ function requireMatcher(value: unknown): RuleMatcher {
 function matchLabel(label: string, matcher: RuleMatcher): boolean {
   const haystack = normalizeLabel(label)
   const needle = normalizeLabel(matcher.value)
+  if (!needle) return false
   switch (matcher.op) {
     case 'contains':
       return haystack.includes(needle)
@@ -668,7 +670,13 @@ async function actionSeedDefaults(userId: string) {
     loadAll<GroupPayload>('category_groups', userId),
     loadAll<CategoryPayload>('categories', userId),
   ])
-  const complete = existingGroups.length > 0 && existingCategories.some((c) => c.isIncome)
+  // Comptes attendus d'un seed complet : le groupe Revenus + les groupes de
+  // DEFAULT_STRUCTURE, et les 3 categories de revenus + les categories de chaque
+  // groupe. Un etat partiel (moins que ces comptes) est purge puis rejoue.
+  const expectedGroups = DEFAULT_STRUCTURE.length + 1
+  const expectedCats = 3 + DEFAULT_STRUCTURE.reduce((sum, entry) => sum + entry.categories.length, 0)
+  const complete =
+    existingGroups.length >= expectedGroups && existingCategories.length >= expectedCats
   if (complete) throw new ApiError(409, 'des categories existent deja')
   if (existingGroups.length > 0 || existingCategories.length > 0) {
     const delCats = await admin.from('categories').delete().eq('user_id', userId)
@@ -734,7 +742,7 @@ async function requireNonIncomeCategory(userId: string, categoryId: string): Pro
 
 async function actionListRules(userId: string) {
   const rules = await loadAll<RulePayload>('rules', userId)
-  rules.sort((a, b) => a.priority - b.priority)
+  rules.sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
   return { rules }
 }
 
@@ -789,7 +797,7 @@ async function actionApplyRulesToUncategorized(userId: string) {
     loadAll<RulePayload>('rules', userId),
     loadAll<TxPayload>('transactions', userId),
   ])
-  rules.sort((a, b) => a.priority - b.priority)
+  rules.sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
 
   let categorized = 0
   for (const tx of transactions) {
@@ -866,7 +874,7 @@ async function actionGetBankConnections(userId: string) {
       status = 'pending'
     } else {
       const expiry = new Date(validUntil).getTime()
-      if (expiry < now) status = 'expired'
+      if (Number.isNaN(expiry) || expiry < now) status = 'expired'
       else if (expiry < now + EXPIRY_WINDOW_MS) status = 'expiring'
       else status = 'active'
     }
