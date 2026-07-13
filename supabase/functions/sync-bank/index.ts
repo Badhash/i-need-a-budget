@@ -337,9 +337,11 @@ async function ebFetch(
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   })
   if (!res.ok) {
-    // On lit le corps pour le vider mais on ne le loggue pas.
-    await res.text().catch(() => '')
-    throw new ApiError(502, `Enable Banking a repondu ${res.status}`)
+    // Detail de l'erreur EB remonte pour le diagnostic (c'est un message
+    // d'erreur d'API, pas une donnee de compte). A restreindre une fois
+    // l'integration Enable Banking validee.
+    const detail = await res.text().catch(() => '')
+    throw new ApiError(502, `Enable Banking a repondu ${res.status}: ${detail.slice(0, 400)}`)
   }
   return res.json()
 }
@@ -721,8 +723,9 @@ async function actionStartAuth(userId: string, params: Params) {
       : Deno.env.get('ENABLE_BANKING_ASPSP_NAME') ?? ''
   if (!aspspName) throw new ApiError(400, 'nom ASPSP manquant (ENABLE_BANKING_ASPSP_NAME)')
 
-  // Sessions EB : 180 jours (cf. CLAUDE.md). valid_until en ISO 8601.
-  const validUntil = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString()
+  // valid_until en ISO 8601. 90 jours : plafond PSD2 usuel des ASPSP (180 j
+  // n'est accepte que par certaines banques et provoque un 400 sinon).
+  const validUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
   // state anti-CSRF/correlation : aleatoire, renvoye par EB au redirect.
   const state = crypto.randomUUID()
 
