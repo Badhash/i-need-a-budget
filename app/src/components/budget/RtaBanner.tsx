@@ -13,7 +13,7 @@ export function RtaBanner({ budget }: { budget: BudgetMonth }) {
     <div className="sticky top-[68px] z-30">
       <div
         className={cn(
-          'rounded-2xl border p-5 shadow-card backdrop-blur-md',
+          'rounded-2xl border p-5 shadow-card',
           negative ? 'border-danger/25 bg-danger/10' : 'border-success/25 bg-success/10',
         )}
       >

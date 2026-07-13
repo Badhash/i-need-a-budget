@@ -79,7 +79,7 @@ export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps
         aria-describedby={undefined}
         // Cale la feuille au-dessus du clavier iOS ; transition douce pour
         // suivre son apparition sans saut.
-        style={keyboardInset > 0 ? { bottom: keyboardInset, transition: 'bottom 120ms ease-out' } : undefined}
+        style={keyboardInset > 0 ? { transform: `translateY(-${keyboardInset}px)` } : undefined}
       >
         <DialogHeader className="pb-1">
           <DialogTitle className="flex items-baseline justify-between gap-3 pr-8">

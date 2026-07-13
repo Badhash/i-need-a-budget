@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Category } from '@/mocks/data'
 import { apiDeleteTarget, apiSetTarget, type Target } from '@/lib/targets'
@@ -104,10 +105,13 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
   }
 
   const pending = setMutation.isPending || deleteMutation.isPending
+  const keyboardInset = useKeyboardInset()
 
   return (
     <Dialog open={category !== null} onOpenChange={(o) => (o ? undefined : onClose())}>
-      <DialogContent>
+      <DialogContent
+        style={keyboardInset > 0 ? { transform: `translateY(-${keyboardInset}px)` } : undefined}
+      >
         <DialogHeader>
           <DialogTitle>{target ? "Modifier l'objectif" : 'Nouvel objectif'}</DialogTitle>
           <DialogDescription>

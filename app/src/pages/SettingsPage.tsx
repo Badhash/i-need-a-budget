@@ -71,7 +71,7 @@ function ThemeSection() {
               onClick={() => setTheme(meta.id)}
               aria-pressed={theme === meta.id}
               className={cn(
-                'rounded-2xl border p-3 text-left transition-all',
+                'rounded-2xl border p-3 text-left transition-[border-color,box-shadow,transform] duration-150',
                 theme === meta.id
                   ? 'border-accent ring-2 ring-accent/30'
                   : 'border-line hover:border-soft/40',

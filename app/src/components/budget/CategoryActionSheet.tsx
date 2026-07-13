@@ -94,7 +94,7 @@ export function CategoryActionSheet({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         aria-describedby={undefined}
-        style={keyboardInset > 0 ? { bottom: keyboardInset, transition: 'bottom 120ms ease-out' } : undefined}
+        style={keyboardInset > 0 ? { transform: `translateY(-${keyboardInset}px)` } : undefined}
       >
         <DialogHeader>
           <DialogTitle>{category.name}</DialogTitle>

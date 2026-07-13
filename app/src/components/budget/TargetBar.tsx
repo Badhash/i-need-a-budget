@@ -33,7 +33,7 @@ export function TargetBar({ target, assigned, available, color }: TargetBarProps
     <div className="mt-1.5 max-w-[200px]">
       <div className="h-1 w-full overflow-hidden rounded-full bg-surface2">
         <div
-          className="h-full rounded-full transition-all"
+          className="h-full rounded-full transition-[width] duration-300 ease-out"
           style={{
             width: `${Math.max(ratio * 100, safeFunded > 0 ? 4 : 0)}%`,
             backgroundColor: done ? 'rgb(var(--success))' : `var(--cat-${color}-fg)`,

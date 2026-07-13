@@ -369,7 +369,7 @@ function NewGroupForm({ onDone }: { onDone: () => void }) {
               aria-pressed={color === c}
               onClick={() => setColor(c)}
               className={cn(
-                'h-8 w-8 rounded-full transition-all',
+                'h-8 w-8 rounded-full transition-[transform,box-shadow] duration-150',
                 color === c && 'ring-2 ring-accent ring-offset-2 ring-offset-surface',
               )}
               style={{ backgroundColor: `var(--cat-${c}-fg)` }}

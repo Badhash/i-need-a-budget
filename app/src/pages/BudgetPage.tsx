@@ -90,7 +90,7 @@ function SpentBar({ assigned, activity, color }: { assigned: number; activity: n
   return (
     <div className="mt-1.5 h-1 w-full max-w-[180px] overflow-hidden rounded-full bg-surface2">
       <div
-        className="h-full rounded-full transition-all"
+        className="h-full rounded-full transition-[width] duration-300 ease-out"
         style={{
           width: `${Math.max(ratio * 100, spent > 0 ? 4 : 0)}%`,
           backgroundColor: over ? 'rgb(var(--danger))' : `var(--cat-${color}-fg)`,
