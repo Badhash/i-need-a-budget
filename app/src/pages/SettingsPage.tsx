@@ -9,6 +9,7 @@ import { BankSection } from '@/components/settings/BankSection'
 import { MfaSection } from '@/components/settings/MfaSection'
 import { ExportSection } from '@/components/settings/ExportSection'
 import { AccountSection } from '@/components/settings/AccountSection'
+import { CategoriesSection } from '@/components/settings/CategoriesSection'
 
 function ThemePreview({ meta }: { meta: ThemeMeta }) {
   return (
@@ -153,6 +154,7 @@ export function SettingsPage() {
       <BankSection />
       <MfaSection />
       <RulesCard />
+      <CategoriesSection />
       <ExportSection />
       <AccountSection />
       <p className="px-1 text-center text-[12px] text-soft">
