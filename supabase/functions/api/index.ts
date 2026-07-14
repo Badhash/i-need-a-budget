@@ -114,6 +114,15 @@ interface BankConnectionPayload {
   accounts?: { uid: string; name?: string; iban?: string; product?: string }[]
 }
 
+// Contenu chiffre d'un sync_log (ecrit par sync-bank). run_at reste en clair
+// cote colonne (retention) ; le reste du contenu est chiffre.
+interface SyncLogPayload {
+  connectionId: string | null
+  status: 'ok' | 'error'
+  importedCount: number
+  error?: string
+}
+
 type BankConnectionStatus = 'active' | 'expiring' | 'expired' | 'pending'
 
 type WithId<T> = T & { id: string }
@@ -1426,6 +1435,50 @@ async function actionLinkBankAccount(userId: string, params: Params) {
 }
 
 // ---------------------------------------------------------------------------
+// Sante de la synchronisation (lecture des sync_logs)
+// ---------------------------------------------------------------------------
+
+// Renvoie en clair les N derniers runs de synchronisation (run_at en clair,
+// reste dechiffre en memoire). Une entree indechiffrable est ignoree : elle ne
+// doit pas casser l'affichage de l'historique. Aucun payload n'est logge.
+async function actionListSyncLogs(userId: string) {
+  const keys = await getKeys()
+  const { data, error } = await admin
+    .from('sync_logs')
+    .select('id, enc_payload, run_at')
+    .eq('user_id', userId)
+    .order('run_at', { ascending: false })
+    .limit(10)
+  if (error) throw new ApiError(500, 'lecture sync_logs impossible')
+
+  const logs: {
+    id: string
+    runAt: string
+    status: 'ok' | 'error'
+    importedCount: number
+    error: string | null
+  }[] = []
+  for (const row of data ?? []) {
+    try {
+      const payload = await decryptJson<SyncLogPayload>(keys, pgHexToBytes(row.enc_payload), [
+        'sync_logs',
+        userId,
+      ])
+      logs.push({
+        id: row.id as string,
+        runAt: String(row.run_at),
+        status: payload.status,
+        importedCount: payload.importedCount,
+        error: payload.error ?? null,
+      })
+    } catch {
+      // Entree corrompue / indechiffrable : ignoree, ne bloque pas l'historique.
+    }
+  }
+  return { logs }
+}
+
+// ---------------------------------------------------------------------------
 // Export complet (donnees dechiffrees, avec id)
 // ---------------------------------------------------------------------------
 
@@ -1488,6 +1541,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   deleteTarget: actionDeleteTarget,
   getBankConnections: (u) => actionGetBankConnections(u),
   linkBankAccount: actionLinkBankAccount,
+  listSyncLogs: (u) => actionListSyncLogs(u),
   exportData: (u) => actionExportData(u),
 }
 

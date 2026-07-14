@@ -56,6 +56,28 @@ export function useBankConnections(): UseQueryResult<BankConnection[]> {
   })
 }
 
+export interface SyncLog {
+  id: string
+  runAt: string
+  status: 'ok' | 'error'
+  importedCount: number
+  error: string | null
+}
+
+/**
+ * Historique des 10 derniers runs de synchronisation, lu via l'Edge Function
+ * /api (action listSyncLogs). Ordonne du plus recent au plus ancien.
+ */
+export function useSyncLogs(): UseQueryResult<SyncLog[]> {
+  return useQuery({
+    queryKey: ['syncLogs'],
+    queryFn: async () => {
+      const { logs } = await apiCall<{ logs: SyncLog[] }>('listSyncLogs')
+      return logs
+    },
+  })
+}
+
 // Appel bas niveau vers l'endpoint sync-bank, JWT de la session courante joint
 // (meme schema d'auth que apiCall). Lance en cas d'erreur : l'appelant catch.
 async function syncBankCall<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {

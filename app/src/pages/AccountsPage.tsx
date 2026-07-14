@@ -5,6 +5,8 @@ import { ChevronRight, CreditCard, Landmark, PiggyBank, Plus, TrendingUp, Wallet
 import type { AccountKind } from '@/mocks/data'
 import { apiCreateAccount, useAccounts, type AccountWithBalance } from '@/lib/data'
 import { TODAY } from '@/lib/format'
+import { useBankConnections } from '@/lib/bank'
+import { SyncHealth } from '@/components/settings/SyncHealth'
 import { Amount } from '@/components/shared/Amount'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -200,9 +202,12 @@ function AccountsSkeleton() {
 
 export function AccountsPage() {
   const { data: accounts } = useAccounts()
+  const { data: connections } = useBankConnections()
   const [addOpen, setAddOpen] = useState(false)
 
   if (!accounts) return <AccountsSkeleton />
+
+  const hasConnections = (connections?.length ?? 0) > 0
 
   const total = accounts.reduce((s, a) => s + a.balance, 0)
   const onBudget = accounts.filter((a) => a.onBudget)
@@ -232,6 +237,12 @@ export function AccountsPage() {
           </div>
         </div>
       </Card>
+
+      {hasConnections && (
+        <Card className="p-5">
+          <SyncHealth />
+        </Card>
+      )}
 
       <div className="flex justify-end">
         <Button variant="secondary" onClick={() => setAddOpen(true)}>
