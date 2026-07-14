@@ -26,12 +26,12 @@ function fmtCompact(cents: number): string {
   }).format(cents / 100)
 }
 
-// Capsule mobile des lignes d'enveloppe : "assigne / activite" separes par une
-// diagonale. Code couleur en un coup d'oeil :
-//   - TEINTE DE FOND = ce qui reste (disponible) : vert si positif, rouge si
-//     depassement, neutre si zero ;
-//   - l'ASSIGNE en ton neutre (reference), l'ACTIVITE coloree selon le signe
-//     (rouge = depense, vert = rentree).
+// Capsule mobile des lignes d'enveloppe : "assigne / activite / disponible"
+// separes par des diagonales, en un coup d'oeil :
+//   - ASSIGNE en ton attenue (contexte : ce qui a ete alloue) ;
+//   - ACTIVITE coloree selon le signe (rouge = depense, vert = rentree) ;
+//   - DISPONIBLE en gras et colore (vert si reste, rouge si depassement, neutre
+//     si zero) : c'est la valeur qui compte.
 export function AssignActivityPill({
   assigned,
   activity,
@@ -43,21 +43,21 @@ export function AssignActivityPill({
   available: number
   className?: string
 }) {
+  const Sep = () => (
+    <span className="mx-1 text-soft/40" aria-hidden>
+      /
+    </span>
+  )
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2.5 py-1 text-[12.5px] font-semibold tnum',
-        available > 0 && 'bg-success/10',
-        available === 0 && 'bg-surface2',
-        available < 0 && 'bg-danger/10',
+        'inline-flex items-center rounded-full bg-surface2 px-2.5 py-1 text-[12.5px] tnum',
         className,
       )}
       title={`Assigné ${fmtEUR(assigned)} · Activité ${fmtEUR(activity)} · Disponible ${fmtEUR(available)}`}
     >
-      <span className="text-ink">{fmtCompact(assigned)}</span>
-      <span className="mx-1 text-soft/50" aria-hidden>
-        /
-      </span>
+      <span className="text-soft">{fmtCompact(assigned)}</span>
+      <Sep />
       <span
         className={cn(
           activity < 0 && 'text-danger',
@@ -66,6 +66,17 @@ export function AssignActivityPill({
         )}
       >
         {fmtCompact(activity)}
+      </span>
+      <Sep />
+      <span
+        className={cn(
+          'font-semibold',
+          available > 0 && 'text-success',
+          available < 0 && 'text-danger',
+          available === 0 && 'text-soft',
+        )}
+      >
+        {fmtCompact(available)}
       </span>
     </span>
   )
