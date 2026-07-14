@@ -13,6 +13,7 @@ import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inb
 import type { Account, Category, CategoryGroup, Transaction } from '@/mocks/data'
 import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesMap, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
+import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
 import { fmtDateShort, fmtDayLong } from '@/lib/format'
@@ -64,8 +65,12 @@ function toRow(tx: Transaction, maps: Maps): TxRow | null {
 function useCategorize() {
   const queryClient = useQueryClient()
   return useMutation({
+    // Serialise derriere une eventuelle creation de categorie en vol : le
+    // categoryId cible est resolu temp -> real avant l'envoi.
     mutationFn: ({ txId, categoryId }: { txId: string; categoryId: string | null }) =>
-      apiCategorize(txId, categoryId),
+      enqueue(() => apiCategorize(txId, categoryId === null ? null : resolveId(categoryId)), {
+        deps: categoryId === null ? [] : [categoryId],
+      }),
     onMutate: async ({ txId, categoryId }) => {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
       const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])

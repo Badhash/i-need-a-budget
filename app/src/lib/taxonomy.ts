@@ -6,6 +6,7 @@
 
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { apiCall } from '@/lib/api'
+import { enqueue, isTempId, registerRealId, resolveId } from '@/lib/mutationQueue'
 import type { Bootstrap } from '@/lib/data'
 import type { GroupIcon } from '@/mocks/data'
 import type { CatColor } from '@/styles/themes'
@@ -82,11 +83,9 @@ interface OptimisticContext {
   tempId?: string
 }
 
-// Un id optimiste n'existe pas cote serveur : il ne doit jamais partir dans un
-// appel /api (requireUuid le rejetterait en 400).
-function isTempId(id: string): boolean {
-  return id.startsWith('temp-')
-}
+// isTempId provient de mutationQueue (source unique du prefixe temporaire) : un
+// id optimiste ne doit jamais partir dans un appel /api (requireUuid le
+// rejetterait en 400).
 
 async function snapshotAndApply(
   queryClient: QueryClient,
@@ -116,10 +115,21 @@ function settle(queryClient: QueryClient) {
 export function useCreateCategoryMutation() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: apiCreateCategory,
-    onMutate: async ({ groupId, name }): Promise<OptimisticContext> => {
-      // Id temporaire remplace par l'id serveur des onSuccess (voir ci-dessous).
-      const tempId = `temp-${crypto.randomUUID()}`
+    // Le tempId est genere ici (variables) : partage par onMutate (insertion
+    // optimiste) et par la tache reseau (enregistrement tempId -> realId). Le
+    // groupId peut lui-meme etre temporaire (categorie creee dans un groupe
+    // tout juste cree) : resolveId le remplace par l'id serveur au moment de
+    // l'envoi, et deps garantit l'ordre FIFO derriere la creation du groupe.
+    mutationFn: ({ groupId, name, tempId }: { groupId: string; name: string; tempId: string }) =>
+      enqueue(
+        async () => {
+          const res = await apiCreateCategory({ groupId: resolveId(groupId), name })
+          registerRealId(tempId, res.id)
+          return res
+        },
+        { deps: [groupId] },
+      ),
+    onMutate: async ({ groupId, name, tempId }): Promise<OptimisticContext> => {
       const ctx = await snapshotAndApply(queryClient, (old) => ({
         ...old,
         categories: [
@@ -139,13 +149,12 @@ export function useCreateCategoryMutation() {
     // Remplace l'id optimiste par l'id serveur sans attendre le refetch : les
     // mutations suivantes (renommer, supprimer, reordonner, categoriser)
     // manipulent alors un vrai uuid accepte par /api.
-    onSuccess: ({ id }, _v, ctx) => {
-      if (!ctx?.tempId) return
+    onSuccess: ({ id }, { tempId }) => {
       queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) => {
         if (!old || old.categories.some((c) => c.id === id)) return old
         return {
           ...old,
-          categories: old.categories.map((c) => (c.id === ctx.tempId ? { ...c, id } : c)),
+          categories: old.categories.map((c) => (c.id === tempId ? { ...c, id } : c)),
         }
       })
     },
@@ -157,7 +166,29 @@ export function useCreateCategoryMutation() {
 export function useUpdateCategoryMutation() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: apiUpdateCategory,
+    // Serialise derriere une eventuelle creation en vol : categoryId (et le
+    // groupId cible d'un deplacement) sont resolus temp -> real avant l'envoi.
+    mutationFn: ({
+      categoryId,
+      name,
+      groupId,
+      hidden,
+    }: {
+      categoryId: string
+      name?: string
+      groupId?: string
+      hidden?: boolean
+    }) =>
+      enqueue(
+        () =>
+          apiUpdateCategory({
+            categoryId: resolveId(categoryId),
+            name,
+            groupId: groupId === undefined ? undefined : resolveId(groupId),
+            hidden,
+          }),
+        { deps: groupId === undefined ? [categoryId] : [categoryId, groupId] },
+      ),
     onMutate: ({ categoryId, name, groupId }) =>
       snapshotAndApply(queryClient, (old) => ({
         ...old,
@@ -175,7 +206,12 @@ export function useUpdateCategoryMutation() {
 export function useDeleteCategoryMutation() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: apiDeleteCategory,
+    // Supprimer pendant la fenetre de creation attendait jusqu'ici que l'id
+    // serveur existe : la file resout categoryId apres confirmation.
+    mutationFn: ({ categoryId }: { categoryId: string }) =>
+      enqueue(() => apiDeleteCategory({ categoryId: resolveId(categoryId) }), {
+        deps: [categoryId],
+      }),
     onMutate: ({ categoryId }) =>
       snapshotAndApply(queryClient, (old) => ({
         ...old,
@@ -196,9 +232,25 @@ export function useDeleteCategoryMutation() {
 export function useCreateGroupMutation() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: apiCreateGroup,
-    onMutate: async ({ name, color, icon }): Promise<OptimisticContext> => {
-      const tempId = `temp-${crypto.randomUUID()}`
+    // tempId genere dans les variables (cf. useCreateCategoryMutation) : la
+    // tache reseau enregistre tempId -> realId pour les mutations dependantes.
+    mutationFn: ({
+      name,
+      color,
+      icon,
+      tempId,
+    }: {
+      name: string
+      color: CatColor
+      icon: GroupIcon
+      tempId: string
+    }) =>
+      enqueue(async () => {
+        const res = await apiCreateGroup({ name, color, icon })
+        registerRealId(tempId, res.id)
+        return res
+      }),
+    onMutate: async ({ name, color, icon, tempId }): Promise<OptimisticContext> => {
       const ctx = await snapshotAndApply(queryClient, (old) => ({
         ...old,
         groups: [
@@ -215,13 +267,12 @@ export function useCreateGroupMutation() {
       return { ...ctx, tempId }
     },
     // Meme principe que useCreateCategoryMutation : id serveur des onSuccess.
-    onSuccess: ({ id }, _v, ctx) => {
-      if (!ctx?.tempId) return
+    onSuccess: ({ id }, { tempId }) => {
       queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) => {
         if (!old || old.groups.some((g) => g.id === id)) return old
         return {
           ...old,
-          groups: old.groups.map((g) => (g.id === ctx.tempId ? { ...g, id } : g)),
+          groups: old.groups.map((g) => (g.id === tempId ? { ...g, id } : g)),
         }
       })
     },
@@ -233,7 +284,22 @@ export function useCreateGroupMutation() {
 export function useUpdateGroupMutation() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: apiUpdateGroup,
+    mutationFn: ({
+      groupId,
+      name,
+      color,
+      icon,
+      hidden,
+    }: {
+      groupId: string
+      name?: string
+      color?: CatColor
+      icon?: GroupIcon
+      hidden?: boolean
+    }) =>
+      enqueue(() => apiUpdateGroup({ groupId: resolveId(groupId), name, color, icon, hidden }), {
+        deps: [groupId],
+      }),
     onMutate: ({ groupId, name, color, icon }) =>
       snapshotAndApply(queryClient, (old) => ({
         ...old,
@@ -251,7 +317,8 @@ export function useUpdateGroupMutation() {
 export function useDeleteGroupMutation() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: apiDeleteGroup,
+    mutationFn: ({ groupId }: { groupId: string }) =>
+      enqueue(() => apiDeleteGroup({ groupId: resolveId(groupId) }), { deps: [groupId] }),
     onMutate: ({ groupId }) =>
       snapshotAndApply(queryClient, (old) => ({
         ...old,
@@ -265,16 +332,19 @@ export function useDeleteGroupMutation() {
 export function useReorderCategoriesMutation() {
   const queryClient = useQueryClient()
   return useMutation({
-    // Les ids optimistes 'temp-*' sont ecartes de l'appel serveur (ils y
-    // seraient rejetes en 400) ; l'ordre local reste applique de maniere
-    // optimiste et le refetch retablit l'ordre complet une fois les vrais ids
-    // connus. Groupe encore temporaire : aucun appel, l'ordre local suffit.
-    mutationFn: async ({ groupId, orderedIds }: { groupId: string; orderedIds: string[] }) => {
-      if (isTempId(groupId)) return
-      const serverIds = orderedIds.filter((id) => !isTempId(id))
-      if (serverIds.length === 0) return
-      await apiReorderCategories({ groupId, orderedIds: serverIds })
-    },
+    // Serialise derriere les creations en vol : au moment de l'envoi, groupId
+    // et les ids sont resolus temp -> real. Ceux qui restent temporaires (une
+    // creation a echoue) sont ecartes ; l'ordre local reste applique de maniere
+    // optimiste et le refetch retablit l'ordre complet. Groupe encore
+    // temporaire : aucun appel, l'ordre local suffit.
+    mutationFn: ({ groupId, orderedIds }: { groupId: string; orderedIds: string[] }) =>
+      enqueue(async () => {
+        const realGroup = resolveId(groupId)
+        if (isTempId(realGroup)) return
+        const serverIds = orderedIds.map(resolveId).filter((id) => !isTempId(id))
+        if (serverIds.length === 0) return
+        await apiReorderCategories({ groupId: realGroup, orderedIds: serverIds })
+      }),
     onMutate: ({ orderedIds }) =>
       snapshotAndApply(queryClient, (old) => {
         const order = new Map(orderedIds.map((id, i) => [id, i + 1]))
@@ -293,12 +363,14 @@ export function useReorderCategoriesMutation() {
 export function useReorderGroupsMutation() {
   const queryClient = useQueryClient()
   return useMutation({
-    // Meme garde que useReorderCategoriesMutation : jamais d'id 'temp-*' vers /api.
-    mutationFn: async ({ orderedIds }: { orderedIds: string[] }) => {
-      const serverIds = orderedIds.filter((id) => !isTempId(id))
-      if (serverIds.length === 0) return
-      await apiReorderGroups({ orderedIds: serverIds })
-    },
+    // Meme garde que useReorderCategoriesMutation : ids resolus puis jamais
+    // d'id 'temp-*' vers /api.
+    mutationFn: ({ orderedIds }: { orderedIds: string[] }) =>
+      enqueue(async () => {
+        const serverIds = orderedIds.map(resolveId).filter((id) => !isTempId(id))
+        if (serverIds.length === 0) return
+        await apiReorderGroups({ orderedIds: serverIds })
+      }),
     onMutate: ({ orderedIds }) =>
       snapshotAndApply(queryClient, (old) => {
         const order = new Map(orderedIds.map((id, i) => [id, i + 1]))
