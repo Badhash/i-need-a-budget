@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -10,8 +10,10 @@ import {
   Eye,
   EyeOff,
   GripVertical,
+  Redo2,
   Sparkles,
   Target as TargetIcon,
+  Undo2,
   Wand2,
 } from 'lucide-react'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
@@ -32,6 +34,7 @@ import {
   type MoveTarget,
 } from '@/components/budget/CategoryActionSheet'
 import { useLongPress } from '@/hooks/useLongPress'
+import { useBudgetHistory } from '@/stores/budgetHistory'
 import { useReorderCategoriesMutation, useReorderGroupsMutation } from '@/lib/taxonomy'
 import { AvailablePill } from '@/components/budget/AvailablePill'
 import { TargetBar } from '@/components/budget/TargetBar'
@@ -52,12 +55,13 @@ function isEmptyRow(row: BudgetRow): boolean {
 
 function useAssignMutation(month: string) {
   const queryClient = useQueryClient()
+  const record = useBudgetHistory((s) => s.record)
   const key = ['budget', month] as const
   return useMutation({
     // Serialise derriere une eventuelle creation de categorie en vol : le
     // categoryId est resolu temp -> real au moment de l'envoi (assigner sur une
     // enveloppe tout juste creee ne part plus avec un id 'temp-*').
-    mutationFn: (input: { categoryId: string; amount: number }) =>
+    mutationFn: (input: { categoryId: string; amount: number; skipHistory?: boolean }) =>
       enqueue(
         () => apiSetAssigned({ categoryId: resolveId(input.categoryId), amount: input.amount, month }),
         { deps: [input.categoryId] },
@@ -67,9 +71,17 @@ function useAssignMutation(month: string) {
     // Le POST /api part en arriere-plan ; la reconciliation serveur (signal
     // Realtime) est silencieuse car elle renvoie les memes chiffres. Aucune valeur
     // ne "saute" apres un aller-retour reseau (voir CLAUDE.md, reactivite percue).
-    onMutate: async ({ categoryId, amount }) => {
+    onMutate: async ({ categoryId, amount, skipHistory }) => {
       await queryClient.cancelQueries({ queryKey: key })
       const previous = queryClient.getQueryData<BudgetMonth>(key)
+      // Enregistre l'action pour l'undo/redo (sauf les replays undo/redo eux-memes).
+      // prev = montant assigne actuel lu dans le cache avant application.
+      if (!skipHistory && previous) {
+        let prev = 0
+        for (const g of previous.groups)
+          for (const r of g.rows) if (r.category.id === categoryId) prev = r.assigned
+        if (prev !== amount) record({ categoryId, month, prev, next: amount })
+      }
       queryClient.setQueryData<BudgetMonth>(key, (old) => {
         if (!old) return old
         // delta = nouveau montant - ancien montant. available = rollover +
@@ -873,6 +885,42 @@ export function BudgetPage() {
   const setHideEmptyRows = useUiStore((s) => s.setHideEmptyRows)
   const [autoAssigning, setAutoAssigning] = useState(false)
 
+  // Undo/redo LOCAL, limite a la page Budget et aux assignations. L'historique est
+  // vide au changement de mois affiche (les entrees ne concernent que ce mois-la).
+  const undo = useBudgetHistory((s) => s.undo)
+  const redo = useBudgetHistory((s) => s.redo)
+  const clearHistory = useBudgetHistory((s) => s.clear)
+  const canUndo = useBudgetHistory((s) => s.past.length > 0)
+  const canRedo = useBudgetHistory((s) => s.future.length > 0)
+
+  useEffect(() => {
+    clearHistory()
+  }, [month, clearHistory])
+
+  const handleUndo = useCallback(() => {
+    const change = undo()
+    if (change) assign.mutate({ categoryId: change.categoryId, amount: change.prev, skipHistory: true })
+  }, [undo, assign])
+  const handleRedo = useCallback(() => {
+    const change = redo()
+    if (change) assign.mutate({ categoryId: change.categoryId, amount: change.next, skipHistory: true })
+  }, [redo, assign])
+
+  // Raccourcis clavier (desktop) : Ctrl/Cmd+Z = annuler, Ctrl/Cmd+Maj+Z = refaire.
+  // Ignore quand le focus est dans un champ de saisie (edition inline de l'assigne).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      e.preventDefault()
+      if (e.shiftKey) handleRedo()
+      else handleUndo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [handleUndo, handleRedo])
+
   const targetMap = targets ?? new Map<string, Target>()
 
   // Auto-assign : assigne a CHAQUE enveloppe sa depense moyenne des 3 mois
@@ -991,7 +1039,34 @@ export function BudgetPage() {
       </div>
       {/* Tout replier / tout deplier les groupes du budget. */}
       {groupIds.length > 0 && (
-        <div className="flex flex-wrap justify-end gap-1.5">
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
+          {/* Annuler / Refaire : LOCAL a la page Budget, uniquement les
+              assignations d'enveloppe. Raccourcis Ctrl/Cmd+Z et Ctrl/Cmd+Maj+Z. */}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleUndo}
+              disabled={!canUndo}
+              title="Annuler la dernière assignation (Ctrl+Z)"
+              aria-label="Annuler la dernière assignation"
+              className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-soft transition-colors hover:bg-surface2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Undo2 className="h-4 w-4" />
+              <span className="hidden sm:inline">Annuler</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleRedo}
+              disabled={!canRedo}
+              title="Refaire (Ctrl+Maj+Z)"
+              aria-label="Refaire l'assignation annulée"
+              className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-soft transition-colors hover:bg-surface2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Redo2 className="h-4 w-4" />
+              <span className="hidden sm:inline">Refaire</span>
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
           <button
             type="button"
             onClick={() => void autoAssign()}
@@ -1022,6 +1097,7 @@ export function BudgetPage() {
             )}
             {allCollapsed ? 'Tout déplier' : 'Tout replier'}
           </button>
+          </div>
         </div>
       )}
       {fundPlan.length > 0 && (
