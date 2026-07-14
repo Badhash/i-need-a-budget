@@ -1565,6 +1565,270 @@ async function actionExportData(userId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Import YNAB -> INAB (destructif : remplace toutes les donnees budget)
+// ---------------------------------------------------------------------------
+
+// Validateurs specifiques a l'import par lots.
+function requireArray(value: unknown, field: string, max: number): unknown[] {
+  if (!Array.isArray(value)) throw new ApiError(400, `champ ${field} invalide`)
+  if (value.length > max) throw new ApiError(400, `champ ${field} trop volumineux (max ${max})`)
+  return value
+}
+
+function requireObject(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ApiError(400, `champ ${field} invalide`)
+  }
+  return value as Record<string, unknown>
+}
+
+function requireAccountKind(value: unknown): AccountKind {
+  if (typeof value !== 'string' || !ACCOUNT_KINDS.includes(value as AccountKind)) {
+    throw new ApiError(400, 'type de compte invalide')
+  }
+  return value as AccountKind
+}
+
+// Tables budget effacees par un import destructif. PERIMETRE VOLONTAIREMENT
+// LIMITE : bank_connections et sync_logs sont EXCLUS. Ce sont des tables
+// d'infrastructure Enable Banking (session PSD2 de 180 jours + historique de
+// synchronisation) ; les preserver permet de continuer a synchroniser la banque
+// apres un import YNAB sans redemander le consentement. Aucune FK SQL metier
+// n'existe (les references vivent dans le payload chiffre) : l'ordre de
+// suppression est indifferent.
+const BUDGET_TABLES = [
+  'transactions',
+  'assignments',
+  'targets',
+  'rules',
+  'categories',
+  'category_groups',
+  'accounts',
+] as const
+
+async function wipeUserBudget(userId: string): Promise<void> {
+  for (const table of BUDGET_TABLES) {
+    const { error } = await admin.from(table).delete().eq('user_id', userId)
+    if (error) throw new ApiError(500, `effacement ${table} impossible`)
+  }
+}
+
+async function actionImportReplaceBegin(userId: string, params: Params) {
+  // Bornes anti-DoS (le corps est deja borne a 64 ko, ceci borne le travail).
+  const rawAccounts = requireArray(params.accounts, 'accounts', 50)
+  const rawGroups = requireArray(params.groups, 'groups', 200)
+  const rawCategories = requireArray(params.categories, 'categories', 1000)
+
+  // On valide TOUT avant d'effacer quoi que ce soit : un import invalide ne doit
+  // jamais laisser l'utilisateur avec des donnees a moitie detruites.
+  const groupInputs = rawGroups.map((g) => {
+    const o = requireObject(g, 'groups[]')
+    return {
+      key: requireText(o.key, 'groups.key', 200),
+      name: requireText(o.name, 'groups.name', 80),
+      color: o.color == null ? 'blue' : requireGroupColor(o.color),
+      icon: o.icon == null ? 'sparkles' : requireGroupIcon(o.icon),
+      hidden: o.hidden == null ? false : requireBoolean(o.hidden, 'groups.hidden'),
+    }
+  })
+  const catInputs = rawCategories.map((c) => {
+    const o = requireObject(c, 'categories[]')
+    return {
+      key: requireText(o.key, 'categories.key', 200),
+      groupKey: requireText(o.groupKey, 'categories.groupKey', 200),
+      name: requireText(o.name, 'categories.name', 80),
+      isIncome: o.isIncome == null ? false : requireBoolean(o.isIncome, 'categories.isIncome'),
+      hidden: o.hidden == null ? false : requireBoolean(o.hidden, 'categories.hidden'),
+    }
+  })
+  const accInputs = rawAccounts.map((a) => {
+    const o = requireObject(a, 'accounts[]')
+    return {
+      key: requireText(o.key, 'accounts.key', 200),
+      name: requireText(o.name, 'accounts.name', 80),
+      institution:
+        o.institution == null ? 'Import YNAB' : requireText(o.institution, 'accounts.institution', 80),
+      kind: o.kind == null ? ('checking' as AccountKind) : requireAccountKind(o.kind),
+      onBudget: o.onBudget == null ? true : requireBoolean(o.onBudget, 'accounts.onBudget'),
+    }
+  })
+
+  // Effacement destructif (perimetre BUDGET_TABLES, bancaire preserve). Relancer
+  // l'import re-efface proprement : l'operation est idempotente en tete.
+  await wipeUserBudget(userId)
+
+  // Groupes -> map groupKey -> id serveur.
+  const groupIdByKey = new Map<string, string>()
+  let groupSort = 0
+  for (const g of groupInputs) {
+    groupSort += 1
+    const id = await insertEncrypted('category_groups', userId, {
+      name: g.name,
+      color: g.color,
+      icon: g.icon,
+      sortOrder: groupSort,
+      hidden: g.hidden,
+    } satisfies GroupPayload)
+    groupIdByKey.set(g.key, id)
+  }
+
+  // Categories -> map categoryKey -> id serveur (sortOrder incremental par groupe).
+  const categoryIdByKey = new Map<string, string>()
+  const catSortByGroup = new Map<string, number>()
+  let hasIncome = false
+  for (const c of catInputs) {
+    const groupServerId = groupIdByKey.get(c.groupKey)
+    // Groupe non resolu (key incoherente) : categorie ignoree silencieusement.
+    // Ses eventuelles transactions retomberont sur categoryId null cote client.
+    if (!groupServerId) continue
+    const nextSort = (catSortByGroup.get(groupServerId) ?? 0) + 1
+    catSortByGroup.set(groupServerId, nextSort)
+    const id = await insertEncrypted('categories', userId, {
+      groupId: groupServerId,
+      name: c.name,
+      isIncome: c.isIncome,
+      sortOrder: nextSort,
+      // Invariant du modele : une categorie de revenus n'est jamais masquee.
+      hidden: c.isIncome ? false : c.hidden,
+    } satisfies CategoryPayload)
+    categoryIdByKey.set(c.key, id)
+    if (c.isIncome) hasIncome = true
+  }
+
+  // Garantie du moteur : au moins une categorie de revenus doit exister (sinon
+  // aucun RTA calculable). On en cree une par defaut si l'import n'en fournit pas.
+  let incomeFallbackId: string | undefined
+  if (!hasIncome) {
+    groupSort += 1
+    const incomeGroupId = await insertEncrypted('category_groups', userId, {
+      name: 'Revenus',
+      color: 'teal',
+      icon: 'banknote',
+      sortOrder: groupSort,
+      hidden: false,
+    } satisfies GroupPayload)
+    incomeFallbackId = await insertEncrypted('categories', userId, {
+      groupId: incomeGroupId,
+      name: 'Revenus',
+      isIncome: true,
+      sortOrder: 1,
+      hidden: false,
+    } satisfies CategoryPayload)
+  }
+
+  // Comptes -> map accountKey -> id serveur.
+  const accountIdByKey = new Map<string, string>()
+  for (const a of accInputs) {
+    const id = await insertEncrypted('accounts', userId, {
+      name: a.name,
+      institution: a.institution,
+      kind: a.kind,
+      onBudget: a.onBudget,
+      closed: false,
+      connectionId: null,
+      providerAccountUid: null,
+    } satisfies AccountPayload)
+    accountIdByKey.set(a.key, id)
+  }
+
+  return {
+    accountMap: Object.fromEntries(accountIdByKey),
+    categoryMap: Object.fromEntries(categoryIdByKey),
+    incomeFallbackId,
+  }
+}
+
+async function actionImportReplaceTransactions(userId: string, params: Params) {
+  const raw = requireArray(params.transactions, 'transactions', 200)
+
+  // Chargement des ids valides UNE fois (integrite referentielle : pas de FK SQL).
+  const [accounts, categories] = await Promise.all([
+    loadAll<AccountPayload>('accounts', userId),
+    loadAll<CategoryPayload>('categories', userId),
+  ])
+  const accountIds = new Set(accounts.map((a) => a.id))
+  const categoryIds = new Set(categories.map((c) => c.id))
+
+  const keys = await getKeys()
+  const rows: { user_id: string; enc_payload: string; month_idx: string }[] = []
+  for (const t of raw) {
+    const o = requireObject(t, 'transactions[]')
+    const accountId = requireUuid(o.accountId, 'accountId')
+    if (!accountIds.has(accountId)) throw new ApiError(404, 'compte inconnu')
+    const categoryId = o.categoryId == null ? null : requireUuid(o.categoryId, 'categoryId')
+    if (categoryId && !categoryIds.has(categoryId)) throw new ApiError(404, 'categorie inconnue')
+    const bookingDate = requireDate(o.date)
+    const amount = requireAmount(o.amount)
+    const label = requireText(o.label, 'label', 200)
+    const counterparty =
+      o.counterparty == null ? null : requireText(o.counterparty, 'counterparty', 200)
+    const notes = o.notes == null ? null : requireText(o.notes, 'notes', 500)
+    const bookingMonth = bookingDate.slice(0, 7)
+    const payload: TxPayload = {
+      accountId,
+      categoryId,
+      bookingDate,
+      bookingMonth,
+      amount,
+      label,
+      counterparty,
+      transferGroupId: null,
+      notes,
+    }
+    // tx_hash reste NULL : saisie non bancaire (la dedup ne concerne que les
+    // imports Enable Banking). month_idx calcule pour le filtre par mois.
+    rows.push({
+      user_id: userId,
+      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['transactions', userId])),
+      month_idx: await txMonthIdx(keys, userId, bookingMonth),
+    })
+  }
+  if (rows.length > 0) {
+    const { error } = await admin.from('transactions').insert(rows)
+    if (error) throw new ApiError(500, 'ecriture transactions impossible')
+  }
+  return { inserted: rows.length }
+}
+
+async function actionImportReplaceAssignments(userId: string, params: Params) {
+  const raw = requireArray(params.assignments, 'assignments', 500)
+
+  const categories = await loadAll<CategoryPayload>('categories', userId)
+  const byId = new Map(categories.map((c) => [c.id, c]))
+
+  const keys = await getKeys()
+  const rows: { user_id: string; assign_idx: string; month_idx: string; enc_payload: string }[] = []
+  for (const a of raw) {
+    const o = requireObject(a, 'assignments[]')
+    const categoryId = requireUuid(o.categoryId, 'categoryId')
+    const category = byId.get(categoryId)
+    if (!category) throw new ApiError(404, 'categorie inconnue')
+    if (category.isIncome) {
+      throw new ApiError(400, 'les categories de revenus ne recoivent pas d assignation')
+    }
+    const month = requireMonth(o.month)
+    const amount = requireAmount(o.amount)
+    if (amount < 0) throw new ApiError(400, 'montant assigne negatif interdit')
+    const payload: AssignmentPayload = { categoryId, month, amount }
+    rows.push({
+      user_id: userId,
+      assign_idx: await assignIdx(keys, userId, categoryId, month),
+      month_idx: await assignMonthIdx(keys, userId, month),
+      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['assignments', userId])),
+    })
+  }
+  if (rows.length > 0) {
+    // Upsert par (user_id, assign_idx) : idempotent si un meme (categorie, mois)
+    // revient dans un lot ulterieur. Le parser garantit l'unicite intra-lot.
+    const { error } = await admin
+      .from('assignments')
+      .upsert(rows, { onConflict: 'user_id,assign_idx' })
+    if (error) throw new ApiError(500, 'ecriture assignments impossible')
+  }
+  return { upserted: rows.length }
+}
+
+// ---------------------------------------------------------------------------
 // Routeur
 // ---------------------------------------------------------------------------
 
@@ -1603,6 +1867,9 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   linkBankAccount: actionLinkBankAccount,
   listSyncLogs: (u) => actionListSyncLogs(u),
   exportData: (u) => actionExportData(u),
+  importReplaceBegin: actionImportReplaceBegin,
+  importReplaceTransactions: actionImportReplaceTransactions,
+  importReplaceAssignments: actionImportReplaceAssignments,
 }
 
 // Lecture du corps bornee sur les octets REELLEMENT recus : l'en-tete
