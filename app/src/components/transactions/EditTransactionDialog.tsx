@@ -41,8 +41,15 @@ function useUpdateTransaction() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
     },
-    // Reconciliation silencieuse en arriere-plan (budget, compteurs, soldes).
-    onSettled: () => queryClient.invalidateQueries(),
+    // Reconciliation silencieuse en arriere-plan : editer une transaction touche
+    // la liste, l'activite des enveloppes (budget), les agregats (reports) et les
+    // soldes/compteurs (bootstrap).
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      void queryClient.invalidateQueries({ queryKey: ['budget'] })
+      void queryClient.invalidateQueries({ queryKey: ['reports'] })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
   })
 }
 

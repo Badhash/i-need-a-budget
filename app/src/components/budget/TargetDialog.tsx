@@ -73,7 +73,9 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
         deps: [input.categoryId],
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries()
+      // Un objectif ne touche que la query des objectifs (et le plan de
+      // financement du budget qui la consomme).
+      void queryClient.invalidateQueries({ queryKey: ['targets'] })
       onClose()
     },
   })
@@ -82,7 +84,7 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
     mutationFn: (categoryId: string) =>
       enqueue(() => apiDeleteTarget(resolveId(categoryId)), { deps: [categoryId] }),
     onSuccess: () => {
-      queryClient.invalidateQueries()
+      void queryClient.invalidateQueries({ queryKey: ['targets'] })
       onClose()
     },
   })

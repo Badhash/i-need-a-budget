@@ -82,8 +82,15 @@ function useCategorize() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
     },
-    // Reconciliation silencieuse en arriere-plan (budget, compteurs, etc.)
-    onSettled: () => queryClient.invalidateQueries(),
+    // Reconciliation silencieuse en arriere-plan : categoriser change l'activite
+    // d'une enveloppe (budget), les agregats (reports) et le compteur "a
+    // categoriser" (bootstrap), en plus de la liste elle-meme.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      void queryClient.invalidateQueries({ queryKey: ['budget'] })
+      void queryClient.invalidateQueries({ queryKey: ['reports'] })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
   })
 }
 
@@ -99,12 +106,22 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
   const convert = useMutation({
     mutationFn: (targetAccountId: string) =>
       apiCall('convertToTransfer', { transactionId: row.tx.id, targetAccountId }),
-    onSuccess: () => queryClient.invalidateQueries(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      void queryClient.invalidateQueries({ queryKey: ['budget'] })
+      void queryClient.invalidateQueries({ queryKey: ['reports'] })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
     onError: (err) => showError(err),
   })
   const revert = useMutation({
     mutationFn: () => apiCall('convertTransferToNormal', { transactionId: row.tx.id }),
-    onSuccess: () => queryClient.invalidateQueries(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      void queryClient.invalidateQueries({ queryKey: ['budget'] })
+      void queryClient.invalidateQueries({ queryKey: ['reports'] })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
     onError: (err) => showError(err),
   })
   // Suppression optimiste : la ligne disparait immediatement, rollback si echec.
@@ -122,7 +139,12 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
       showError(err)
     },
-    onSettled: () => queryClient.invalidateQueries(),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      void queryClient.invalidateQueries({ queryKey: ['budget'] })
+      void queryClient.invalidateQueries({ queryKey: ['reports'] })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
   })
   // Confirmation en deux temps dans le menu : premier clic arme, second supprime.
   const [confirmDelete, setConfirmDelete] = useState(false)

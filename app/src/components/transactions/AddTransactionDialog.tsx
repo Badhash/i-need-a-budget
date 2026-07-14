@@ -19,7 +19,12 @@ export function AddTransactionDialog() {
   const mutation = useMutation({
     mutationFn: apiAddTransaction,
     onSuccess: () => {
-      queryClient.invalidateQueries()
+      // Ajouter une transaction touche la liste, l'activite des enveloppes
+      // (budget), les agregats (reports) et les soldes/compteurs (bootstrap).
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      void queryClient.invalidateQueries({ queryKey: ['budget'] })
+      void queryClient.invalidateQueries({ queryKey: ['reports'] })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
       setOpen(false)
     },
   })

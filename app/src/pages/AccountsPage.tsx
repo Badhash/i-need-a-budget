@@ -80,7 +80,15 @@ function AddAccountDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const create = useMutation({
     mutationFn: apiCreateAccount,
     onSuccess: async () => {
-      await queryClient.invalidateQueries()
+      // Creer un compte (avec son solde d'ouverture) touche la taxonomie et les
+      // soldes (bootstrap), la liste des transactions, les agregats (reports) et
+      // le budget (RTA si compte on-budget).
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
+        queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+        queryClient.invalidateQueries({ queryKey: ['reports'] }),
+        queryClient.invalidateQueries({ queryKey: ['budget'] }),
+      ])
       setName('')
       setBalance('')
       setError(null)
