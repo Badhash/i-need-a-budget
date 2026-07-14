@@ -304,6 +304,69 @@ function MonthlyTrend({ a }: { a: Analytics }) {
   )
 }
 
+// Patrimoine (valeur nette) mois par mois + ventilation par compte.
+function NetWorthWidget({ a }: { a: Analytics }) {
+  const palette = useChartPalette()
+  const boot = useBootstrap()
+  const accounts = boot.data?.accounts ?? []
+  const series = a.netWorth
+  const current = series[series.length - 1]?.value ?? 0
+  const prev = series[series.length - 2]?.value ?? 0
+  const delta = prev !== 0 ? (current - prev) / Math.abs(prev) : 0
+  const chartData = series.map((p) => ({ name: fmtMonthShort(p.month), Patrimoine: p.value }))
+  const onBudget = accounts.filter((x) => x.onBudget)
+  const tracking = accounts.filter((x) => !x.onBudget)
+
+  const AccountList = ({ title, list }: { title: string; list: typeof accounts }) => (
+    <div className="min-w-0">
+      <p className="label-caps mb-1.5">{title}</p>
+      <ul className="space-y-1.5">
+        {list.map((acc) => (
+          <li key={acc.id} className="flex items-center justify-between gap-3 text-[13.5px]">
+            <span className="min-w-0 flex-1 truncate">{acc.name}</span>
+            <Amount cents={acc.balance} signed colored className="shrink-0 font-medium" />
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+
+  return (
+    <WidgetCard question="Comment évolue mon patrimoine ?" className="lg:col-span-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <Amount cents={current} signed colored className="text-[26px] font-semibold" />
+        {prev !== 0 && <TrendBadge delta={delta} label="vs mois précédent" />}
+      </div>
+      <div className="h-40">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={chartData} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
+            <defs>
+              <linearGradient id="networth" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={palette.accent} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={palette.accent} stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <XAxis
+              dataKey="name"
+              axisLine={false}
+              tickLine={false}
+              tick={{ fill: palette.soft, fontSize: 11 }}
+              dy={6}
+              interval="preserveStartEnd"
+            />
+            <Tooltip content={<ChartTooltip />} />
+            <Area type="monotone" dataKey="Patrimoine" stroke={palette.accent} strokeWidth={2} fill="url(#networth)" />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="grid gap-4 border-t border-line/60 pt-3 sm:grid-cols-2">
+        {onBudget.length > 0 && <AccountList title="Comptes budget" list={onBudget} />}
+        {tracking.length > 0 && <AccountList title="Hors budget" list={tracking} />}
+      </div>
+    </WidgetCard>
+  )
+}
+
 // Tableau des categories : ce mois vs moyenne, avec l'ecart colore (les postes
 // "qui derapent" sautent aux yeux).
 function CategoryTable({ a }: { a: Analytics }) {
@@ -587,6 +650,9 @@ function MobileReports({ a, report }: { a: Analytics | null; report: ReportsData
   const top3 = a.byCategory.filter((c) => c.thisMonth > 0).slice(0, 3)
   const maxTop = top3[0]?.thisMonth ?? 1
   const tip = a.suggestions[0]
+  const nw = a.netWorth[a.netWorth.length - 1]?.value ?? 0
+  const nwPrev = a.netWorth[a.netWorth.length - 2]?.value ?? 0
+  const nwDelta = nwPrev !== 0 ? (nw - nwPrev) / Math.abs(nwPrev) : 0
 
   return (
     <div className="space-y-4">
@@ -614,6 +680,14 @@ function MobileReports({ a, report }: { a: Analytics | null; report: ReportsData
           <p className="text-[12.5px] text-soft">mis de côté</p>
           <Amount cents={a.currentIncome - a.currentSpending} signed colored className="text-[18px] font-semibold" />
         </div>
+      </Card>
+
+      <Card className="flex items-center justify-between gap-3 p-5">
+        <div>
+          <p className="label-caps">Patrimoine</p>
+          <Amount cents={nw} signed colored className="mt-1 text-[26px] font-semibold" />
+        </div>
+        {nwPrev !== 0 && <TrendBadge delta={nwDelta} label="vs mois dernier" />}
       </Card>
 
       {top3.length > 0 && (
@@ -697,6 +771,7 @@ function DesktopReports({ a, report }: { a: Analytics | null; report: ReportsDat
       </div>
 
       <div className="grid items-start gap-5 lg:grid-cols-2">
+        <NetWorthWidget a={a} />
         <MonthlyTrend a={a} />
         {report && <SpendingDonut data={report} />}
         <WeekdaySpend a={a} />

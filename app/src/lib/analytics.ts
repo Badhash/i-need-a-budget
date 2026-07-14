@@ -80,6 +80,7 @@ export interface Analytics {
   biggest: BigTx[]
   weekday: number[] // 7 cases (lun..dim), depense moyenne par jour de semaine sur la fenetre
   suggestions: Suggestion[]
+  netWorth: { month: string; value: number }[] // patrimoine a la fin de chaque mois de la fenetre
 }
 
 const WINDOW = 12 // mois glissants analyses
@@ -178,6 +179,26 @@ export function computeAnalytics(
           : null,
       })
     }
+  }
+
+  // Valeur nette (patrimoine) a la fin de chaque mois : solde cumule de TOUS les
+  // comptes. Le solde d'un compte = somme de ses transactions (le solde
+  // d'ouverture est une transaction) ; on somme donc toutes les transactions
+  // jusqu'a la fin du mois, tous comptes confondus (les virements internes
+  // s'annulent, ce qui est correct pour un total patrimonial). `baseline` = tout
+  // ce qui precede la fenetre, puis on cumule les deltas mensuels.
+  let baseline = 0
+  const deltaByMonth = new Map<string, number>()
+  for (const t of txs) {
+    const m = monthOf(t.date)
+    if (m < months[0]!) baseline += t.amount
+    else if (inWindow.has(m)) deltaByMonth.set(m, (deltaByMonth.get(m) ?? 0) + t.amount)
+  }
+  const netWorth: { month: string; value: number }[] = []
+  let running = baseline
+  for (const m of months) {
+    running += deltaByMonth.get(m) ?? 0
+    netWorth.push({ month: m, value: running })
   }
 
   const monthly: MonthPoint[] = months.map((m) => {
@@ -322,5 +343,6 @@ export function computeAnalytics(
     biggest,
     weekday,
     suggestions: suggestions.slice(0, 4),
+    netWorth,
   }
 }
