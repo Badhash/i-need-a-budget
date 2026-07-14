@@ -176,14 +176,36 @@ async function decryptRows<T>(
   )
 }
 
+// PostgREST plafonne toute reponse a db-max-rows (1000 par defaut sur Supabase) :
+// `.limit(N)` NE l'outrepasse pas. Il faut paginer avec `.range()` jusqu'a
+// epuisement, sinon la dedup (tx_hash) et les lectures de comptes/regles sont
+// tronquees a 1000 lignes -> doublons a la synchro des qu'on depasse 1000 tx.
+const READ_PAGE = 1000
+
+async function loadAllRows<R>(table: string, userId: string, columns: string): Promise<R[]> {
+  const rows: R[] = []
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data, error } = await admin
+      .from(table)
+      .select(columns)
+      .eq('user_id', userId)
+      .order('id', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) throw new ApiError(500, `lecture ${table} impossible`)
+    if (!data || data.length === 0) break
+    rows.push(...(data as R[]))
+    if (data.length < READ_PAGE) break
+  }
+  return rows
+}
+
 async function loadAll<T>(table: string, userId: string): Promise<WithId<T>[]> {
-  const { data, error } = await admin
-    .from(table)
-    .select('id, enc_payload')
-    .eq('user_id', userId)
-    .limit(20000)
-  if (error) throw new ApiError(500, `lecture ${table} impossible`)
-  return decryptRows<T>(table, userId, data ?? [])
+  const rows = await loadAllRows<{ id: string; enc_payload: string }>(
+    table,
+    userId,
+    'id, enc_payload',
+  )
+  return decryptRows<T>(table, userId, rows)
 }
 
 async function insertEncrypted(
@@ -647,14 +669,23 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
     months.push(m)
   }
   const monthIdxs = await Promise.all(months.map((m) => txMonthIdx(keys, userId, m)))
-  const { data, error } = await admin
-    .from('transactions')
-    .select('id, enc_payload, tx_hash')
-    .eq('user_id', userId)
-    .in('month_idx', monthIdxs)
-    .limit(50000)
-  if (error) throw new ApiError(500, 'lecture transactions impossible')
-  const txs = await decryptTxRows(userId, data ?? [])
+  // Pagine (plafond PostgREST) : sur une fenetre profonde (import historique)
+  // la fenetre peut depasser 1000 transactions.
+  const data: { id: string; enc_payload: string; tx_hash: string | null }[] = []
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data: page, error } = await admin
+      .from('transactions')
+      .select('id, enc_payload, tx_hash')
+      .eq('user_id', userId)
+      .in('month_idx', monthIdxs)
+      .order('id', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) throw new ApiError(500, 'lecture transactions impossible')
+    if (!page || page.length === 0) break
+    data.push(...(page as { id: string; enc_payload: string; tx_hash: string | null }[]))
+    if (page.length < READ_PAGE) break
+  }
+  const txs = await decryptTxRows(userId, data)
 
   // Compte miroir de repli : uniquement s'il en existe EXACTEMENT UN.
   const accounts = await loadAll<AccountPayload>('accounts', userId)
@@ -815,15 +846,23 @@ async function syncUser(
     if (acc.providerAccountUid) accountByUid.set(acc.providerAccountUid, acc)
   }
 
-  // Ensemble des tx_hash existants du user (dedup import bancaire).
-  const { data: hashRows, error: hashErr } = await admin
-    .from('transactions')
-    .select('tx_hash')
-    .eq('user_id', userId)
-    .not('tx_hash', 'is', null)
-    .limit(200000)
-  if (hashErr) throw new ApiError(500, 'lecture tx_hash impossible')
-  const seenHashes = new Set<string>((hashRows ?? []).map((r) => r.tx_hash as string))
+  // Ensemble des tx_hash existants du user (dedup import bancaire). Pagine :
+  // sans ca la dedup ne verrait que les 1000 premiers hash (plafond PostgREST)
+  // et reimporterait en double toutes les transactions au-dela.
+  const seenHashes = new Set<string>()
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data, error } = await admin
+      .from('transactions')
+      .select('tx_hash')
+      .eq('user_id', userId)
+      .not('tx_hash', 'is', null)
+      .order('tx_hash', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) throw new ApiError(500, 'lecture tx_hash impossible')
+    if (!data || data.length === 0) break
+    for (const r of data) seenHashes.add(r.tx_hash as string)
+    if (data.length < READ_PAGE) break
+  }
 
   // Marqueur incremental : on charge et dechiffre les derniers sync_logs pour
   // retrouver, par connexion, la derniere sync REUSSIE (status 'ok' relu apres
@@ -1168,14 +1207,14 @@ async function actionReconcile(userId: string) {
     categories.find((c) => c.isIncome)
 
   // TOUTES les transactions du user (tx_hash en clair pour reperer les saisies
-  // manuelles), dechiffrees une fois puis regroupees par compte local.
-  const { data: txRows, error: txErr } = await admin
-    .from('transactions')
-    .select('id, enc_payload, tx_hash')
-    .eq('user_id', userId)
-    .limit(200000)
-  if (txErr) throw new ApiError(500, 'lecture transactions impossible')
-  const allTxs = await decryptTxRows(userId, txRows ?? [])
+  // manuelles), dechiffrees une fois puis regroupees par compte local. Pagine
+  // (plafond PostgREST) sinon le rapprochement ignore les tx au-dela de 1000.
+  const txRows = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
+    'transactions',
+    userId,
+    'id, enc_payload, tx_hash',
+  )
+  const allTxs = await decryptTxRows(userId, txRows)
   const txsByAccount = new Map<string, DecryptedTx[]>()
   for (const tx of allTxs) {
     const list = txsByAccount.get(tx.payload.accountId)

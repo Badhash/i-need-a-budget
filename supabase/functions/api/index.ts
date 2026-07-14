@@ -301,14 +301,37 @@ async function decryptRows<T>(
   )
 }
 
+// Taille de page de lecture. PostgREST plafonne toute reponse a `db-max-rows`
+// (1000 par defaut sur Supabase) : un simple `.limit(20000)` NE l'outrepasse
+// PAS, la reponse est tronquee silencieusement a 1000 lignes. Il faut donc
+// PAGINER avec `.range()` jusqu'a epuisement. Sans ca, tout calcul (RTA,
+// rapports, export) est faux des que l'utilisateur depasse 1000 transactions.
+const READ_PAGE = 1000
+
+async function loadAllRows<R>(table: string, userId: string, columns: string): Promise<R[]> {
+  const rows: R[] = []
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data, error } = await admin
+      .from(table)
+      .select(columns)
+      .eq('user_id', userId)
+      .order('id', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) throw new ApiError(500, `lecture ${table} impossible`)
+    if (!data || data.length === 0) break
+    rows.push(...(data as R[]))
+    if (data.length < READ_PAGE) break
+  }
+  return rows
+}
+
 async function loadAll<T>(table: string, userId: string): Promise<WithId<T>[]> {
-  const { data, error } = await admin
-    .from(table)
-    .select('id, enc_payload')
-    .eq('user_id', userId)
-    .limit(20000)
-  if (error) throw new ApiError(500, `lecture ${table} impossible`)
-  return decryptRows<T>(table, userId, data ?? [])
+  const rows = await loadAllRows<{ id: string; enc_payload: string }>(
+    table,
+    userId,
+    'id, enc_payload',
+  )
+  return decryptRows<T>(table, userId, rows)
 }
 
 async function insertEncrypted(
@@ -749,15 +772,14 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   // NULL, ecriture synthetique) d'un vrai import bancaire (tx_hash non NULL,
   // cas des paires liees par sync-bank) : un import reel ne doit JAMAIS etre
   // supprime, sous peine de fausser durablement le solde du compte.
-  const { data, error } = await admin
-    .from('transactions')
-    .select('id, enc_payload, tx_hash')
-    .eq('user_id', userId)
-    .limit(20000)
-  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  const data = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
+    'transactions',
+    userId,
+    'id, enc_payload, tx_hash',
+  )
   const keys = await getKeys()
   const rows = await Promise.all(
-    (data ?? []).map(async (row) => ({
+    data.map(async (row) => ({
       id: row.id as string,
       txHash: (row.tx_hash as string | null) ?? null,
       payload: await decryptJson<TxPayload>(keys, pgHexToBytes(row.enc_payload), [
@@ -824,13 +846,12 @@ async function actionDeleteTransaction(userId: string, params: Params) {
   // supprime s'il est synthetique (tx_hash NULL), simplement delie s'il s'agit
   // d'un vrai import bancaire (jamais de perte de donnees bancaires implicite).
   if (payload.transferGroupId) {
-    const { data: rows, error: listErr } = await admin
-      .from('transactions')
-      .select('id, enc_payload, tx_hash')
-      .eq('user_id', userId)
-      .limit(20000)
-    if (listErr) throw new ApiError(500, 'lecture transactions impossible')
-    for (const row of rows ?? []) {
+    const rows = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
+      'transactions',
+      userId,
+      'id, enc_payload, tx_hash',
+    )
+    for (const row of rows) {
       if (row.id === transactionId) continue
       const other = await decryptJson<TxPayload>(keys, pgHexToBytes(row.enc_payload), [
         'transactions',
