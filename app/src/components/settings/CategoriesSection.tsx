@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useBootstrap } from '@/lib/data'
+import { newTempId } from '@/lib/mutationQueue'
 import type { Category, CategoryGroup, GroupIcon } from '@/mocks/data'
 import type { CatColor } from '@/styles/themes'
 import {
@@ -307,7 +308,7 @@ function GroupBlock({
             initial=""
             placeholder="Nom de la catégorie"
             onCommit={(name) => {
-              createCategory.mutate({ groupId: group.id, name })
+              createCategory.mutate({ groupId: group.id, name, tempId: newTempId() })
               setAdding(false)
             }}
             onCancel={() => setAdding(false)}
@@ -341,7 +342,7 @@ function NewGroupForm({ onDone }: { onDone: () => void }) {
   const submit = () => {
     const trimmed = name.trim()
     if (!trimmed) return
-    createGroup.mutate({ name: trimmed, color, icon })
+    createGroup.mutate({ name: trimmed, color, icon, tempId: newTempId() })
     onDone()
   }
 

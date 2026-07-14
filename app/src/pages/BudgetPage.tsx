@@ -4,6 +4,7 @@ import { AlertTriangle, Target as TargetIcon } from 'lucide-react'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import type { Category } from '@/mocks/data'
 import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
+import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { useTargets, type Target } from '@/lib/targets'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
@@ -26,8 +27,14 @@ function useAssignMutation(month: string) {
   const queryClient = useQueryClient()
   const key = ['budget', month] as const
   return useMutation({
+    // Serialise derriere une eventuelle creation de categorie en vol : le
+    // categoryId est resolu temp -> real au moment de l'envoi (assigner sur une
+    // enveloppe tout juste creee ne part plus avec un id 'temp-*').
     mutationFn: (input: { categoryId: string; amount: number }) =>
-      apiSetAssigned({ ...input, month }),
+      enqueue(
+        () => apiSetAssigned({ categoryId: resolveId(input.categoryId), amount: input.amount, month }),
+        { deps: [input.categoryId] },
+      ),
     // Mise a jour OPTIMISTE : la valeur assignee, le Disponible de la ligne, les
     // totaux du groupe et le Pret a assigner changent INSTANTANEMENT dans le cache.
     // Le POST /api part en arriere-plan ; la reconciliation serveur (signal

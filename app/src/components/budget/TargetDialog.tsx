@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Category } from '@/mocks/data'
-import { apiDeleteTarget, apiSetTarget, type Target } from '@/lib/targets'
+import { apiDeleteTarget, apiSetTarget, type SetTargetInput, type Target } from '@/lib/targets'
+import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { CURRENT_MONTH, MAX_MONTH } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -64,8 +65,13 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
     setError(null)
   }, [category, target])
 
+  // Serialise derriere une eventuelle creation de categorie en vol : le
+  // categoryId est resolu temp -> real avant l'envoi de l'objectif.
   const setMutation = useMutation({
-    mutationFn: apiSetTarget,
+    mutationFn: (input: SetTargetInput) =>
+      enqueue(() => apiSetTarget({ ...input, categoryId: resolveId(input.categoryId) }), {
+        deps: [input.categoryId],
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries()
       onClose()
@@ -73,7 +79,8 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: apiDeleteTarget,
+    mutationFn: (categoryId: string) =>
+      enqueue(() => apiDeleteTarget(resolveId(categoryId)), { deps: [categoryId] }),
     onSuccess: () => {
       queryClient.invalidateQueries()
       onClose()
