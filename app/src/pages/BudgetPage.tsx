@@ -9,7 +9,11 @@ import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
 import { AssignSheet } from '@/components/budget/AssignSheet'
-import { CategoryActionSheet } from '@/components/budget/CategoryActionSheet'
+import {
+  CategoryActionSheet,
+  type MovePayload,
+  type MoveTarget,
+} from '@/components/budget/CategoryActionSheet'
 import { useLongPress } from '@/hooks/useLongPress'
 import { useReorderCategoriesMutation } from '@/lib/taxonomy'
 import { AvailablePill } from '@/components/budget/AvailablePill'
@@ -80,6 +84,104 @@ function useAssignMutation(month: string) {
     },
     // Pas d'invalidation ici : le signal Realtime (debounce) reconcilie en fond.
   })
+}
+
+// Applique une nouvelle valeur assignee a une categorie DANS le cache budget :
+// ajuste l'assigne et le disponible de la ligne, les totaux du groupe, les
+// totaux du mois et le Pret a assigner. Fonction pure reutilisee pour les deux
+// cotes d'un deplacement d'argent (source et destination).
+function applyAssignToCache(old: BudgetMonth, categoryId: string, amount: number): BudgetMonth {
+  let delta = 0
+  const groups = old.groups.map((group) => {
+    let groupDelta = 0
+    const rows = group.rows.map((row) => {
+      if (row.category.id !== categoryId) return row
+      delta = amount - row.assigned
+      groupDelta = delta
+      return { ...row, assigned: amount, available: row.available + delta }
+    })
+    if (groupDelta === 0) return group
+    return {
+      ...group,
+      rows,
+      totals: {
+        ...group.totals,
+        assigned: group.totals.assigned + groupDelta,
+        available: group.totals.available + groupDelta,
+      },
+    }
+  })
+  if (delta === 0) return old
+  return {
+    ...old,
+    groups,
+    rta: old.rta - delta,
+    totals: {
+      ...old.totals,
+      assigned: old.totals.assigned + delta,
+      available: old.totals.available + delta,
+    },
+  }
+}
+
+// Deplacement d'argent entre deux enveloppes (couvrir un depassement / deplacer
+// un excedent) : deux setAssigned coherents. La mise a jour du cache applique
+// les DEUX cotes en une seule passe optimiste ; en cas d'echec reseau, les deux
+// sont annules ensemble (restauration du snapshot). Cote serveur, on tente une
+// compensation si le second POST echoue apres un premier reussi, pour ne pas
+// laisser un etat incoherent (la reconciliation Realtime tranche ensuite).
+// Le total assigne (from - X puis to + X) est conserve : le RTA revient a
+// l'identique une fois les deux deltas appliques.
+function useMoveMutation(month: string) {
+  const queryClient = useQueryClient()
+  const key = ['budget', month] as const
+  return useMutation({
+    mutationFn: async ({ fromId, toId, fromAssigned, toAssigned, amount }: MovePayload) => {
+      await apiSetAssigned({ categoryId: fromId, amount: fromAssigned - amount, month })
+      try {
+        await apiSetAssigned({ categoryId: toId, amount: toAssigned + amount, month })
+      } catch (err) {
+        // Compensation best-effort : on restaure l'assigne de la source pour
+        // eviter un demi-transfert cote serveur. Si elle echoue aussi, la
+        // reconciliation Realtime ramenera la verite.
+        try {
+          await apiSetAssigned({ categoryId: fromId, amount: fromAssigned, month })
+        } catch {
+          // ignore : le refetch de reconciliation corrigera l'ecart.
+        }
+        throw err
+      }
+    },
+    onMutate: async ({ fromId, toId, fromAssigned, toAssigned, amount }) => {
+      await queryClient.cancelQueries({ queryKey: key })
+      const previous = queryClient.getQueryData<BudgetMonth>(key)
+      // On applique EXACTEMENT les memes valeurs absolues que les POST serveur
+      // (snapshot du moment de l'ouverture de la feuille) pour qu'aucun chiffre
+      // ne "saute" a la reconciliation Realtime.
+      queryClient.setQueryData<BudgetMonth>(key, (old) => {
+        if (!old) return old
+        const step1 = applyAssignToCache(old, fromId, fromAssigned - amount)
+        return applyAssignToCache(step1, toId, toAssigned + amount)
+      })
+      return { previous }
+    },
+    onError: (_err, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(key, context.previous)
+    },
+  })
+}
+
+// Aplati toutes les enveloppes du mois (hors celle visee) en candidates de
+// transfert, en conservant leur groupe pour l'affichage (pastille + couleur).
+function moveTargetsFor(groups: BudgetGroupBlock[], excludeId: string | undefined): MoveTarget[] {
+  const targets: MoveTarget[] = []
+  for (const block of groups) {
+    for (const row of block.rows) {
+      if (row.category.id === excludeId) continue
+      targets.push({ row, group: block.group })
+    }
+  }
+  return targets
 }
 
 function SpentBar({ assigned, activity, color }: { assigned: number; activity: number; color: string }) {
@@ -298,6 +400,7 @@ function MobileCategoryRow({
 
 function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
   const assign = useAssignMutation(month)
+  const move = useMoveMutation(month)
   const queryClient = useQueryClient()
   const reorder = useReorderCategoriesMutation()
   // Feuille d'assignation (tape) et menu contextuel (appui long).
@@ -357,11 +460,16 @@ function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
       />
       <CategoryActionSheet
         category={actionCtx ? actionCtx.block.rows[actionCtx.index]?.category ?? null : null}
+        currentRow={actionCtx ? actionCtx.block.rows[actionCtx.index] ?? null : null}
+        moveTargets={
+          actionCtx ? moveTargetsFor(groups, actionCtx.block.rows[actionCtx.index]?.category.id) : []
+        }
         canMoveUp={actionCtx !== null && actionCtx.index > 0}
         canMoveDown={actionCtx !== null && actionCtx.index < actionCtx.block.rows.length - 1}
         onMove={(direction) => {
           if (actionCtx) moveCategory(actionCtx.block, actionCtx.index, direction)
         }}
+        onMoveMoney={(payload) => move.mutate(payload)}
         onOpenTarget={onOpenTarget}
         onClose={() => setActionCtx(null)}
       />
