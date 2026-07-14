@@ -21,11 +21,6 @@ export async function fetchTargets(): Promise<Target[]> {
   return targets
 }
 
-/** Liste brute des objectifs. */
-export function useTargetsList(): UseQueryResult<Target[]> {
-  return useQuery({ queryKey: TARGETS_KEY, queryFn: fetchTargets })
-}
-
 /** Objectifs indexes par categorie (cle = categoryId), partagent la meme query. */
 export function useTargets(): UseQueryResult<Map<string, Target>> {
   return useQuery({

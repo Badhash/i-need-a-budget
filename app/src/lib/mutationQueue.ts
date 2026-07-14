@@ -111,10 +111,3 @@ function release(): void {
     idMap.clear()
   }
 }
-
-// Réservé aux tests : remet la file et le mapping à zéro.
-export function __resetMutationQueue(): void {
-  tail = Promise.resolve()
-  pending = 0
-  idMap.clear()
-}
