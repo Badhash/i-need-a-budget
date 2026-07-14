@@ -1,12 +1,12 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Area, AreaChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts'
-import { BarChart3 } from 'lucide-react'
+import { BarChart3, Moon } from 'lucide-react'
 import { useReports, useTransactions } from '@/lib/queries'
 import { useAccountsMap } from '@/lib/data'
 import { parseBankLabel } from '@/lib/bankLabel'
 import { useUiStore } from '@/stores/ui'
 import { useChartPalette } from '@/hooks/useTheme'
-import { fmtEUR, fmtMonthLong, fmtMonthShort, fmtPercent, CURRENT_MONTH } from '@/lib/format'
+import { fmtEUR, fmtMonthLong, fmtMonthShort, fmtPercent, CURRENT_MONTH, TODAY } from '@/lib/format'
 import type { ReportsData } from '@/lib/reports'
 import { TrendBadge, WidgetCard } from '@/components/reports/WidgetCard'
 import { Amount } from '@/components/shared/Amount'
@@ -256,6 +256,141 @@ function SavingsRate({ data }: { data: ReportsData }) {
   )
 }
 
+// Taux de zakat al-mal : 2,5 % (1/40) sur l'annee lunaire. Comme on calcule sur
+// une date fixe gregorienne, l'annee solaire est ~11 jours plus longue -> 2,577 %
+// pour compenser (indicatif). On affiche aussi la methode perso de l'utilisateur.
+const ZAKAT_RATE = 0.025
+const ZAKAT_RATE_SOLAR = 0.02577
+const USER_RATE = 0.03
+const NISAB_KEY = 'inab-zakat-nisab'
+const ZAKAT_DATE_KEY = 'inab-zakat-date'
+
+function readLS(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+// Convertit une saisie euros (virgule ou point, espaces insecables) en centimes.
+function eurToCents(input: string): number {
+  const cleaned = input.replace(/\s/g, '').replace(',', '.').replace(/[^0-9.]/g, '')
+  const val = Number.parseFloat(cleaned)
+  return Number.isFinite(val) ? Math.round(val * 100) : 0
+}
+
+/**
+ * Calculateur de Zakat. Base = valeur nette a la date choisie = somme de TOUTES
+ * les transactions jusqu'a ce jour (les dettes, comme l'encours carte, se
+ * deduisent d'elles-memes ; les transferts s'annulent). Sous le nisab : rien du.
+ */
+function ZakatWidget() {
+  const { data: txs } = useTransactions()
+  const [date, setDate] = useState(() => readLS(ZAKAT_DATE_KEY, `${TODAY.slice(0, 4)}-01-01`))
+  const [nisab, setNisab] = useState(() => readLS(NISAB_KEY, ''))
+
+  const setDatePersist = (v: string) => {
+    setDate(v)
+    try {
+      localStorage.setItem(ZAKAT_DATE_KEY, v)
+    } catch {
+      /* stockage indisponible : on garde juste l'etat en memoire */
+    }
+  }
+  const setNisabPersist = (v: string) => {
+    setNisab(v)
+    try {
+      localStorage.setItem(NISAB_KEY, v)
+    } catch {
+      /* idem */
+    }
+  }
+
+  const base = useMemo(() => {
+    let sum = 0
+    for (const t of txs ?? []) {
+      if (t.date <= date) sum += t.amount
+    }
+    return sum
+  }, [txs, date])
+
+  const nisabCents = eurToCents(nisab)
+  const hasNisab = nisabCents > 0
+  const belowNisab = hasNisab && base < nisabCents
+  const zakatBase = base > 0 && !belowNisab ? base : 0
+  const due = Math.round(zakatBase * ZAKAT_RATE)
+
+  const inputClass =
+    'h-10 rounded-xl border border-line bg-surface px-3 text-[15px] text-ink outline-none transition-colors focus:border-accent'
+
+  return (
+    <WidgetCard question="Combien de Zakat dois-je verser ?">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <Amount cents={due} className="text-[26px] font-semibold" />
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1 text-[12px] font-semibold text-accent">
+          <Moon className="h-3.5 w-3.5" />
+          2,5 % du net
+        </span>
+      </div>
+
+      {belowNisab ? (
+        <p className="text-[13px] text-soft">
+          En dessous du nisab (
+          <span className="tnum">{fmtEUR(nisabCents)}</span>) au{' '}
+          {new Date(date).toLocaleDateString('fr-FR')} : aucune zakât due.
+        </p>
+      ) : (
+        <p className="text-[13px] text-soft">
+          Sur une valeur nette de <Amount cents={base} className="font-medium text-ink" /> au{' '}
+          {new Date(date).toLocaleDateString('fr-FR')}.
+        </p>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1.5">
+          <span className="label-caps">Date de calcul</span>
+          <input
+            type="date"
+            value={date}
+            max={TODAY}
+            onChange={(e) => setDatePersist(e.target.value)}
+            className={inputClass}
+          />
+        </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="label-caps">Nisab (85 g d'or, €)</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={nisab}
+            placeholder="ex. 6 000"
+            onChange={(e) => setNisabPersist(e.target.value)}
+            className={inputClass}
+          />
+        </label>
+      </div>
+
+      <div className="space-y-1.5 border-t border-line/60 pt-3 text-[13px]">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-soft">Année solaire (2,577 %)</span>
+          <Amount cents={Math.round(zakatBase * ZAKAT_RATE_SOLAR)} className="font-medium" />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-soft">Ta méthode (3 %)</span>
+          <Amount cents={Math.round((base > 0 ? base : 0) * USER_RATE)} className="font-medium" />
+        </div>
+      </div>
+
+      {!hasNisab && (
+        <p className="text-[12px] text-soft/80">
+          Renseigne le nisab (valeur de 85 g d'or du moment) pour savoir si tu dépasses le seuil.
+        </p>
+      )}
+    </WidgetCard>
+  )
+}
+
 function ReportsSkeleton() {
   return (
     <div className="grid gap-5 lg:grid-cols-2">
@@ -270,26 +405,31 @@ export function ReportsPage() {
   const month = useUiStore((s) => s.month)
   const { data } = useReports(month)
 
-  if (!data) return <ReportsSkeleton />
-
-  if (data.totalSpending === 0) {
-    return (
-      <Card>
-        <EmptyState
-          icon={BarChart3}
-          title="Rien à analyser pour ce mois"
-          description="Aucune dépense enregistrée sur cette période. Les rapports se rempliront dès que des transactions arriveront."
-        />
-      </Card>
-    )
-  }
-
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-2">
-      <SpendingDonut data={data} />
-      <TopMerchants data={data} />
-      <CashflowArea data={data} />
-      <SavingsRate data={data} />
+    <div className="space-y-5">
+      {/* La Zakat ne depend pas du mois affiche : toujours visible, meme si le
+          mois n'a aucune depense a analyser. */}
+      <div className="grid items-start gap-5 lg:grid-cols-2">
+        <ZakatWidget />
+      </div>
+      {!data ? (
+        <ReportsSkeleton />
+      ) : data.totalSpending === 0 ? (
+        <Card>
+          <EmptyState
+            icon={BarChart3}
+            title="Rien à analyser pour ce mois"
+            description="Aucune dépense enregistrée sur cette période. Les rapports se rempliront dès que des transactions arriveront."
+          />
+        </Card>
+      ) : (
+        <div className="grid items-start gap-5 lg:grid-cols-2">
+          <SpendingDonut data={data} />
+          <TopMerchants data={data} />
+          <CashflowArea data={data} />
+          <SavingsRate data={data} />
+        </div>
+      )}
     </div>
   )
 }
