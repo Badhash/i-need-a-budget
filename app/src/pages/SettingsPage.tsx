@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { BankSection } from '@/components/settings/BankSection'
 import { MfaSection } from '@/components/settings/MfaSection'
 import { ExportSection } from '@/components/settings/ExportSection'
+import { ImportSection } from '@/components/settings/ImportSection'
 import { AccountSection } from '@/components/settings/AccountSection'
 import { CategoriesSection } from '@/components/settings/CategoriesSection'
 
@@ -156,6 +157,7 @@ export function SettingsPage() {
       <RulesCard />
       <CategoriesSection />
       <ExportSection />
+      <ImportSection />
       <AccountSection />
       <p className="px-1 text-center text-[12px] text-soft">
         I Need A Budget · version 0.1.0
