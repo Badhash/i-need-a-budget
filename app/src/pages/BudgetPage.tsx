@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Sparkles, Target as TargetIcon } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
+import { AlertTriangle, ChevronDown, ChevronRight, Sparkles, Target as TargetIcon } from 'lucide-react'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import type { Category } from '@/mocks/data'
 import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
@@ -266,9 +267,12 @@ interface GridProps {
   month: string
   targets: Map<string, Target>
   onOpenTarget: (category: Category) => void
+  // Clic sur une activite non nulle : ouvre la liste des transactions filtree
+  // sur cette categorie et le mois affiche.
+  onViewActivity: (categoryId: string) => void
 }
 
-function DesktopGrid({ groups, month, targets, onOpenTarget }: GridProps) {
+function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivity }: GridProps) {
   const assign = useAssignMutation(month)
 
   return (
@@ -289,6 +293,7 @@ function DesktopGrid({ groups, month, targets, onOpenTarget }: GridProps) {
               block={block}
               targets={targets}
               onOpenTarget={onOpenTarget}
+              onViewActivity={onViewActivity}
               onAssign={(categoryId, amount) => assign.mutate({ categoryId, amount })}
             />
           ))}
@@ -302,29 +307,40 @@ function GroupRows({
   block,
   targets,
   onOpenTarget,
+  onViewActivity,
   onAssign,
 }: {
   block: BudgetGroupBlock
   targets: Map<string, Target>
   onOpenTarget: (category: Category) => void
+  onViewActivity: (categoryId: string) => void
   onAssign: (categoryId: string, amount: number) => void
 }) {
+  const collapsed = useUiStore((s) => Boolean(s.collapsedGroups[block.group.id]))
+  const toggle = useUiStore((s) => s.toggleGroupCollapsed)
+  const Chevron = collapsed ? ChevronRight : ChevronDown
+
   return (
     <>
-      <tr className="bg-surface2/60">
-        <td className="px-5 py-2.5">
+      <tr
+        className="cursor-pointer select-none bg-surface2/60 transition-colors hover:bg-surface2"
+        onClick={() => toggle(block.group.id)}
+        aria-expanded={!collapsed}
+      >
+        <td className="px-5 py-2">
           <span className="flex items-center gap-2.5">
+            <Chevron className="h-4 w-4 shrink-0 text-soft" aria-hidden />
             <GroupPill group={block.group} size="sm" />
             <span className="font-semibold">{block.group.name}</span>
           </span>
         </td>
-        <td className="px-5 py-2.5 text-right">
+        <td className="px-5 py-2 text-right">
           <Amount cents={block.totals.assigned} className="font-medium text-soft" />
         </td>
-        <td className="px-5 py-2.5 text-right">
+        <td className="px-5 py-2 text-right">
           <Amount cents={block.totals.activity} className="font-medium text-soft" />
         </td>
-        <td className="px-5 py-2.5 text-right">
+        <td className="px-5 py-2 text-right">
           <Amount
             cents={block.totals.available}
             className={cn(
@@ -334,43 +350,55 @@ function GroupRows({
           />
         </td>
       </tr>
-      {block.rows.map((row) => {
-        const target = targets.get(row.category.id)
-        return (
-          <tr key={row.category.id} className="group border-t border-line/60 transition-colors hover:bg-surface2/40">
-            <td className="px-5 py-2.5">
-              <div className="flex items-center gap-1.5">
-                <p className="font-medium">{row.category.name}</p>
-                <TargetTrigger
-                  category={row.category}
-                  hasTarget={target !== undefined}
-                  onOpen={onOpenTarget}
-                  variant="desktop"
-                />
-              </div>
-              {target ? (
-                <TargetBar
-                  target={target}
-                  assigned={row.assigned}
-                  available={row.available}
-                  color={block.group.color}
-                />
-              ) : (
-                <SpentBar assigned={row.assigned} activity={row.activity} color={block.group.color} />
-              )}
-            </td>
-            <td className="px-5 py-1.5 text-right">
-              <AssignedEditor value={row.assigned} onCommit={(cents) => onAssign(row.category.id, cents)} />
-            </td>
-            <td className="px-5 py-2.5 text-right">
-              <Amount cents={row.activity} className={cn(row.activity === 0 ? 'text-soft/60' : 'text-soft')} />
-            </td>
-            <td className="px-5 py-2.5 text-right">
-              <AvailablePill cents={row.available} />
-            </td>
-          </tr>
-        )
-      })}
+      {!collapsed &&
+        block.rows.map((row) => {
+          const target = targets.get(row.category.id)
+          return (
+            <tr key={row.category.id} className="group border-t border-line/60 transition-colors hover:bg-surface2/40">
+              <td className="px-5 py-1.5">
+                <div className="flex items-center gap-1.5">
+                  <p className="font-medium">{row.category.name}</p>
+                  <TargetTrigger
+                    category={row.category}
+                    hasTarget={target !== undefined}
+                    onOpen={onOpenTarget}
+                    variant="desktop"
+                  />
+                </div>
+                {target ? (
+                  <TargetBar
+                    target={target}
+                    assigned={row.assigned}
+                    available={row.available}
+                    color={block.group.color}
+                  />
+                ) : (
+                  <SpentBar assigned={row.assigned} activity={row.activity} color={block.group.color} />
+                )}
+              </td>
+              <td className="px-5 py-1 text-right">
+                <AssignedEditor value={row.assigned} onCommit={(cents) => onAssign(row.category.id, cents)} />
+              </td>
+              <td className="px-5 py-1.5 text-right">
+                {row.activity !== 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => onViewActivity(row.category.id)}
+                    className="rounded-md text-soft underline-offset-2 transition-colors hover:text-ink hover:underline focus-visible:text-ink"
+                    title="Voir les transactions de cette catégorie ce mois-ci"
+                  >
+                    <Amount cents={row.activity} />
+                  </button>
+                ) : (
+                  <Amount cents={row.activity} className="text-soft/60" />
+                )}
+              </td>
+              <td className="px-5 py-1.5 text-right">
+                <AvailablePill cents={row.available} />
+              </td>
+            </tr>
+          )
+        })}
     </>
   )
 }
@@ -422,11 +450,13 @@ function MobileCategoryRow({
   )
 }
 
-function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
+function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity }: GridProps) {
   const assign = useAssignMutation(month)
   const move = useMoveMutation(month)
   const queryClient = useQueryClient()
   const reorder = useReorderCategoriesMutation()
+  const collapsedGroups = useUiStore((s) => s.collapsedGroups)
+  const toggleGroup = useUiStore((s) => s.toggleGroupCollapsed)
   // Feuille d'assignation (tape) et menu contextuel (appui long).
   const [assignRow, setAssignRow] = useState<BudgetRow | null>(null)
   const [actionCtx, setActionCtx] = useState<{ block: BudgetGroupBlock; index: number } | null>(null)
@@ -455,31 +485,47 @@ function MobileGroups({ groups, month, targets, onOpenTarget }: GridProps) {
 
   return (
     <div className="space-y-4 lg:hidden">
-      {groups.map((block) => (
-        <Card key={block.group.id} className="overflow-hidden">
-          <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-            <GroupPill group={block.group} size="md" />
-            <p className="min-w-0 flex-1 truncate font-semibold">{block.group.name}</p>
-            <AvailablePill cents={block.totals.available} />
-          </div>
-          <div className="divide-y divide-line/60">
-            {block.rows.map((row, index) => (
-              <MobileCategoryRow
-                key={row.category.id}
-                row={row}
-                block={block}
-                target={targets.get(row.category.id)}
-                onTap={() => setAssignRow(row)}
-                onLongPress={() => setActionCtx({ block, index })}
-              />
-            ))}
-          </div>
-        </Card>
-      ))}
+      {groups.map((block) => {
+        const collapsed = Boolean(collapsedGroups[block.group.id])
+        const Chevron = collapsed ? ChevronRight : ChevronDown
+        return (
+          <Card key={block.group.id} className="overflow-hidden">
+            <button
+              type="button"
+              onClick={() => toggleGroup(block.group.id)}
+              aria-expanded={!collapsed}
+              className="flex min-h-[52px] w-full select-none items-center gap-3 border-b border-line px-4 py-3 text-left transition-colors active:bg-surface2/60"
+            >
+              <Chevron className="h-5 w-5 shrink-0 text-soft" aria-hidden />
+              <GroupPill group={block.group} size="md" />
+              <p className="min-w-0 flex-1 truncate font-semibold">{block.group.name}</p>
+              <AvailablePill cents={block.totals.available} />
+            </button>
+            {!collapsed && (
+              <div className="divide-y divide-line/60">
+                {block.rows.map((row, index) => (
+                  <MobileCategoryRow
+                    key={row.category.id}
+                    row={row}
+                    block={block}
+                    target={targets.get(row.category.id)}
+                    onTap={() => setAssignRow(row)}
+                    onLongPress={() => setActionCtx({ block, index })}
+                  />
+                ))}
+              </div>
+            )}
+          </Card>
+        )
+      })}
       <AssignSheet
         row={assignRow}
         target={assignRow ? (targets.get(assignRow.category.id) ?? null) : null}
         onCommit={(categoryId, amount) => assign.mutate({ categoryId, amount })}
+        onViewActivity={(categoryId) => {
+          setAssignRow(null)
+          onViewActivity(categoryId)
+        }}
         onClose={() => setAssignRow(null)}
       />
       <CategoryActionSheet
@@ -538,6 +584,11 @@ function BudgetSkeleton() {
 
 export function BudgetPage() {
   const month = useUiStore((s) => s.month)
+  const navigate = useNavigate()
+  // Ouvre la liste des transactions filtree sur la categorie cliquee et le mois
+  // affiche (mois comptable = date.slice(0,7) cote Transactions).
+  const viewActivity = (categoryId: string) =>
+    navigate({ to: '/transactions', search: { categorie: categoryId, mois: month } })
   const boot = useBootstrap()
   const { data: budget, isError, refetch } = useBudgetMonth(month)
   const { data: targets } = useTargets()
@@ -602,7 +653,11 @@ export function BudgetPage() {
 
   return (
     <div className="space-y-5">
-      <RtaBanner budget={budget} />
+      {/* Desktop : le resume est dans le header (HeaderBudgetSummary). Mobile :
+          on garde le grand bandeau sticky. */}
+      <div className="lg:hidden">
+        <RtaBanner budget={budget} />
+      </div>
       {fundPlan.length > 0 && (
         <div className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card">
           <div className="min-w-0">
@@ -620,8 +675,20 @@ export function BudgetPage() {
           </Button>
         </div>
       )}
-      <DesktopGrid groups={budget.groups} month={month} targets={targetMap} onOpenTarget={setTargetCat} />
-      <MobileGroups groups={budget.groups} month={month} targets={targetMap} onOpenTarget={setTargetCat} />
+      <DesktopGrid
+        groups={budget.groups}
+        month={month}
+        targets={targetMap}
+        onOpenTarget={setTargetCat}
+        onViewActivity={viewActivity}
+      />
+      <MobileGroups
+        groups={budget.groups}
+        month={month}
+        targets={targetMap}
+        onOpenTarget={setTargetCat}
+        onViewActivity={viewActivity}
+      />
       <FundTargetsSheet
         open={fundOpen}
         items={fundPlan}

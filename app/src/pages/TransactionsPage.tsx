@@ -9,14 +9,14 @@ import {
   useReactTable,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet } from 'lucide-react'
+import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet, X } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/mocks/data'
-import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesMap, useGroupsMap } from '@/lib/data'
+import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
-import { fmtDateShort, fmtDayLong } from '@/lib/format'
+import { fmtDateShort, fmtDayLong, fmtMonthTitle, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
 import { TxKindChip } from '@/components/transactions/TxKindChip'
@@ -476,24 +476,75 @@ export function TransactionsPage() {
   const accountById = useAccountsMap()
   const categoryById = useCategoriesMap()
   const groupById = useGroupsMap()
+  const categoriesList = useCategoriesList()
+  const groupsList = useGroupsList()
 
-  // ?compte=<id> pose par la page Comptes : pre-filtre la liste sur ce compte.
-  const { compte } = useSearch({ from: '/_app/transactions' })
+  // Pre-filtres poses par la navigation (tous optionnels, combinables) :
+  //   ?compte=<id>     (depuis Comptes)
+  //   ?categorie=<id>  (clic sur une activite du Budget)
+  //   ?mois=YYYY-MM    (clic sur une activite du Budget)
+  const { compte, categorie, mois } = useSearch({ from: '/_app/transactions' })
   const [search, setSearch] = useState('')
   const [accountFilter, setAccountFilter] = useState(compte ?? 'all')
+  const [categoryFilter, setCategoryFilter] = useState(categorie ?? 'all')
+  const [monthFilter, setMonthFilter] = useState(mois ?? 'all')
   const [onlyUncat, setOnlyUncat] = useState(false)
+  // Synchronise les filtres quand les search params changent (ex. nouveau clic
+  // sur une activite alors qu'on est deja sur la page). Ne touche qu'aux filtres
+  // reellement fournis pour laisser l'utilisateur ajuster les autres a la main.
   useEffect(() => {
     if (compte) setAccountFilter(compte)
   }, [compte])
+  useEffect(() => {
+    if (categorie) setCategoryFilter(categorie)
+  }, [categorie])
+  useEffect(() => {
+    if (mois) setMonthFilter(mois)
+  }, [mois])
+
+  // Options de mois : mois comptables (date -> YYYY-MM) reellement presents,
+  // ordre anti-chronologique.
+  const monthOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of txs ?? []) set.add(monthOf(t.date))
+    return [...set].sort((a, b) => (a < b ? 1 : -1))
+  }, [txs])
+
+  // Ordre des categories pour le select : groupe par groupe (optgroups).
+  const categoriesByGroup = useMemo(() => {
+    return groupsList.map((group) => ({
+      group,
+      cats: categoriesList.filter((c) => c.groupId === group.id),
+    }))
+  }, [groupsList, categoriesList])
+
+  const hasFilters =
+    Boolean(search) ||
+    accountFilter !== 'all' ||
+    categoryFilter !== 'all' ||
+    monthFilter !== 'all' ||
+    onlyUncat
+
+  const clearFilters = () => {
+    setSearch('')
+    setAccountFilter('all')
+    setCategoryFilter('all')
+    setMonthFilter('all')
+    setOnlyUncat(false)
+  }
 
   // Filtres appliques a TOUTES les transactions (tous mois confondus), tri
-  // anti-chronologique, puis pagination.
+  // anti-chronologique, puis pagination. Le filtre mois se base sur le mois
+  // comptable de la transaction (date -> YYYY-MM), coherent avec l'activite du
+  // budget : la somme des lignes affichees redonne l'activite du mois.
   const rows = useMemo(() => {
     if (!txs || !boot.data) return []
     const maps: Maps = { accountById, categoryById, groupById }
     const q = search.trim().toLowerCase()
     return txs
       .filter((t) => accountFilter === 'all' || t.accountId === accountFilter)
+      .filter((t) => categoryFilter === 'all' || t.categoryId === categoryFilter)
+      .filter((t) => monthFilter === 'all' || monthOf(t.date) === monthFilter)
       .filter((t) => !onlyUncat || (!t.categoryId && !t.transferGroupId))
       .map((t) => toRow(t, maps))
       .filter((r): r is TxRow => r !== null)
@@ -505,7 +556,7 @@ export function TransactionsPage() {
           (r.category?.name.toLowerCase().includes(q) ?? false),
       )
       .sort((a, b) => (a.tx.date < b.tx.date ? 1 : a.tx.date > b.tx.date ? -1 : 0))
-  }, [txs, boot.data, search, accountFilter, onlyUncat])
+  }, [txs, boot.data, search, accountFilter, categoryFilter, monthFilter, onlyUncat])
 
   const uncatCount = useMemo(
     () => (txs ?? []).filter((t) => !t.categoryId && !t.transferGroupId).length,
@@ -516,7 +567,7 @@ export function TransactionsPage() {
   const [page, setPage] = useState(0)
   useEffect(() => {
     setPage(0)
-  }, [search, accountFilter, onlyUncat])
+  }, [search, accountFilter, categoryFilter, monthFilter, onlyUncat])
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount - 1)
   const pagedRows = rows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
@@ -536,14 +587,47 @@ export function TransactionsPage() {
           />
         </div>
         <Select
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+          className="w-48"
+          aria-label="Filtrer par catégorie"
+        >
+          <option value="all">Toutes les catégories</option>
+          {categoriesByGroup.map(({ group, cats }) =>
+            cats.length > 0 ? (
+              <optgroup key={group.id} label={group.name}>
+                {cats.map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null,
+          )}
+        </Select>
+        <Select
           value={accountFilter}
           onChange={(e) => setAccountFilter(e.target.value)}
           className="w-44"
+          aria-label="Filtrer par compte"
         >
           <option value="all">Tous les comptes</option>
           {accounts.map((acc) => (
             <option key={acc.id} value={acc.id}>
               {acc.name}
+            </option>
+          ))}
+        </Select>
+        <Select
+          value={monthFilter}
+          onChange={(e) => setMonthFilter(e.target.value)}
+          className="w-40"
+          aria-label="Filtrer par mois"
+        >
+          <option value="all">Tous les mois</option>
+          {monthOptions.map((m) => (
+            <option key={m} value={m}>
+              {fmtMonthTitle(m)}
             </option>
           ))}
         </Select>
@@ -563,6 +647,15 @@ export function TransactionsPage() {
             </span>
           )}
         </button>
+        {hasFilters && (
+          <button
+            onClick={clearFilters}
+            className="flex h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-3.5 text-[13px] font-medium text-soft transition-colors hover:text-ink"
+          >
+            <X className="h-3.5 w-3.5" />
+            Effacer les filtres
+          </button>
+        )}
         <Button onClick={() => setAddTxOpen(true)} className="hidden lg:inline-flex">
           <Plus className="h-4 w-4" />
           Ajouter

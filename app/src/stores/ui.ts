@@ -10,6 +10,9 @@ interface UiState {
   month: string
   addTxOpen: boolean
   editTx: Transaction | null
+  // Groupes de budget replies. Record<id, true> plutot qu'un Set : zustand
+  // persist (JSON) ne serialise pas les Set. Absence de cle = groupe deplie.
+  collapsedGroups: Record<string, true>
   setTheme: (theme: ThemeId) => void
   setMode: (mode: Mode) => void
   setMonth: (month: string) => void
@@ -17,6 +20,7 @@ interface UiState {
   resetMonth: () => void
   setAddTxOpen: (open: boolean) => void
   setEditTx: (tx: Transaction | null) => void
+  toggleGroupCollapsed: (groupId: string) => void
 }
 
 export const useUiStore = create<UiState>()(
@@ -27,6 +31,7 @@ export const useUiStore = create<UiState>()(
       month: CURRENT_MONTH,
       addTxOpen: false,
       editTx: null,
+      collapsedGroups: {},
       setTheme: (theme) => set({ theme }),
       setMode: (mode) => set({ mode }),
       setMonth: (month) => {
@@ -39,10 +44,17 @@ export const useUiStore = create<UiState>()(
       resetMonth: () => set({ month: CURRENT_MONTH }),
       setAddTxOpen: (addTxOpen) => set({ addTxOpen }),
       setEditTx: (editTx) => set({ editTx }),
+      toggleGroupCollapsed: (groupId) =>
+        set((state) => {
+          const next = { ...state.collapsedGroups }
+          if (next[groupId]) delete next[groupId]
+          else next[groupId] = true
+          return { collapsedGroups: next }
+        }),
     }),
     {
       name: 'inab-ui',
-      partialize: (s) => ({ theme: s.theme, mode: s.mode }),
+      partialize: (s) => ({ theme: s.theme, mode: s.mode, collapsedGroups: s.collapsedGroups }),
     },
   ),
 )

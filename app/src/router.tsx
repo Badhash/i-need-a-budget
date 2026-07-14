@@ -88,9 +88,20 @@ export const transactionsRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: '/transactions',
   component: TransactionsPage,
-  // ?compte=<id> : pre-filtre la liste sur un compte (navigation depuis Comptes).
-  validateSearch: (search: Record<string, unknown>): { compte?: string } =>
-    typeof search.compte === 'string' && search.compte ? { compte: search.compte } : {},
+  // Pre-filtres de la liste, tous optionnels et combinables :
+  //   ?compte=<id>     (navigation depuis Comptes)
+  //   ?categorie=<id>  (clic sur une activite du Budget)
+  //   ?mois=YYYY-MM    (clic sur une activite du Budget)
+  // Les valeurs vides sont ignorees (cle absente = pas de filtre).
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { compte?: string; categorie?: string; mois?: string } => {
+    const out: { compte?: string; categorie?: string; mois?: string } = {}
+    if (typeof search.compte === 'string' && search.compte) out.compte = search.compte
+    if (typeof search.categorie === 'string' && search.categorie) out.categorie = search.categorie
+    if (typeof search.mois === 'string' && search.mois) out.mois = search.mois
+    return out
+  },
 })
 
 const accountsRoute = createRoute({
