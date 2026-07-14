@@ -12,15 +12,16 @@ import {
   GripVertical,
   Sparkles,
   Target as TargetIcon,
+  Wand2,
 } from 'lucide-react'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import type { Category } from '@/mocks/data'
-import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
+import { useBudgetMonth, useBootstrap, apiSetAssigned, budgetKey, fetchBudgetMonth } from '@/lib/data'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { useTargets, neededThisMonth, type Target } from '@/lib/targets'
 import { FundTargetsSheet, type FundPlanItem } from '@/components/budget/FundTargetsSheet'
 import { Button } from '@/components/ui/button'
-import { fmtEUR } from '@/lib/format'
+import { fmtEUR, addMonths, MIN_MONTH } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
@@ -865,12 +866,64 @@ export function BudgetPage() {
   // plan est appliquee via la MEME mutation optimiste que la saisie manuelle
   // (cache mis a jour immediatement, POST en fond, rollback par ligne si echec).
   const assign = useAssignMutation(month)
+  const queryClient = useQueryClient()
   const collapsedGroups = useUiStore((s) => s.collapsedGroups)
   const setCollapsedGroups = useUiStore((s) => s.setCollapsedGroups)
   const hideEmptyRows = useUiStore((s) => s.hideEmptyRows)
   const setHideEmptyRows = useUiStore((s) => s.setHideEmptyRows)
+  const [autoAssigning, setAutoAssigning] = useState(false)
 
   const targetMap = targets ?? new Map<string, Target>()
+
+  // Auto-assign : assigne a CHAQUE enveloppe sa depense moyenne des 3 mois
+  // precedents (moyenne de l'activite, en valeur absolue). Ecrase l'assigne
+  // actuel. Les budgets des mois passes sont charges a la demande (ensureQueryData
+  // -> cache), puis chaque ligne part via la meme mutation optimiste que la saisie
+  // manuelle. On divise par le nombre de mois REELLEMENT disponibles (fenetre
+  // rognee en debut d'historique).
+  const autoAssign = async () => {
+    if (!budget || !boot.data) return
+    const taxo = boot.data
+    const months = [addMonths(month, -1), addMonths(month, -2), addMonths(month, -3)].filter(
+      (m) => m >= MIN_MONTH,
+    )
+    if (months.length === 0) return
+    const ok = window.confirm(
+      `Assigner a chaque enveloppe sa depense moyenne des ${months.length} mois precedents ? ` +
+        'Les montants assignes de ce mois seront remplaces.',
+    )
+    if (!ok) return
+    setAutoAssigning(true)
+    try {
+      const past = await Promise.all(
+        months.map((m) =>
+          queryClient.ensureQueryData({
+            queryKey: budgetKey(m),
+            queryFn: () => fetchBudgetMonth(m, taxo),
+          }),
+        ),
+      )
+      // Somme des depenses par categorie sur la fenetre (activite negative ->
+      // depense positive ; les entrees/remboursements ne gonflent pas le budget).
+      const spendByCat = new Map<string, number>()
+      for (const b of past) {
+        for (const block of b.groups) {
+          for (const row of block.rows) {
+            const spent = Math.max(-row.activity, 0)
+            spendByCat.set(row.category.id, (spendByCat.get(row.category.id) ?? 0) + spent)
+          }
+        }
+      }
+      for (const block of budget.groups) {
+        for (const row of block.rows) {
+          const avg = Math.round((spendByCat.get(row.category.id) ?? 0) / months.length)
+          if (avg !== row.assigned) assign.mutate({ categoryId: row.category.id, amount: avg })
+        }
+      }
+    } finally {
+      setAutoAssigning(false)
+    }
+  }
 
   // Plan de financement du mois courant : pour chaque categorie ayant un objectif,
   // le supplement a assigner (neededThisMonth). On ignore les objectifs deja
@@ -938,7 +991,17 @@ export function BudgetPage() {
       </div>
       {/* Tout replier / tout deplier les groupes du budget. */}
       {groupIds.length > 0 && (
-        <div className="flex justify-end gap-1.5">
+        <div className="flex flex-wrap justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => void autoAssign()}
+            disabled={autoAssigning}
+            className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-soft transition-colors hover:bg-surface2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+            title="Assigner a chaque enveloppe sa depense moyenne des 3 derniers mois"
+          >
+            <Wand2 className="h-4 w-4" />
+            {autoAssigning ? 'Calcul…' : 'Auto-assign'}
+          </button>
           <button
             type="button"
             onClick={() => setHideEmptyRows(!hideEmptyRows)}
