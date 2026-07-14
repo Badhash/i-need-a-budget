@@ -46,14 +46,15 @@ export interface Aspsp {
  * Liste des connexions bancaires de l'utilisateur, lue via l'Edge Function /api
  * (action getBankConnections). Le tri/statut est calcule cote serveur.
  */
+export const BANK_CONNECTIONS_KEY = ['bankConnections'] as const
+
+export async function fetchBankConnections(): Promise<BankConnection[]> {
+  const { connections } = await apiCall<{ connections: BankConnection[] }>('getBankConnections')
+  return connections
+}
+
 export function useBankConnections(): UseQueryResult<BankConnection[]> {
-  return useQuery({
-    queryKey: ['bankConnections'],
-    queryFn: async () => {
-      const { connections } = await apiCall<{ connections: BankConnection[] }>('getBankConnections')
-      return connections
-    },
-  })
+  return useQuery({ queryKey: BANK_CONNECTIONS_KEY, queryFn: fetchBankConnections })
 }
 
 export interface SyncLog {
@@ -68,14 +69,15 @@ export interface SyncLog {
  * Historique des 10 derniers runs de synchronisation, lu via l'Edge Function
  * /api (action listSyncLogs). Ordonne du plus recent au plus ancien.
  */
+export const SYNC_LOGS_KEY = ['syncLogs'] as const
+
+export async function fetchSyncLogs(): Promise<SyncLog[]> {
+  const { logs } = await apiCall<{ logs: SyncLog[] }>('listSyncLogs')
+  return logs
+}
+
 export function useSyncLogs(): UseQueryResult<SyncLog[]> {
-  return useQuery({
-    queryKey: ['syncLogs'],
-    queryFn: async () => {
-      const { logs } = await apiCall<{ logs: SyncLog[] }>('listSyncLogs')
-      return logs
-    },
-  })
+  return useQuery({ queryKey: SYNC_LOGS_KEY, queryFn: fetchSyncLogs })
 }
 
 // Appel bas niveau vers l'endpoint sync-bank, JWT de la session courante joint

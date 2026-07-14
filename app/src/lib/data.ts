@@ -143,12 +143,12 @@ function hydrateBootstrap(raw: BootstrapResponse): Bootstrap {
   }
 }
 
-async function fetchBootstrap(): Promise<Bootstrap> {
+export async function fetchBootstrap(): Promise<Bootstrap> {
   const raw = await apiCall<BootstrapResponse>('bootstrap')
   return hydrateBootstrap(raw)
 }
 
-const BOOTSTRAP_KEY = ['bootstrap'] as const
+export const BOOTSTRAP_KEY = ['bootstrap'] as const
 
 export function useBootstrap(): UseQueryResult<Bootstrap> {
   return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap })
@@ -242,15 +242,25 @@ function adaptBudget(flat: FlatBudgetMonth, taxo: Bootstrap): BudgetMonth {
 // Hooks de lecture
 // ---------------------------------------------------------------------------
 
+/** Cle de query du budget d'un mois (partagee hook + prefetch). */
+export const budgetKey = (month: string) => ['budget', month] as const
+
+/**
+ * Charge le budget d'un mois. La taxonomie (bootstrap) est requise pour adapter
+ * la forme plate du moteur en forme groupee : hook et prefetch passent la meme
+ * instance deja en cache, aucune logique dupliquee.
+ */
+export async function fetchBudgetMonth(month: string, taxo: Bootstrap): Promise<BudgetMonth> {
+  const flat = await apiCall<FlatBudgetMonth>('getBudgetMonth', { month })
+  return adaptBudget(flat, taxo)
+}
+
 export function useBudgetMonth(month: string): UseQueryResult<BudgetMonth> {
   const boot = useBootstrap()
   return useQuery({
-    queryKey: ['budget', month],
+    queryKey: budgetKey(month),
     enabled: boot.data !== undefined,
-    queryFn: async () => {
-      const flat = await apiCall<FlatBudgetMonth>('getBudgetMonth', { month })
-      return adaptBudget(flat, boot.data!)
-    },
+    queryFn: () => fetchBudgetMonth(month, boot.data!),
   })
 }
 
@@ -267,24 +277,31 @@ function toTransaction(t: ApiTransaction): Transaction {
   }
 }
 
+export const TRANSACTIONS_KEY = ['transactions'] as const
+
+export async function fetchTransactions(): Promise<Transaction[]> {
+  const { transactions } = await apiCall<{ transactions: ApiTransaction[] }>('listTransactions')
+  return transactions.map(toTransaction)
+}
+
 export function useTransactions(): UseQueryResult<Transaction[]> {
-  return useQuery({
-    queryKey: ['transactions'],
-    queryFn: async () => {
-      const { transactions } = await apiCall<{ transactions: ApiTransaction[] }>('listTransactions')
-      return transactions.map(toTransaction)
-    },
-  })
+  return useQuery({ queryKey: TRANSACTIONS_KEY, queryFn: fetchTransactions })
 }
 
 export function useAccounts(): UseQueryResult<AccountWithBalance[]> {
   return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.accounts })
 }
 
+export const reportsKey = (month: string) => ['reports', month] as const
+
+export function fetchReports(month: string): Promise<ReportsData> {
+  return apiCall<ReportsData>('getReports', { month })
+}
+
 export function useReports(month: string): UseQueryResult<ReportsData> {
   return useQuery({
-    queryKey: ['reports', month],
-    queryFn: () => apiCall<ReportsData>('getReports', { month }),
+    queryKey: reportsKey(month),
+    queryFn: () => fetchReports(month),
   })
 }
 

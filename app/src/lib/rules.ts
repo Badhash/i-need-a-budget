@@ -30,16 +30,15 @@ export function opLabel(op: RuleMatcher['op']): string {
   return RULE_OPS.find((o) => o.value === op)?.label ?? op
 }
 
-const RULES_KEY = ['rules'] as const
+export const RULES_KEY = ['rules'] as const
+
+export async function fetchRules(): Promise<Rule[]> {
+  const { rules } = await apiCall<{ rules: Rule[] }>('listRules')
+  return rules
+}
 
 export function useRules(): UseQueryResult<Rule[]> {
-  return useQuery({
-    queryKey: RULES_KEY,
-    queryFn: async () => {
-      const { rules } = await apiCall<{ rules: Rule[] }>('listRules')
-      return rules
-    },
-  })
+  return useQuery({ queryKey: RULES_KEY, queryFn: fetchRules })
 }
 
 export interface CreateRuleInput {

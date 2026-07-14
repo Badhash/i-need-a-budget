@@ -1,33 +1,136 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { RouterProvider } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { router } from '@/router'
 import { useAuthStore } from '@/stores/auth'
-import { bankFinalizeAuth } from '@/lib/bank'
-import { useBootstrap, useBudgetMonth, useTransactions } from '@/lib/data'
-import { useUiStore } from '@/stores/ui'
+import {
+  BANK_CONNECTIONS_KEY,
+  SYNC_LOGS_KEY,
+  bankFinalizeAuth,
+  fetchBankConnections,
+  fetchSyncLogs,
+} from '@/lib/bank'
+import {
+  BOOTSTRAP_KEY,
+  TRANSACTIONS_KEY,
+  budgetKey,
+  fetchBootstrap,
+  fetchBudgetMonth,
+  fetchReports,
+  fetchTransactions,
+  reportsKey,
+  type Bootstrap,
+} from '@/lib/data'
+import { RULES_KEY, fetchRules } from '@/lib/rules'
+import { TARGETS_KEY, fetchTargets } from '@/lib/targets'
+import { MAX_MONTH, MIN_MONTH } from '@/lib/format'
+import { monthRange } from '@/lib/format'
 import { AppLoader } from '@/components/shared/AppLoader'
 
 /**
- * Porte de demarrage (utilisateur connecte) : precharge les donnees de fond
- * — comptes, budget du mois courant, transactions — et affiche l'ecran de
- * chargement tant qu'elles ne sont pas pretes. Une fois le cache TanStack
- * peuple, la navigation entre les vues est instantanee. Sur une base
- * volumineuse (milliers de transactions), evite d'afficher des pages a moitie
- * remplies.
+ * Precharge en parallele TOUTES les donnees atteignables de l'app dans le cache
+ * TanStack, en incrementant `onProgress` au fil des queries terminees. Objectif :
+ * apres cet ecran, toute navigation (changer de mois passe/futur, ouvrir
+ * n'importe quelle page) est instantanee, sans spinner ni refetch visible.
+ *
+ * La bootstrap (taxonomie) est chargee d'abord car les budgets en dependent
+ * (adaptation forme plate -> groupee). Le reste part en parallele via
+ * Promise.allSettled : une query en erreur ne bloque JAMAIS l'entree dans l'app,
+ * les vues gerent leurs propres etats vides/erreur.
+ *
+ * Prechargement (par mois de MIN_MONTH a MAX_MONTH inclus) : bootstrap,
+ * transactions, objectifs, regles, connexions bancaires, logs de sync, budget de
+ * chaque mois, rapport de chaque mois.
+ */
+async function preloadAll(
+  queryClient: QueryClient,
+  onProgress: (completed: number, total: number) => void,
+): Promise<void> {
+  const months = monthRange(MIN_MONTH, MAX_MONTH)
+
+  // Etape bloquante : la taxonomie doit exister avant d'adapter les budgets.
+  // On la compte dans la progression globale. En cas d'echec, on entre quand
+  // meme (les budgets seront alors ignores et se chargeront a la demande).
+  let taxo: Bootstrap | undefined
+  // bootstrap (1) + 5 lectures globales (transactions, objectifs, regles,
+  // connexions bancaires, logs de sync) + budget & rapport de chaque mois.
+  const total = 1 + 5 + months.length * 2
+  let completed = 0
+  const tick = () => onProgress(++completed, total)
+
+  try {
+    taxo = await queryClient.ensureQueryData({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap })
+  } catch {
+    // Bootstrap indisponible : on n'echoue pas, mais on ne precharge pas les
+    // budgets (ils requierent la taxonomie).
+  }
+  tick()
+
+  const tasks: Promise<unknown>[] = [
+    queryClient.prefetchQuery({ queryKey: TRANSACTIONS_KEY, queryFn: fetchTransactions }).finally(tick),
+    queryClient.prefetchQuery({ queryKey: TARGETS_KEY, queryFn: fetchTargets }).finally(tick),
+    queryClient.prefetchQuery({ queryKey: RULES_KEY, queryFn: fetchRules }).finally(tick),
+    queryClient
+      .prefetchQuery({ queryKey: BANK_CONNECTIONS_KEY, queryFn: fetchBankConnections })
+      .finally(tick),
+    queryClient.prefetchQuery({ queryKey: SYNC_LOGS_KEY, queryFn: fetchSyncLogs }).finally(tick),
+  ]
+
+  for (const m of months) {
+    if (taxo) {
+      const captured = taxo
+      tasks.push(
+        queryClient.prefetchQuery({ queryKey: budgetKey(m), queryFn: () => fetchBudgetMonth(m, captured) }).finally(tick),
+      )
+    } else {
+      // Pas de taxonomie : on ne peut pas construire le budget, mais on marque
+      // l'etape comme terminee pour que la progression atteigne 100 %.
+      tick()
+    }
+    tasks.push(
+      queryClient.prefetchQuery({ queryKey: reportsKey(m), queryFn: () => fetchReports(m) }).finally(tick),
+    )
+  }
+
+  await Promise.allSettled(tasks)
+}
+
+/**
+ * Porte de demarrage (utilisateur connecte) : precharge toutes les donnees de
+ * fond avec une barre de progression, puis rend l'app. Le prechargement est
+ * lance une seule fois (garde de ref, robuste au double-montage StrictMode).
  */
 function AuthedBootGate({ children }: { children: ReactNode }) {
-  const month = useUiStore((s) => s.month)
-  const boot = useBootstrap()
-  const budget = useBudgetMonth(month)
-  const transactions = useTransactions()
+  const queryClient = useQueryClient()
+  const [ready, setReady] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const startedRef = useRef(false)
 
-  // On attend le socle (comptes) + le budget du mois affiche par defaut. Les
-  // transactions se chargent en parallele ; une erreur ne bloque jamais l'entree
-  // dans l'app (les vues gerent leurs propres etats vides/erreur).
-  if (boot.isLoading || budget.isLoading || transactions.isLoading) {
-    return <AppLoader />
+  useEffect(() => {
+    // Garde de ref (et non un flag "cancelled" de nettoyage) : sous StrictMode
+    // l'effet est monte/demonte/remonte. Un flag cancelled pose au nettoyage du
+    // premier montage annulerait le seul prechargement reellement lance (le
+    // second montage ressort ici immediatement), laissant l'app bloquee. La ref
+    // garantit une unique execution qui va toujours jusqu'a `ready`.
+    if (startedRef.current) return
+    startedRef.current = true
+
+    // Progression monotone : ensureQueryData/prefetchQuery sont idempotents (le
+    // cache deduplique), donc un eventuel double appel ne fait jamais reculer la
+    // barre.
+    const onProgress = (done: number, total: number) => {
+      setProgress((prev) => Math.max(prev, total > 0 ? (done / total) * 100 : 100))
+    }
+
+    void preloadAll(queryClient, onProgress).finally(() => {
+      setProgress(100)
+      setReady(true)
+    })
+  }, [queryClient])
+
+  if (!ready) {
+    return <AppLoader progress={progress} />
   }
   return <>{children}</>
 }

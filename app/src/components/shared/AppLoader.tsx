@@ -2,11 +2,25 @@ import { Wallet } from 'lucide-react'
 
 /**
  * Ecran de chargement plein ecran affiche au lancement, le temps que les
- * donnees de fond (comptes, budget du mois, transactions) soient pretes. Mini
- * animation "respiration" du logo + points rebondissants, coupee si l'OS
- * demande la reduction des animations. Themable (clair/sombre).
+ * donnees de fond (comptes, budgets de tous les mois, transactions, objectifs,
+ * regles, connexions bancaires, rapports) soient prechargees. Mini animation
+ * "respiration" du logo + points rebondissants, coupee si l'OS demande la
+ * reduction des animations. Themable (clair/sombre).
+ *
+ * Prop optionnelle `progress` (0 -> 100) : quand fournie, affiche une fine barre
+ * de progression aux couleurs de l'accent + un pourcentage discret. Sans elle,
+ * apparence inchangee (ex. ecran "Connexion…").
  */
-export function AppLoader({ message = 'Chargement de ton budget…' }: { message?: string }) {
+export function AppLoader({
+  message = 'Chargement de ton budget…',
+  progress,
+}: {
+  message?: string
+  progress?: number
+}) {
+  const hasProgress = progress !== undefined
+  const pct = hasProgress ? Math.max(0, Math.min(100, Math.round(progress))) : 0
+
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center gap-7 bg-bg px-6">
       <div className="relative flex items-center justify-center">
@@ -27,6 +41,26 @@ export function AppLoader({ message = 'Chargement de ton budget…' }: { message
             />
           ))}
         </div>
+
+        {hasProgress && (
+          <div className="mt-1 flex w-56 max-w-[70vw] flex-col items-center gap-2">
+            <div
+              className="h-1.5 w-full overflow-hidden rounded-full bg-accent/15"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct}
+              aria-label="Progression du chargement"
+            >
+              <div
+                className="loader-bar h-full rounded-full bg-accent transition-[width] duration-300 ease-out motion-reduce:transition-none"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <p className="text-[12px] tabular-nums text-soft">{pct} %</p>
+          </div>
+        )}
+
         <p className="text-[13px] text-soft">{message}</p>
       </div>
     </div>

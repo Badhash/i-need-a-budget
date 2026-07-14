@@ -14,9 +14,9 @@ export interface Target {
   dueMonth: string | null
 }
 
-const TARGETS_KEY = ['targets'] as const
+export const TARGETS_KEY = ['targets'] as const
 
-async function fetchTargets(): Promise<Target[]> {
+export async function fetchTargets(): Promise<Target[]> {
   const { targets } = await apiCall<{ targets: Target[] }>('listTargets')
   return targets
 }
