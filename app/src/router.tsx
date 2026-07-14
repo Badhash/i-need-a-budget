@@ -1,3 +1,4 @@
+import { lazy, Suspense, type ComponentType } from 'react'
 import {
   createHashHistory,
   createRootRouteWithContext,
@@ -9,11 +10,48 @@ import {
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginPage } from '@/pages/LoginPage'
 import { BudgetPage } from '@/pages/BudgetPage'
-import { TransactionsPage } from '@/pages/TransactionsPage'
-import { AccountsPage } from '@/pages/AccountsPage'
-import { ReportsPage } from '@/pages/ReportsPage'
-import { RulesPage } from '@/pages/RulesPage'
-import { SettingsPage } from '@/pages/SettingsPage'
+import { Skeleton } from '@/components/ui/skeleton'
+
+// Fallback de chargement des pages differees (code-splitting). Cale sur l'UI
+// existante (Skeleton) plutot qu'un spinner ou un texte brut : on evite le
+// clignotement et on garde la sensation de reactivite.
+function PageFallback() {
+  return (
+    <div className="space-y-4">
+      <Skeleton className="h-9 w-48" />
+      <Skeleton className="h-32 w-full" />
+      <Skeleton className="h-32 w-full" />
+    </div>
+  )
+}
+
+// Charge une page en lazy (chunk separe) et l'enveloppe dans un Suspense avec le
+// fallback commun. Les pages lourdes (Recharts, TanStack Table) sortent ainsi du
+// chunk initial ; seule BudgetPage (page de demarrage) reste en import statique.
+function lazyPage(loader: () => Promise<{ default: ComponentType }>) {
+  const Lazy = lazy(loader)
+  return function LazyRoute() {
+    return (
+      <Suspense fallback={<PageFallback />}>
+        <Lazy />
+      </Suspense>
+    )
+  }
+}
+
+const TransactionsPage = lazyPage(() =>
+  import('@/pages/TransactionsPage').then((m) => ({ default: m.TransactionsPage })),
+)
+const AccountsPage = lazyPage(() =>
+  import('@/pages/AccountsPage').then((m) => ({ default: m.AccountsPage })),
+)
+const ReportsPage = lazyPage(() =>
+  import('@/pages/ReportsPage').then((m) => ({ default: m.ReportsPage })),
+)
+const RulesPage = lazyPage(() => import('@/pages/RulesPage').then((m) => ({ default: m.RulesPage })))
+const SettingsPage = lazyPage(() =>
+  import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+)
 
 interface RouterAuthContext {
   auth: { isAuthenticated: boolean; userId: string | null }
