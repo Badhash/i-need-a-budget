@@ -86,6 +86,7 @@ function useCategorize() {
 function RowMenu({ row, className }: { row: TxRow; className?: string }) {
   const queryClient = useQueryClient()
   const accounts = useAccountsList()
+  const setEditTx = useUiStore((s) => s.setEditTx)
   const [error, setError] = useState<string | null>(null)
   const isTransfer = Boolean(row.tx.transferGroupId)
   const targets = accounts.filter((a) => a.id !== row.tx.accountId)
@@ -139,6 +140,10 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          {/* Un transfert ne se modifie pas ici : annuler le virement d'abord. */}
+          {!isTransfer && (
+            <DropdownMenuItem onSelect={() => setEditTx(row.tx)}>Modifier</DropdownMenuItem>
+          )}
           {isTransfer ? (
             <DropdownMenuItem onSelect={() => revert.mutate()}>
               Annuler le virement

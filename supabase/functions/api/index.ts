@@ -611,6 +611,65 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
   return { ok: true }
 }
 
+async function actionUpdateTransaction(userId: string, params: Params) {
+  const transactionId = requireUuid(params.transactionId, 'transactionId')
+  const accountId = requireUuid(params.accountId, 'accountId')
+  const bookingDate = requireDate(params.date)
+  const amount = requireAmount(params.amount)
+  const label = requireText(params.label, 'label')
+  const categoryId = params.categoryId == null ? null : requireUuid(params.categoryId, 'categoryId')
+  const notes = params.notes == null ? null : requireText(params.notes, 'notes', 500)
+
+  const { data, error } = await admin
+    .from('transactions')
+    .select('id, enc_payload')
+    .eq('user_id', userId)
+    .eq('id', transactionId)
+    .maybeSingle()
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  if (!data) throw new ApiError(404, 'transaction inconnue')
+
+  const keys = await getKeys()
+  const existing = await decryptJson<TxPayload>(keys, pgHexToBytes(data.enc_payload), [
+    'transactions',
+    userId,
+  ])
+  // Un transfert doit rester coherent avec son miroir (montant oppose, meme
+  // date) : on ne l'edite pas ici, l'utilisateur l'annule d'abord via
+  // convertTransferToNormal.
+  if (existing.transferGroupId) throw new ApiError(400, 'un transfert ne se modifie pas, annulez-le d abord')
+
+  // Integrite referentielle verifiee en Edge Function (pas de FK SQL metier).
+  const [accounts, categories] = await Promise.all([
+    loadAll<AccountPayload>('accounts', userId),
+    loadAll<CategoryPayload>('categories', userId),
+  ])
+  if (!accounts.some((a) => a.id === accountId)) throw new ApiError(404, 'compte inconnu')
+  if (categoryId && !categories.some((c) => c.id === categoryId)) {
+    throw new ApiError(404, 'categorie inconnue')
+  }
+
+  const bookingMonth = bookingDate.slice(0, 7)
+  // On repart de l'existant pour preserver les champs non edites (counterparty).
+  const payload: TxPayload = {
+    ...existing,
+    accountId,
+    categoryId,
+    bookingDate,
+    bookingMonth,
+    amount,
+    label,
+    notes,
+  }
+  // month_idx recalcule (identique si le mois n'a pas change). tx_hash n'est
+  // PAS repasse en extra : il reste fige, la dedup des imports ne bouge pas
+  // meme si le montant ou la date changent.
+  await updateEncrypted('transactions', userId, transactionId, payload, {
+    month_idx: await txMonthIdx(keys, userId, bookingMonth),
+  })
+  return { ok: true }
+}
+
 // ---------------------------------------------------------------------------
 // Transferts entre comptes (conversion d'une transaction existante)
 // ---------------------------------------------------------------------------
@@ -1528,6 +1587,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   deleteCategoryGroup: actionDeleteCategoryGroup,
   reorderCategories: actionReorderCategories,
   reorderCategoryGroups: actionReorderCategoryGroups,
+  updateTransaction: actionUpdateTransaction,
   convertToTransfer: actionConvertToTransfer,
   convertTransferToNormal: actionConvertTransferToNormal,
   deleteTransaction: actionDeleteTransaction,

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Mode, ThemeId } from '@/styles/themes'
+import type { Transaction } from '@/mocks/data'
 import { addMonths, CURRENT_MONTH, MAX_MONTH, MIN_MONTH } from '@/lib/format'
 
 interface UiState {
@@ -8,12 +9,14 @@ interface UiState {
   mode: Mode
   month: string
   addTxOpen: boolean
+  editTx: Transaction | null
   setTheme: (theme: ThemeId) => void
   setMode: (mode: Mode) => void
   setMonth: (month: string) => void
   shiftMonth: (delta: 1 | -1) => void
   resetMonth: () => void
   setAddTxOpen: (open: boolean) => void
+  setEditTx: (tx: Transaction | null) => void
 }
 
 export const useUiStore = create<UiState>()(
@@ -23,6 +26,7 @@ export const useUiStore = create<UiState>()(
       mode: 'system',
       month: CURRENT_MONTH,
       addTxOpen: false,
+      editTx: null,
       setTheme: (theme) => set({ theme }),
       setMode: (mode) => set({ mode }),
       setMonth: (month) => {
@@ -34,6 +38,7 @@ export const useUiStore = create<UiState>()(
       },
       resetMonth: () => set({ month: CURRENT_MONTH }),
       setAddTxOpen: (addTxOpen) => set({ addTxOpen }),
+      setEditTx: (editTx) => set({ editTx }),
     }),
     {
       name: 'inab-ui',

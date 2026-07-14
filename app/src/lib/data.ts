@@ -315,6 +315,28 @@ export async function apiAddTransaction(input: NewTransactionInput): Promise<{ i
   })
 }
 
+export interface UpdateTransactionInput {
+  transactionId: string
+  accountId: string
+  date: string
+  label: string
+  categoryId: string | null
+  amount: number // centimes signes
+  note?: string | null
+}
+
+export async function apiUpdateTransaction(input: UpdateTransactionInput): Promise<void> {
+  await apiCall('updateTransaction', {
+    transactionId: input.transactionId,
+    accountId: input.accountId,
+    date: input.date,
+    label: input.label,
+    categoryId: input.categoryId,
+    amount: input.amount,
+    notes: input.note ?? null,
+  })
+}
+
 export interface CreateAccountInput {
   name: string
   institution: string
