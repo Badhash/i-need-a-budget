@@ -72,6 +72,48 @@ const NO_GROUP = 'Sans groupe'
 const HIDDEN_GROUP_MARKER = 'hidden categories'
 
 // ---------------------------------------------------------------------------
+// Decodage des fichiers YNAB : UTF-8 avec reparation CESU-8
+// ---------------------------------------------------------------------------
+//
+// Bug d'export YNAB constate sur fichiers reels : certains emojis anciens sont
+// encodes en CESU-8 (paire de substituts UTF-16 encodee en deux sequences de
+// 3 octets ED xx xx), invalide en UTF-8 strict. file.text() les remplacerait
+// par U+FFFD et le nom de categorie ne correspondrait plus a celui du Plan
+// (ex. "(?)Restaurant" vs "🍴Restaurant" -> categorie dupliquee). On repare
+// les paires avant decodage.
+
+export function decodeYnabCsv(buffer: ArrayBuffer): string {
+  const src = new Uint8Array(buffer)
+  const out = new Uint8Array(src.length)
+  let w = 0
+  for (let i = 0; i < src.length; i++) {
+    // Substitut haut CESU-8 : ED A0-AF xx suivi du substitut bas ED B0-BF xx.
+    if (
+      src[i] === 0xed &&
+      i + 5 < src.length &&
+      src[i + 1] >= 0xa0 &&
+      src[i + 1] <= 0xaf &&
+      src[i + 3] === 0xed &&
+      src[i + 4] >= 0xb0 &&
+      src[i + 4] <= 0xbf
+    ) {
+      const hi = 0xd800 + ((src[i + 1] - 0xa0) << 6) + (src[i + 2] & 0x3f)
+      const lo = 0xdc00 + ((src[i + 4] - 0xb0) << 6) + (src[i + 5] & 0x3f)
+      const cp = 0x10000 + ((hi - 0xd800) << 10) + (lo - 0xdc00)
+      // Reencodage UTF-8 4 octets du point de code repare.
+      out[w++] = 0xf0 | (cp >> 18)
+      out[w++] = 0x80 | ((cp >> 12) & 0x3f)
+      out[w++] = 0x80 | ((cp >> 6) & 0x3f)
+      out[w++] = 0x80 | (cp & 0x3f)
+      i += 5
+    } else {
+      out[w++] = src[i]
+    }
+  }
+  return new TextDecoder('utf-8', { fatal: false }).decode(out.subarray(0, w))
+}
+
+// ---------------------------------------------------------------------------
 // Parseur CSV robuste (guillemets, virgules internes, CRLF, "" echappe)
 // ---------------------------------------------------------------------------
 
@@ -436,8 +478,11 @@ function parseBudget(
     // Les lignes de revenus / "Ready to Assign" ne portent pas d'assignation.
     if (classifyCategory(group, category) !== 'normal') continue
     const amount = parseAmountToCents(at(r, iBudgeted))
-    // Ignore 0 (rien de budgete) et negatifs (non representables cote INAB).
-    if (amount <= 0) continue
+    // Ignore 0 (rien de budgete). Les NEGATIFS sont CONSERVES : dans YNAB,
+    // retirer de l'argent d'une enveloppe = "Assigned" negatif sur le mois.
+    // Les ignorer gonfle la somme des assignes et effondre le Ready to Assign
+    // (constate sur donnees reelles : -57 000 EUR d'ecart).
+    if (amount === 0) continue
     const catKey = ensureCategory(acc, group, category)
     byKey.set(`${month}||${catKey}`, { categoryKey: catKey, month, amount })
   }
@@ -518,6 +563,34 @@ export function parseYnabExport(registerText: string, budgetText?: string): Pars
 }
 
 // ---------------------------------------------------------------------------
+// Filtre de comptes : ne garder que les comptes YNAB choisis par l'utilisateur
+// ---------------------------------------------------------------------------
+//
+// Les categories/groupes/assignations sont CONSERVES en entier (l'historique
+// budgetaire est global au budget YNAB, pas rattache a un compte) ; seuls les
+// comptes et leurs transactions sont ecartes.
+
+export function filterImportAccounts(parsed: ParsedImport, keys: Set<string>): ParsedImport {
+  const accounts = parsed.accounts.filter((a) => keys.has(a.key))
+  const transactions = parsed.transactions.filter((t) => keys.has(t.accountKey))
+  let minDate: string | null = null
+  let maxDate: string | null = null
+  for (const t of transactions) {
+    if (!minDate || t.date < minDate) minDate = t.date
+    if (!maxDate || t.date > maxDate) maxDate = t.date
+  }
+  return {
+    ...parsed,
+    accounts,
+    transactions,
+    summary: {
+      ...parsed.summary,
+      dateRange: minDate && maxDate ? { min: minDate, max: maxDate } : null,
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrateur : begin (destructif) -> transactions (lots 200) -> assignations (lots 500)
 // ---------------------------------------------------------------------------
 
@@ -553,7 +626,8 @@ function validateBeforeWipe(parsed: ParsedImport): string | null {
   }
   for (const a of parsed.assignments) {
     if (!MONTH_RE.test(a.month)) return `mois d'assignation invalide (${a.month})`
-    if (!Number.isSafeInteger(a.amount) || a.amount < 0) return 'montant assigné invalide'
+    // Negatif autorise (retrait d'enveloppe YNAB), seul un non-entier est refuse.
+    if (!Number.isSafeInteger(a.amount)) return 'montant assigné invalide'
   }
   for (const g of parsed.groups) if (!g.name.trim() || g.name.length > 80) return 'nom de groupe invalide'
   for (const c of parsed.categories) {

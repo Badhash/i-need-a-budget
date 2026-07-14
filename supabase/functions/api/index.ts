@@ -1807,8 +1807,12 @@ async function actionImportReplaceAssignments(userId: string, params: Params) {
       throw new ApiError(400, 'les categories de revenus ne recoivent pas d assignation')
     }
     const month = requireMonth(o.month)
+    // Contrairement a setAssigned (saisie manuelle, >= 0), l'import YNAB accepte
+    // les montants NEGATIFS : dans YNAB, retirer de l'argent d'une enveloppe se
+    // traduit par un "Assigned" negatif sur le mois. Le moteur les gere
+    // nativement (available = rollover + assigned + activity) et les ignorer
+    // fausserait massivement le Ready to Assign (somme des assignes gonflee).
     const amount = requireAmount(o.amount)
-    if (amount < 0) throw new ApiError(400, 'montant assigne negatif interdit')
     const payload: AssignmentPayload = { categoryId, month, amount }
     rows.push({
       user_id: userId,

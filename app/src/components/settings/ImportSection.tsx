@@ -1,8 +1,10 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, FileUp, Loader2, Upload } from 'lucide-react'
 import { apiCall } from '@/lib/api'
 import {
+  decodeYnabCsv,
+  filterImportAccounts,
   parseYnabExport,
   runYnabImport,
   type ImportSummary,
@@ -76,6 +78,28 @@ export function ImportSection() {
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState<{ pct: number; text: string } | null>(null)
   const [result, setResult] = useState<ImportSummary | null>(null)
+  const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set())
+
+  // Donnees effectivement importees = donnees analysees, restreintes aux
+  // comptes coches. Compteur de transactions par compte pour l'affichage.
+  const txCountByAccount = useMemo(() => {
+    const m = new Map<string, number>()
+    if (parsed) for (const t of parsed.transactions) m.set(t.accountKey, (m.get(t.accountKey) ?? 0) + 1)
+    return m
+  }, [parsed])
+  const effective = useMemo(
+    () => (parsed ? filterImportAccounts(parsed, selectedAccounts) : null),
+    [parsed, selectedAccounts],
+  )
+
+  function toggleAccount(key: string) {
+    setSelectedAccounts((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
   // Verrou SYNCHRONE contre le double-declenchement (un second clic rapide ne
   // doit jamais lancer un deuxieme effacement concurrent).
   const importingRef = useRef(false)
@@ -110,14 +134,19 @@ export function ImportSection() {
     setResult(null)
     setAnalyzing(true)
     try {
-      const registerText = await registerFile.text()
-      const budgetText = budgetFile ? await budgetFile.text() : undefined
+      // decodeYnabCsv (et non file.text()) : repare les emojis CESU-8 des
+      // exports YNAB, sinon des categories se dedoublent silencieusement.
+      const registerText = decodeYnabCsv(await registerFile.arrayBuffer())
+      const budgetText = budgetFile ? decodeYnabCsv(await budgetFile.arrayBuffer()) : undefined
       const p = parseYnabExport(registerText, budgetText)
       if (p.transactions.length === 0) {
         setError('Aucune transaction lisible dans Register.csv. Vérifie le fichier.')
         setParsed(null)
       } else {
         setParsed(p)
+        // Tous les comptes coches par defaut ; l'utilisateur ecarte ceux qu'il
+        // ne veut pas migrer (comptes clos, credits, tracking...).
+        setSelectedAccounts(new Set(p.accounts.map((a) => a.key)))
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Impossible d'analyser les fichiers.")
@@ -128,7 +157,7 @@ export function ImportSection() {
   }
 
   async function handleImport() {
-    if (!parsed) return
+    if (!effective || effective.accounts.length === 0) return
     if (importingRef.current) return // garde anti double-declenchement
     importingRef.current = true
     setConfirmOpen(false)
@@ -139,7 +168,7 @@ export function ImportSection() {
       // 1) Sauvegarde AVANT effacement. Si elle echoue, on n'efface rien.
       await downloadSafetyBackup()
       // 2) Import (valide toute la forme avant le moindre wipe, puis efface + ecrit).
-      const summary = await runYnabImport(parsed, (pct, text) => setProgress({ pct, text }))
+      const summary = await runYnabImport(effective, (pct, text) => setProgress({ pct, text }))
       setResult(summary)
       setParsed(null)
       setRegisterFile(null)
@@ -202,15 +231,35 @@ export function ImportSection() {
 
         {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
 
-        {parsed && !importing && !result && (
+        {parsed && effective && !importing && !result && (
           <div className="space-y-3 rounded-xl border border-line p-4">
-            <p className="label-caps">Aperçu</p>
+            <p className="label-caps">Comptes à importer</p>
+            <div className="space-y-0.5">
+              {parsed.accounts.map((a) => (
+                <label
+                  key={a.key}
+                  className="flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl px-2 text-[14px] active:bg-surface2"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedAccounts.has(a.key)}
+                    onChange={() => toggleAccount(a.key)}
+                    className="h-5 w-5 shrink-0 accent-[rgb(var(--accent))]"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                  <span className="shrink-0 text-[12.5px] text-soft tnum">
+                    {(txCountByAccount.get(a.key) ?? 0).toLocaleString('fr-FR')} tx
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="label-caps border-t border-line/60 pt-3">Aperçu</p>
             <div className="grid grid-cols-2 gap-2 text-[13.5px] sm:grid-cols-3">
-              <PreviewStat label="Comptes" value={parsed.accounts.length} />
-              <PreviewStat label="Groupes" value={parsed.groups.length} />
-              <PreviewStat label="Catégories" value={parsed.categories.length} />
-              <PreviewStat label="Transactions" value={parsed.transactions.length} />
-              <PreviewStat label="Assignations" value={parsed.assignments.length} />
+              <PreviewStat label="Comptes" value={effective.accounts.length} />
+              <PreviewStat label="Groupes" value={effective.groups.length} />
+              <PreviewStat label="Catégories" value={effective.categories.length} />
+              <PreviewStat label="Transactions" value={effective.transactions.length} />
+              <PreviewStat label="Assignations" value={effective.assignments.length} />
             </div>
             <div className="space-y-1 border-t border-line/60 pt-3 text-[12.5px] text-soft">
               {range && (
@@ -229,6 +278,7 @@ export function ImportSection() {
             <Button
               variant="danger"
               onClick={() => setConfirmOpen(true)}
+              disabled={effective.accounts.length === 0}
               className="min-h-[44px] w-full sm:w-auto"
             >
               <AlertTriangle className="h-4 w-4" />
