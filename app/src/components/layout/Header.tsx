@@ -5,7 +5,8 @@ import { THEMES } from '@/styles/themes'
 import { resolveDark, useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { supabase } from '@/lib/supabase'
-import { addMonths, fmtMonthTitle, MAX_MONTH, MIN_MONTH } from '@/lib/format'
+import { addMonths, fmtEUR, fmtMonthTitle, MAX_MONTH, MIN_MONTH } from '@/lib/format'
+import { useBudgetMonth } from '@/lib/data'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -124,6 +125,55 @@ function UserMenu() {
   )
 }
 
+/**
+ * Resume compact du budget dans le header (DESKTOP uniquement, route /budget) :
+ * remplace le gros RtaBanner masque en lg. Met en avant le Pret a assigner
+ * (corail/rouge si negatif, vert sinon) et rappelle Assigne / Depense / Disponible
+ * du mois. Reutilise la meme query useBudgetMonth(month) que la page Budget.
+ */
+function HeaderBudgetSummary() {
+  const month = useUiStore((s) => s.month)
+  const { data: budget } = useBudgetMonth(month)
+  if (!budget) return null
+  const negative = budget.rta < 0
+
+  return (
+    <div className="hidden items-center gap-4 lg:flex">
+      <div
+        className={cn(
+          'flex items-center gap-2 rounded-xl px-3 py-1.5',
+          negative ? 'bg-danger/10' : 'bg-success/10',
+        )}
+        title={negative ? 'Vous avez assigné plus que vos revenus disponibles.' : undefined}
+      >
+        <span className="label-caps">Prêt à assigner</span>
+        <span
+          className={cn(
+            'text-[15px] font-semibold tnum leading-none',
+            negative ? 'text-danger' : 'text-success',
+          )}
+        >
+          {fmtEUR(budget.rta)}
+        </span>
+      </div>
+      <dl className="hidden items-center gap-4 xl:flex">
+        <div className="flex flex-col leading-tight">
+          <dt className="label-caps">Assigné</dt>
+          <dd className="tnum text-[13px] font-medium text-ink">{fmtEUR(budget.totals.assigned)}</dd>
+        </div>
+        <div className="flex flex-col leading-tight">
+          <dt className="label-caps">Dépensé</dt>
+          <dd className="tnum text-[13px] font-medium text-ink">{fmtEUR(-budget.totals.activity)}</dd>
+        </div>
+        <div className="flex flex-col leading-tight">
+          <dt className="label-caps">Disponible</dt>
+          <dd className="tnum text-[13px] font-medium text-ink">{fmtEUR(budget.totals.available)}</dd>
+        </div>
+      </dl>
+    </div>
+  )
+}
+
 // Le selecteur de mois ne s'affiche que la ou il agit : Budget et Rapports.
 // Sur Transactions (liste complete paginee), Comptes et Reglages il ne pilote
 // rien, on le masque.
@@ -133,6 +183,7 @@ export function Header() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const title = PAGE_TITLES[pathname] ?? 'Budget'
   const showMonth = MONTH_PAGES.has(pathname)
+  const isBudget = pathname === '/budget'
 
   return (
     <header className="pt-safe px-safe sticky top-0 z-40 border-b border-line bg-bg/85 backdrop-blur-md">
@@ -143,6 +194,7 @@ export function Header() {
           </span>
         </div>
         <h1 className={cn('text-[19px] font-semibold tracking-tight', 'hidden lg:block')}>{title}</h1>
+        {isBudget && <HeaderBudgetSummary />}
 
         <div className="flex flex-1 items-center justify-center lg:justify-end">
           {showMonth && <MonthSelector />}

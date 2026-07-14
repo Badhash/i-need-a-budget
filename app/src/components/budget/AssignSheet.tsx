@@ -11,6 +11,8 @@ interface AssignSheetProps {
   row: BudgetRow | null
   target: Target | null
   onCommit: (categoryId: string, cents: number) => void
+  // Clic sur l'activite : ferme la feuille et ouvre les transactions filtrees.
+  onViewActivity?: (categoryId: string) => void
   onClose: () => void
 }
 
@@ -31,7 +33,7 @@ function toDraft(cents: number): string {
  * d'ecran avec grand champ, raccourcis (objectif, remise a zero, increments)
  * et apercu du Disponible resultant. Validation optimiste via onCommit.
  */
-export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps) {
+export function AssignSheet({ row, target, onCommit, onViewActivity, onClose }: AssignSheetProps) {
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   // iOS : le clavier recouvre les feuilles fixed bottom-0. On remonte la
@@ -84,9 +86,19 @@ export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps
         <DialogHeader className="pb-1">
           <DialogTitle className="flex items-baseline justify-between gap-3 pr-8">
             <span className="truncate">{row.category.name}</span>
-            <span className="shrink-0 text-[12.5px] font-normal text-soft">
-              Activité <span className="tnum">{fmtEUR(row.activity)}</span>
-            </span>
+            {onViewActivity && row.activity !== 0 ? (
+              <button
+                type="button"
+                onClick={() => onViewActivity(row.category.id)}
+                className="shrink-0 rounded-md text-[12.5px] font-normal text-soft underline underline-offset-2 active:text-ink"
+              >
+                Activité <span className="tnum">{fmtEUR(row.activity)}</span>
+              </button>
+            ) : (
+              <span className="shrink-0 text-[12.5px] font-normal text-soft">
+                Activité <span className="tnum">{fmtEUR(row.activity)}</span>
+              </span>
+            )}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3 overflow-y-auto p-5 pt-0">
