@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import type { Category } from '@/mocks/data'
+import type { Category } from '@/types/domain'
 import { apiDeleteTarget, apiSetTarget, type SetTargetInput, type Target } from '@/lib/targets'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { CURRENT_MONTH, MAX_MONTH } from '@/lib/format'

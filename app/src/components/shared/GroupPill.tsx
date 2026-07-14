@@ -8,7 +8,7 @@ import {
   Sparkles,
   type LucideIcon,
 } from 'lucide-react'
-import type { CategoryGroup, GroupIcon } from '@/mocks/data'
+import type { CategoryGroup, GroupIcon } from '@/types/domain'
 import { cn } from '@/lib/utils'
 
 const ICONS: Record<GroupIcon, LucideIcon> = {

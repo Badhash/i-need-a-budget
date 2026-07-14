@@ -16,7 +16,7 @@ import {
   Undo2,
 } from 'lucide-react'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
-import type { Category } from '@/mocks/data'
+import type { Category } from '@/types/domain'
 import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { useTargets, neededThisMonth, type Target } from '@/lib/targets'

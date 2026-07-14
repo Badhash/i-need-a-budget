@@ -9,7 +9,7 @@ import {
   Target as TargetIcon,
   Trash2,
 } from 'lucide-react'
-import type { Category, CategoryGroup } from '@/mocks/data'
+import type { Category, CategoryGroup } from '@/types/domain'
 import type { BudgetRow } from '@/lib/budget'
 import {
   useDeleteCategoryMutation,

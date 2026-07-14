@@ -13,7 +13,7 @@ import type {
   CategoryGroup,
   GroupIcon,
   Transaction,
-} from '@/mocks/data'
+} from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
 import type { BudgetMonth, BudgetGroupBlock, BudgetRow } from '@/lib/budget'
 import type { ReportsData } from '@/lib/reports'

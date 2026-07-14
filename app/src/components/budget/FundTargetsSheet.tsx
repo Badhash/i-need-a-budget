@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { Amount } from '@/components/shared/Amount'
 import { fmtEUR } from '@/lib/format'
-import type { CategoryGroup } from '@/mocks/data'
+import type { CategoryGroup } from '@/types/domain'
 import { cn } from '@/lib/utils'
 
 /** Une ligne du plan de financement : ce qui sera AJOUTE a une categorie. */

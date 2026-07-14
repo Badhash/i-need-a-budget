@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiUpdateTransaction, type UpdateTransactionInput } from '@/lib/data'
-import type { Transaction } from '@/mocks/data'
+import type { Transaction } from '@/types/domain'
 import { useUiStore } from '@/stores/ui'
 import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import {

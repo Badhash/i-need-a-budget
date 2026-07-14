@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Mode, ThemeId } from '@/styles/themes'
-import type { Transaction } from '@/mocks/data'
+import type { Transaction } from '@/types/domain'
 import { addMonths, CURRENT_MONTH, MAX_MONTH, MIN_MONTH } from '@/lib/format'
 
 interface UiState {

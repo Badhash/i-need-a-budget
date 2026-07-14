@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import { useBootstrap } from '@/lib/data'
 import { newTempId } from '@/lib/mutationQueue'
-import type { Category, CategoryGroup, GroupIcon } from '@/mocks/data'
+import type { Category, CategoryGroup, GroupIcon } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
 import {
   useCreateCategoryMutation,

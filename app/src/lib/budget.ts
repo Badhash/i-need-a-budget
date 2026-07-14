@@ -2,7 +2,7 @@
 // l'Edge Function /api (packages/engine) ; ce module ne conserve que les
 // definitions de types partagees par les composants budget.
 
-import type { Category, CategoryGroup } from '@/mocks/data'
+import type { Category, CategoryGroup } from '@/types/domain'
 
 export interface BudgetRow {
   category: Category

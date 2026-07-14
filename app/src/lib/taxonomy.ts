@@ -8,7 +8,7 @@ import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-q
 import { apiCall } from '@/lib/api'
 import { enqueue, isTempId, registerRealId, resolveId } from '@/lib/mutationQueue'
 import type { Bootstrap } from '@/lib/data'
-import type { GroupIcon } from '@/mocks/data'
+import type { GroupIcon } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
 
 const BOOTSTRAP_KEY = ['bootstrap'] as const

@@ -10,7 +10,7 @@ import {
   type SortingState,
 } from '@tanstack/react-table'
 import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet, X } from 'lucide-react'
-import type { Account, Category, CategoryGroup, Transaction } from '@/mocks/data'
+import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
 import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
 import { enqueue, resolveId } from '@/lib/mutationQueue'

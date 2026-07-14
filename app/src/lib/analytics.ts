@@ -7,7 +7,7 @@
 // Module pur (aucune dependance React) : entree = transactions + taxonomie,
 // sortie = un objet d'analyse serialisable, memoise par la page.
 
-import type { Transaction } from '@/mocks/data'
+import type { Transaction } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
 import { addMonths, monthOf } from '@/lib/format'
 import { parseBankLabel } from '@/lib/bankLabel'
