@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, FileUp, Loader2, Upload } from 'lucide-react'
+import { apiCall } from '@/lib/api'
 import {
   parseYnabExport,
   runYnabImport,
@@ -75,12 +76,32 @@ export function ImportSection() {
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState<{ pct: number; text: string } | null>(null)
   const [result, setResult] = useState<ImportSummary | null>(null)
+  // Verrou SYNCHRONE contre le double-declenchement (un second clic rapide ne
+  // doit jamais lancer un deuxieme effacement concurrent).
+  const importingRef = useRef(false)
 
   function reset() {
     setParsed(null)
     setResult(null)
     setError(null)
     setProgress(null)
+  }
+
+  // Sauvegarde de securite AVANT tout effacement : telecharge un JSON complet de
+  // l'etat actuel (donnees dechiffrees). Si l'export echoue, l'appelant abandonne
+  // l'import sans rien detruire.
+  async function downloadSafetyBackup() {
+    const data = await apiCall<unknown>('exportData')
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    a.download = `inab-sauvegarde-avant-import-${stamp}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
   }
 
   async function handleAnalyze() {
@@ -108,11 +129,16 @@ export function ImportSection() {
 
   async function handleImport() {
     if (!parsed) return
+    if (importingRef.current) return // garde anti double-declenchement
+    importingRef.current = true
     setConfirmOpen(false)
     setImporting(true)
     setError(null)
-    setProgress({ pct: 0, text: 'Préparation...' })
+    setProgress({ pct: 0, text: 'Sauvegarde de sécurité...' })
     try {
+      // 1) Sauvegarde AVANT effacement. Si elle echoue, on n'efface rien.
+      await downloadSafetyBackup()
+      // 2) Import (valide toute la forme avant le moindre wipe, puis efface + ecrit).
       const summary = await runYnabImport(parsed, (pct, text) => setProgress({ pct, text }))
       setResult(summary)
       setParsed(null)
@@ -123,12 +149,13 @@ export function ImportSection() {
     } catch (e) {
       setError(
         e instanceof Error
-          ? `L'import a échoué : ${e.message}. Tu peux relancer l'analyse et réessayer.`
+          ? `L'import a échoué : ${e.message} Si l'effacement avait déjà commencé, relance l'analyse puis réessaie pour terminer.`
           : "L'import a échoué. Réessaie.",
       )
     } finally {
       setImporting(false)
       setProgress(null)
+      importingRef.current = false
     }
   }
 
@@ -240,6 +267,20 @@ export function ImportSection() {
                 {result.lignesIgnorees} ligne(s) ignorée(s).
               </p>
             )}
+            {(result.categorisationsPerdues > 0 || result.assignationsPerdues > 0) && (
+              <p className="text-[12.5px] font-medium text-warning">
+                {result.categorisationsPerdues > 0 &&
+                  `${result.categorisationsPerdues} transaction(s) importée(s) sans catégorie. `}
+                {result.assignationsPerdues > 0 &&
+                  `${result.assignationsPerdues} assignation(s) non appliquée(s).`}
+              </p>
+            )}
+            <p className="text-[12.5px] text-soft">
+              Une sauvegarde de tes données précédentes a été téléchargée avant l'import.
+            </p>
+            <p className="text-[12.5px] text-soft">
+              Pense à réassocier tes comptes bancaires dans la section « Connexion bancaire ».
+            </p>
           </div>
         )}
       </CardContent>
@@ -266,7 +307,12 @@ export function ImportSection() {
                 Annuler
               </Button>
             </DialogClose>
-            <Button variant="danger" onClick={() => void handleImport()} className="min-h-[44px]">
+            <Button
+              variant="danger"
+              onClick={() => void handleImport()}
+              disabled={importing}
+              className="min-h-[44px]"
+            >
               Effacer et importer
             </Button>
           </div>

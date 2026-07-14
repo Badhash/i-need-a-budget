@@ -114,6 +114,11 @@ export function parseCsv(text: string): string[][] {
       field += ch
     }
   }
+  // Guillemet ouvert jamais referme : le reste du fichier a ete aspire dans un
+  // seul champ -> donnees corrompues. On refuse plutot que d'importer faux.
+  if (inQuotes) {
+    throw new Error('CSV malformé : un guillemet reste ouvert (fichier corrompu ou tronqué).')
+  }
   // Derniere ligne sans saut final.
   if (field.length > 0 || row.length > 0) {
     row.push(field)
@@ -523,6 +528,43 @@ export interface ImportSummary {
   transactions: number
   assignations: number
   lignesIgnorees: number
+  // Pertes signalees explicitement (jamais silencieuses) : assignations dont la
+  // categorie ne s'est pas resolue, et transactions dont la categorie a ete
+  // perdue (retombees sur "a categoriser"). Normalement 0.
+  assignationsPerdues: number
+  categorisationsPerdues: number
+}
+
+// Regles de forme IDENTIQUES a celles du serveur (requireDate / requireMonth /
+// requireAmount / requireText). Validees AVANT tout effacement : un champ non
+// conforme abandonne l'import sans rien detruire (voir runYnabImport).
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
+
+function validateBeforeWipe(parsed: ParsedImport): string | null {
+  for (const t of parsed.transactions) {
+    if (!DATE_RE.test(t.date)) return `date invalide (${t.date})`
+    if (!Number.isSafeInteger(t.amount)) return `montant invalide (${t.amount})`
+    if (!t.label.trim() || t.label.length > 200) return 'libellé de transaction invalide'
+    if (t.counterparty !== null && (!t.counterparty.trim() || t.counterparty.length > 200)) {
+      return 'contrepartie invalide'
+    }
+    if (t.notes !== null && (!t.notes.trim() || t.notes.length > 500)) return 'note invalide'
+  }
+  for (const a of parsed.assignments) {
+    if (!MONTH_RE.test(a.month)) return `mois d'assignation invalide (${a.month})`
+    if (!Number.isSafeInteger(a.amount) || a.amount < 0) return 'montant assigné invalide'
+  }
+  for (const g of parsed.groups) if (!g.name.trim() || g.name.length > 80) return 'nom de groupe invalide'
+  for (const c of parsed.categories) {
+    if (!c.name.trim() || c.name.length > 80) return 'nom de catégorie invalide'
+    if (c.key.length > 200 || c.groupKey.length > 200) return 'référence de catégorie trop longue'
+  }
+  for (const acc of parsed.accounts) {
+    if (!acc.name.trim() || acc.name.length > 80) return 'nom de compte invalide'
+    if (acc.key.length > 200) return 'référence de compte trop longue'
+  }
+  return null
 }
 
 interface BeginResult {
@@ -544,6 +586,14 @@ export async function runYnabImport(
   parsed: ParsedImport,
   onProgress: (pct: number, text: string) => void,
 ): Promise<ImportSummary> {
+  // VALIDATION AVANT EFFACEMENT : on verifie toute la forme (dates, montants,
+  // longueurs) AVANT le moindre wipe. Si un champ est non conforme, on abandonne
+  // sans rien detruire -> pas de "efface d'abord, echoue ensuite".
+  const invalid = validateBeforeWipe(parsed)
+  if (invalid) {
+    throw new Error(`Import interrompu avant tout effacement (${invalid}). Aucune donnée n'a été touchée.`)
+  }
+
   onProgress(0, 'Effacement des donnees actuelles et creation de la structure...')
 
   const begin = await apiCall<BeginResult>('importReplaceBegin', {
@@ -568,6 +618,7 @@ export async function runYnabImport(
   // n'est pas resolu est ecartee (ne devrait pas arriver, les comptes viennent
   // du meme registre) ; une categorie non resolue retombe sur null.
   let droppedTx = 0
+  let lostCategorization = 0
   const txRows = parsed.transactions
     .map((t) => {
       const accountId = begin.accountMap[t.accountKey]
@@ -575,9 +626,13 @@ export async function runYnabImport(
         droppedTx++
         return null
       }
+      const categoryId = resolveCat(t.categoryKey)
+      // Categorie attendue mais non resolue -> la transaction est quand meme
+      // importee (categoryId null) mais on COMPTE la perte de categorisation.
+      if (t.categoryKey !== null && categoryId === null) lostCategorization++
       return {
         accountId,
-        categoryId: resolveCat(t.categoryKey),
+        categoryId,
         date: t.date,
         amount: t.amount,
         label: t.label,
@@ -588,10 +643,17 @@ export async function runYnabImport(
     .filter((r): r is NonNullable<typeof r> => r !== null)
 
   // Assignations : categorie normale obligatoire (income exclu, null exclu).
+  let lostAssignments = 0
   const asgRows = parsed.assignments
     .filter((a) => a.categoryKey !== INCOME_KEY)
     .map((a) => ({ categoryId: resolveCat(a.categoryKey), month: a.month, amount: a.amount }))
-    .filter((r): r is { categoryId: string; month: string; amount: number } => r.categoryId !== null)
+    .filter((r): r is { categoryId: string; month: string; amount: number } => {
+      if (r.categoryId === null) {
+        lostAssignments++
+        return false
+      }
+      return true
+    })
 
   const txBatches = chunk(txRows, TX_BATCH)
   const asgBatches = chunk(asgRows, ASG_BATCH)
@@ -631,5 +693,7 @@ export async function runYnabImport(
     transactions: insertedTx,
     assignations: upsertedAsg,
     lignesIgnorees: parsed.summary.ignoredCount + droppedTx,
+    assignationsPerdues: lostAssignments,
+    categorisationsPerdues: lostCategorization,
   }
 }
