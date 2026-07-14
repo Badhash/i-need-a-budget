@@ -38,7 +38,7 @@ interface WidgetCardProps {
 /** Un widget = une question + un chiffre principal + une tendance + un graphe max. */
 export function WidgetCard({ question, children, className }: WidgetCardProps) {
   return (
-    <Card className={cn('flex flex-col gap-4 p-5', className)}>
+    <Card className={cn('flex min-w-0 flex-col gap-4 p-5', className)}>
       <p className="label-caps">{question}</p>
       {children}
     </Card>

@@ -44,7 +44,7 @@ function SpendingDonut({ data }: { data: ReportsData }) {
           : `Où part mon argent en ${fmtMonthLong(data.month)} ?`
       }
     >
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <Amount cents={data.totalSpending} className="text-[26px] font-semibold" />
         <TrendBadge delta={delta} downIsGood label="vs mois précédent" />
       </div>
@@ -215,8 +215,8 @@ function SavingsRate({ data }: { data: ReportsData }) {
 
   return (
     <WidgetCard question="Est-ce que j'épargne assez ?">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="min-w-0">
           <p className={cn('text-[26px] font-semibold tnum', rate < 0 && 'text-danger')}>
             {fmtPercent(rate)}
           </p>
