@@ -130,10 +130,22 @@ export function computeAnalytics(
   const weekdayMonths: Set<string>[] = Array.from({ length: 7 }, () => new Set<string>())
   const bigCandidates: BigTx[] = []
 
+  // Valeur nette (patrimoine) : accumulee dans la MEME passe que le reste. Voir
+  // le commentaire detaille plus bas, avant la construction de netWorth.
+  // `baseline` = tout ce qui precede la fenetre ; `deltaByMonth` = delta mensuel.
+  let baseline = 0
+  const deltaByMonth = new Map<string, number>()
+
   const UNCAT = '__uncat__'
 
   for (const t of txs) {
     const m = monthOf(t.date)
+
+    // Patrimoine : concerne TOUTES les transactions (y compris hors fenetre),
+    // donc avant le filtre inWindow ci-dessous.
+    if (m < months[0]!) baseline += t.amount
+    else if (inWindow.has(m)) deltaByMonth.set(m, (deltaByMonth.get(m) ?? 0) + t.amount)
+
     if (!inWindow.has(m)) continue
 
     if (isIncome(t)) {
@@ -185,15 +197,9 @@ export function computeAnalytics(
   // comptes. Le solde d'un compte = somme de ses transactions (le solde
   // d'ouverture est une transaction) ; on somme donc toutes les transactions
   // jusqu'a la fin du mois, tous comptes confondus (les virements internes
-  // s'annulent, ce qui est correct pour un total patrimonial). `baseline` = tout
-  // ce qui precede la fenetre, puis on cumule les deltas mensuels.
-  let baseline = 0
-  const deltaByMonth = new Map<string, number>()
-  for (const t of txs) {
-    const m = monthOf(t.date)
-    if (m < months[0]!) baseline += t.amount
-    else if (inWindow.has(m)) deltaByMonth.set(m, (deltaByMonth.get(m) ?? 0) + t.amount)
-  }
+  // s'annulent, ce qui est correct pour un total patrimonial). baseline et
+  // deltaByMonth sont alimentes dans la passe principale ci-dessus ; il ne reste
+  // qu'a cumuler les deltas mensuels.
   const netWorth: { month: string; value: number }[] = []
   let running = baseline
   for (const m of months) {
