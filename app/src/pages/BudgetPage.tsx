@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Target as TargetIcon } from 'lucide-react'
+import { AlertTriangle, Sparkles, Target as TargetIcon } from 'lucide-react'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import type { Category } from '@/mocks/data'
 import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
-import { useTargets, type Target } from '@/lib/targets'
+import { useTargets, neededThisMonth, type Target } from '@/lib/targets'
+import { FundTargetsSheet, type FundPlanItem } from '@/components/budget/FundTargetsSheet'
+import { Button } from '@/components/ui/button'
+import { fmtEUR } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
@@ -518,6 +521,48 @@ export function BudgetPage() {
   const { data: budget, isError, refetch } = useBudgetMonth(month)
   const { data: targets } = useTargets()
   const [targetCat, setTargetCat] = useState<Category | null>(null)
+  const [fundOpen, setFundOpen] = useState(false)
+  // Mutation d'assignation partagee pour l'assignation guidee : chaque ligne du
+  // plan est appliquee via la MEME mutation optimiste que la saisie manuelle
+  // (cache mis a jour immediatement, POST en fond, rollback par ligne si echec).
+  const assign = useAssignMutation(month)
+
+  const targetMap = targets ?? new Map<string, Target>()
+
+  // Plan de financement du mois courant : pour chaque categorie ayant un objectif,
+  // le supplement a assigner (neededThisMonth). On ignore les objectifs deja
+  // finances (add = 0). Recalcule a chaque changement de budget/objectifs.
+  const fundPlan = useMemo<FundPlanItem[]>(() => {
+    if (!budget) return []
+    const items: FundPlanItem[] = []
+    for (const block of budget.groups) {
+      for (const row of block.rows) {
+        const target = targetMap.get(row.category.id)
+        if (!target) continue
+        const add = neededThisMonth(target, month, row.assigned, row.available)
+        if (add <= 0) continue
+        items.push({
+          categoryId: row.category.id,
+          categoryName: row.category.name,
+          group: block.group,
+          currentAssigned: row.assigned,
+          add,
+        })
+      }
+    }
+    return items
+  }, [budget, targetMap, month])
+
+  const fundTotal = fundPlan.reduce((sum, item) => sum + item.add, 0)
+
+  const confirmFunding = () => {
+    // Applique chaque assignation en absolu (assigne actuel + supplement). Chaque
+    // mutate part independamment : rollback individuel en cas d'echec reseau.
+    for (const item of fundPlan) {
+      assign.mutate({ categoryId: item.categoryId, amount: item.currentAssigned + item.add })
+    }
+    setFundOpen(false)
+  }
 
   // L'erreur du bootstrap desactive la query budget : on la surveille aussi
   // pour ne pas rester bloque en skeleton.
@@ -534,13 +579,36 @@ export function BudgetPage() {
 
   if (!budget) return <BudgetSkeleton />
 
-  const targetMap = targets ?? new Map<string, Target>()
-
   return (
     <div className="space-y-5">
       <RtaBanner budget={budget} />
+      {fundPlan.length > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card">
+          <div className="min-w-0">
+            <p className="text-[15px] font-semibold">Financer les objectifs</p>
+            <p className="text-[13px] text-soft">
+              {fundPlan.length === 1
+                ? '1 catégorie à compléter'
+                : `${fundPlan.length} catégories à compléter`}{' '}
+              · <span className="tnum">{fmtEUR(fundTotal)}</span>
+            </p>
+          </div>
+          <Button className="h-11 shrink-0 gap-2" onClick={() => setFundOpen(true)}>
+            <Sparkles className="h-4 w-4" />
+            Financer
+          </Button>
+        </div>
+      )}
       <DesktopGrid groups={budget.groups} month={month} targets={targetMap} onOpenTarget={setTargetCat} />
       <MobileGroups groups={budget.groups} month={month} targets={targetMap} onOpenTarget={setTargetCat} />
+      <FundTargetsSheet
+        open={fundOpen}
+        items={fundPlan}
+        total={fundTotal}
+        rta={budget.rta}
+        onConfirm={confirmFunding}
+        onClose={() => setFundOpen(false)}
+      />
       <TargetDialog
         category={targetCat}
         target={targetCat ? targetMap.get(targetCat.id) ?? null : null}
