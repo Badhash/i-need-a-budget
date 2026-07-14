@@ -1,7 +1,15 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { AlertTriangle, ChevronDown, ChevronRight, Sparkles, Target as TargetIcon } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Sparkles,
+  Target as TargetIcon,
+} from 'lucide-react'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import type { Category } from '@/mocks/data'
 import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
@@ -613,6 +621,8 @@ export function BudgetPage() {
   // plan est appliquee via la MEME mutation optimiste que la saisie manuelle
   // (cache mis a jour immediatement, POST en fond, rollback par ligne si echec).
   const assign = useAssignMutation(month)
+  const collapsedGroups = useUiStore((s) => s.collapsedGroups)
+  const setCollapsedGroups = useUiStore((s) => s.setCollapsedGroups)
 
   const targetMap = targets ?? new Map<string, Target>()
 
@@ -666,6 +676,13 @@ export function BudgetPage() {
 
   if (!budget) return <BudgetSkeleton />
 
+  const groupIds = budget.groups.map((b) => b.group.id)
+  const allCollapsed = groupIds.length > 0 && groupIds.every((id) => collapsedGroups[id])
+  const toggleAllGroups = () => {
+    if (allCollapsed) setCollapsedGroups({})
+    else setCollapsedGroups(Object.fromEntries(groupIds.map((id) => [id, true])))
+  }
+
   return (
     <div className="space-y-5">
       {/* Desktop : le resume est dans le header (HeaderBudgetSummary). Mobile :
@@ -673,6 +690,23 @@ export function BudgetPage() {
       <div className="lg:hidden">
         <RtaBanner budget={budget} />
       </div>
+      {/* Tout replier / tout deplier les groupes du budget. */}
+      {groupIds.length > 0 && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={toggleAllGroups}
+            className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-soft transition-colors hover:bg-surface2 hover:text-ink"
+          >
+            {allCollapsed ? (
+              <ChevronsUpDown className="h-4 w-4" />
+            ) : (
+              <ChevronsDownUp className="h-4 w-4" />
+            )}
+            {allCollapsed ? 'Tout déplier' : 'Tout replier'}
+          </button>
+        </div>
+      )}
       {fundPlan.length > 0 && (
         <div className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card">
           <div className="min-w-0">

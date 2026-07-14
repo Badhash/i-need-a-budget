@@ -21,6 +21,8 @@ interface UiState {
   setAddTxOpen: (open: boolean) => void
   setEditTx: (tx: Transaction | null) => void
   toggleGroupCollapsed: (groupId: string) => void
+  // Remplace l'ensemble des groupes replies (tout replier / tout deplier).
+  setCollapsedGroups: (collapsed: Record<string, true>) => void
 }
 
 export const useUiStore = create<UiState>()(
@@ -51,6 +53,7 @@ export const useUiStore = create<UiState>()(
           else next[groupId] = true
           return { collapsedGroups: next }
         }),
+      setCollapsedGroups: (collapsed) => set({ collapsedGroups: collapsed }),
     }),
     {
       name: 'inab-ui',
