@@ -7,6 +7,8 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  Eye,
+  EyeOff,
   GripVertical,
   Sparkles,
   Target as TargetIcon,
@@ -39,6 +41,13 @@ import { Amount } from '@/components/shared/Amount'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+
+// Une enveloppe est "vide" quand ses trois colonnes sont a 0 : rien d'assigne,
+// aucune activite, aucun disponible reporte. Des qu'UNE colonne est non nulle,
+// la ligne reste visible.
+function isEmptyRow(row: BudgetRow): boolean {
+  return row.assigned === 0 && row.activity === 0 && row.available === 0
+}
 
 function useAssignMutation(month: string) {
   const queryClient = useQueryClient()
@@ -279,6 +288,8 @@ interface GridProps {
   // Clic sur une activite non nulle : ouvre la liste des transactions filtree
   // sur cette categorie et le mois affiche.
   onViewActivity: (categoryId: string) => void
+  // Masque les lignes d'enveloppes entierement vides (les trois colonnes a 0).
+  hideEmptyRows: boolean
 }
 
 // Etat du glisser-deposer desktop. Deux natures d'element deplacables :
@@ -350,7 +361,7 @@ function DragHandle({
   )
 }
 
-function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivity }: GridProps) {
+function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivity, hideEmptyRows }: GridProps) {
   const assign = useAssignMutation(month)
   const queryClient = useQueryClient()
   const reorderCategories = useReorderCategoriesMutation()
@@ -482,17 +493,22 @@ function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivity }: G
           </tr>
         </thead>
         <tbody>
-          {groups.map((block) => (
-            <GroupRows
-              key={block.group.id}
-              block={block}
-              targets={targets}
-              onOpenTarget={onOpenTarget}
-              onViewActivity={onViewActivity}
-              onAssign={(categoryId, amount) => assign.mutate({ categoryId, amount })}
-              dnd={dnd}
-            />
-          ))}
+          {groups
+            // Un groupe dont TOUTES les lignes sont vides est masque entierement
+            // (en-tete compris), qu'il soit replie ou non.
+            .filter((block) => !hideEmptyRows || block.rows.some((row) => !isEmptyRow(row)))
+            .map((block) => (
+              <GroupRows
+                key={block.group.id}
+                block={block}
+                targets={targets}
+                onOpenTarget={onOpenTarget}
+                onViewActivity={onViewActivity}
+                onAssign={(categoryId, amount) => assign.mutate({ categoryId, amount })}
+                dnd={dnd}
+                hideEmptyRows={hideEmptyRows}
+              />
+            ))}
         </tbody>
       </table>
     </Card>
@@ -506,6 +522,7 @@ function GroupRows({
   onViewActivity,
   onAssign,
   dnd,
+  hideEmptyRows,
 }: {
   block: BudgetGroupBlock
   targets: Map<string, Target>
@@ -513,6 +530,7 @@ function GroupRows({
   onViewActivity: (categoryId: string) => void
   onAssign: (categoryId: string, amount: number) => void
   dnd: DndApi
+  hideEmptyRows: boolean
 }) {
   const collapsed = useUiStore((s) => Boolean(s.collapsedGroups[block.group.id]))
   const toggle = useUiStore((s) => s.toggleGroupCollapsed)
@@ -559,7 +577,11 @@ function GroupRows({
         </td>
       </tr>
       {!collapsed &&
-        block.rows.map((row) => {
+        // Filtrage AU RENDU uniquement : block.rows reste complet pour le
+        // reordonnancement (drag-and-drop) et les totaux d'en-tete de groupe.
+        block.rows
+          .filter((row) => !hideEmptyRows || !isEmptyRow(row))
+          .map((row) => {
           const target = targets.get(row.category.id)
           return (
             <tr
@@ -686,7 +708,7 @@ function MobileCategoryRow({
   )
 }
 
-function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity }: GridProps) {
+function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity, hideEmptyRows }: GridProps) {
   const assign = useAssignMutation(month)
   const move = useMoveMutation(month)
   const queryClient = useQueryClient()
@@ -721,7 +743,11 @@ function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity }: 
 
   return (
     <div className="space-y-4 lg:hidden">
-      {groups.map((block) => {
+      {groups
+        // Groupe entierement vide masque (en-tete compris), qu'il soit replie
+        // ou non. Un groupe gardant au moins une ligne visible reste affiche.
+        .filter((block) => !hideEmptyRows || block.rows.some((row) => !isEmptyRow(row)))
+        .map((block) => {
         const collapsed = Boolean(collapsedGroups[block.group.id])
         const Chevron = collapsed ? ChevronRight : ChevronDown
         return (
@@ -739,16 +765,21 @@ function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity }: 
             </button>
             {!collapsed && (
               <div className="divide-y divide-line/60">
-                {block.rows.map((row, index) => (
-                  <MobileCategoryRow
-                    key={row.category.id}
-                    row={row}
-                    block={block}
-                    target={targets.get(row.category.id)}
-                    onTap={() => setAssignRow(row)}
-                    onLongPress={() => setActionCtx({ block, index })}
-                  />
-                ))}
+                {block.rows
+                  // On conserve l'index d'origine (menu contextuel / reordonnancement
+                  // s'appuient sur block.rows complet) et on filtre au rendu.
+                  .map((row, index) => ({ row, index }))
+                  .filter(({ row }) => !hideEmptyRows || !isEmptyRow(row))
+                  .map(({ row, index }) => (
+                    <MobileCategoryRow
+                      key={row.category.id}
+                      row={row}
+                      block={block}
+                      target={targets.get(row.category.id)}
+                      onTap={() => setAssignRow(row)}
+                      onLongPress={() => setActionCtx({ block, index })}
+                    />
+                  ))}
               </div>
             )}
           </Card>
@@ -836,6 +867,8 @@ export function BudgetPage() {
   const assign = useAssignMutation(month)
   const collapsedGroups = useUiStore((s) => s.collapsedGroups)
   const setCollapsedGroups = useUiStore((s) => s.setCollapsedGroups)
+  const hideEmptyRows = useUiStore((s) => s.hideEmptyRows)
+  const setHideEmptyRows = useUiStore((s) => s.setHideEmptyRows)
 
   const targetMap = targets ?? new Map<string, Target>()
 
@@ -905,7 +938,15 @@ export function BudgetPage() {
       </div>
       {/* Tout replier / tout deplier les groupes du budget. */}
       {groupIds.length > 0 && (
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => setHideEmptyRows(!hideEmptyRows)}
+            className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-soft transition-colors hover:bg-surface2 hover:text-ink"
+          >
+            {hideEmptyRows ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+            {hideEmptyRows ? 'Afficher toutes les lignes' : 'Masquer les lignes vides'}
+          </button>
           <button
             type="button"
             onClick={toggleAllGroups}
@@ -943,6 +984,7 @@ export function BudgetPage() {
         targets={targetMap}
         onOpenTarget={setTargetCat}
         onViewActivity={viewActivity}
+        hideEmptyRows={hideEmptyRows}
       />
       <MobileGroups
         groups={budget.groups}
@@ -950,6 +992,7 @@ export function BudgetPage() {
         targets={targetMap}
         onOpenTarget={setTargetCat}
         onViewActivity={viewActivity}
+        hideEmptyRows={hideEmptyRows}
       />
       <FundTargetsSheet
         open={fundOpen}

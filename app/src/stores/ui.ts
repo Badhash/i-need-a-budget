@@ -13,6 +13,9 @@ interface UiState {
   // Groupes de budget replies. Record<id, true> plutot qu'un Set : zustand
   // persist (JSON) ne serialise pas les Set. Absence de cle = groupe deplie.
   collapsedGroups: Record<string, true>
+  // Masque les lignes d'enveloppes entierement vides (assigne, activite et
+  // disponible tous a 0). Persiste pour survivre au refresh.
+  hideEmptyRows: boolean
   setTheme: (theme: ThemeId) => void
   setMode: (mode: Mode) => void
   setMonth: (month: string) => void
@@ -23,6 +26,7 @@ interface UiState {
   toggleGroupCollapsed: (groupId: string) => void
   // Remplace l'ensemble des groupes replies (tout replier / tout deplier).
   setCollapsedGroups: (collapsed: Record<string, true>) => void
+  setHideEmptyRows: (hide: boolean) => void
 }
 
 export const useUiStore = create<UiState>()(
@@ -34,6 +38,7 @@ export const useUiStore = create<UiState>()(
       addTxOpen: false,
       editTx: null,
       collapsedGroups: {},
+      hideEmptyRows: false,
       setTheme: (theme) => set({ theme }),
       setMode: (mode) => set({ mode }),
       setMonth: (month) => {
@@ -54,10 +59,16 @@ export const useUiStore = create<UiState>()(
           return { collapsedGroups: next }
         }),
       setCollapsedGroups: (collapsed) => set({ collapsedGroups: collapsed }),
+      setHideEmptyRows: (hideEmptyRows) => set({ hideEmptyRows }),
     }),
     {
       name: 'inab-ui',
-      partialize: (s) => ({ theme: s.theme, mode: s.mode, collapsedGroups: s.collapsedGroups }),
+      partialize: (s) => ({
+        theme: s.theme,
+        mode: s.mode,
+        collapsedGroups: s.collapsedGroups,
+        hideEmptyRows: s.hideEmptyRows,
+      }),
     },
   ),
 )
