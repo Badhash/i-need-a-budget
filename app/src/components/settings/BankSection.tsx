@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Download, Landmark, Loader2, Scale } from 'lucide-react'
+import { AlertTriangle, Download, Landmark, Loader2, Plus, Scale, X } from 'lucide-react'
 import {
   useBankConnections,
   useAspsps,
@@ -44,6 +44,7 @@ export function BankSection() {
   const [selectedBank, setSelectedBank] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [connectMessage, setConnectMessage] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [importDays, setImportDays] = useState('90')
   const [importing, setImporting] = useState(false)
@@ -66,6 +67,31 @@ export function BankSection() {
       setConnectMessage(err instanceof Error ? err.message : 'Connexion bancaire indisponible.')
       setConnecting(false)
     }
+  }
+
+  // Selecteur de banque + bouton « Connecter », partage entre l'onboarding
+  // (aucune connexion) et l'ajout d'une banque supplementaire.
+  function renderConnectForm() {
+    if (aspspsError) {
+      return (
+        <p className="text-[13px] text-soft">
+          La liste des banques n'est pas encore disponible (configuration Enable Banking en attente).
+        </p>
+      )
+    }
+    return (
+      <div className="flex flex-wrap items-center gap-2.5">
+        <BankCombobox
+          aspsps={aspsps ?? []}
+          value={selectedBank}
+          onSelect={setSelectedBank}
+          loading={aspspsLoading}
+        />
+        <Button onClick={() => void handleConnect(selectedBank)} disabled={connecting || !selectedBank}>
+          {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connecter'}
+        </Button>
+      </div>
+    )
   }
 
   // Importe l'historique bancaire (sinceDays), puis reconcilie les soldes
@@ -294,6 +320,47 @@ export function BankSection() {
                 recalage seul, sans réimporter de transactions.
               </p>
             </div>
+
+            <div className="space-y-3 rounded-xl border border-line p-4">
+              {adding ? (
+                <>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold">Ajouter une banque</p>
+                      <p className="text-[12.5px] text-soft">
+                        Choisis une autre banque puis autorise l'acces en lecture seule.
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setAdding(false)
+                        setSelectedBank('')
+                        setConnectMessage(null)
+                      }}
+                      className="h-11 w-11 shrink-0 p-0"
+                      aria-label="Annuler l'ajout d'une banque"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {renderConnectForm()}
+                  {connectMessage && <p className="text-[13px] text-soft">{connectMessage}</p>}
+                </>
+              ) : (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setAdding(true)
+                    setConnectMessage(null)
+                  }}
+                  className="min-h-11"
+                >
+                  <Plus className="h-4 w-4" />
+                  Ajouter une banque
+                </Button>
+              )}
+            </div>
           </div>
         )}
 
@@ -312,23 +379,7 @@ export function BankSection() {
                 </div>
               </div>
 
-              {aspspsError ? (
-                <p className="text-[13px] text-soft">
-                  La liste des banques n'est pas encore disponible (configuration Enable Banking en attente).
-                </p>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <BankCombobox
-                    aspsps={aspsps ?? []}
-                    value={selectedBank}
-                    onSelect={setSelectedBank}
-                    loading={aspspsLoading}
-                  />
-                  <Button onClick={() => void handleConnect(selectedBank)} disabled={connecting || !selectedBank}>
-                    {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connecter'}
-                  </Button>
-                </div>
-              )}
+              {renderConnectForm()}
 
               {connectMessage && <p className="text-[13px] text-soft">{connectMessage}</p>}
             </div>
