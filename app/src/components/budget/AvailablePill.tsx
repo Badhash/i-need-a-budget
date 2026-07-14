@@ -43,23 +43,18 @@ export function AssignActivityPill({
   available: number
   className?: string
 }) {
-  const Sep = () => (
-    <span className="mx-1 text-soft/40" aria-hidden>
-      /
-    </span>
-  )
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full bg-surface2 px-2.5 py-1 text-[12.5px] tnum',
+        'inline-flex items-stretch divide-x divide-line overflow-hidden rounded-full border border-line bg-surface2 text-[12.5px] tnum',
         className,
       )}
       title={`Assigné ${fmtEUR(assigned)} · Activité ${fmtEUR(activity)} · Disponible ${fmtEUR(available)}`}
     >
-      <span className="text-soft">{fmtCompact(assigned)}</span>
-      <Sep />
+      <span className="px-2 py-1 text-soft">{fmtCompact(assigned)}</span>
       <span
         className={cn(
+          'px-2 py-1',
           activity < 0 && 'text-danger',
           activity > 0 && 'text-success',
           activity === 0 && 'text-soft',
@@ -67,12 +62,11 @@ export function AssignActivityPill({
       >
         {fmtCompact(activity)}
       </span>
-      <Sep />
       <span
         className={cn(
-          'font-semibold',
-          available > 0 && 'text-success',
-          available < 0 && 'text-danger',
+          'px-2 py-1 font-semibold',
+          available > 0 && 'bg-success/10 text-success',
+          available < 0 && 'bg-danger/10 text-danger',
           available === 0 && 'text-soft',
         )}
       >
