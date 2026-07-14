@@ -3,6 +3,7 @@ import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
 import { BottomNav, Fab } from '@/components/layout/BottomNav'
 import { AddTransactionDialog } from '@/components/transactions/AddTransactionDialog'
+import { EditTransactionDialog } from '@/components/transactions/EditTransactionDialog'
 import { OnboardingPage } from '@/pages/OnboardingPage'
 import { useThemeController } from '@/hooks/useTheme'
 import { useRealtimeSync } from '@/hooks/useRealtimeSync'
@@ -51,6 +52,7 @@ export function AppShell() {
       <BottomNav />
       <Fab />
       <AddTransactionDialog />
+      <EditTransactionDialog />
     </div>
   )
 }
