@@ -41,7 +41,7 @@ export function useRules(): UseQueryResult<Rule[]> {
   return useQuery({ queryKey: RULES_KEY, queryFn: fetchRules })
 }
 
-export interface CreateRuleInput {
+interface CreateRuleInput {
   matcher: RuleMatcher
   categoryId: string
   priority?: number
@@ -55,7 +55,7 @@ export async function apiCreateRule(input: CreateRuleInput): Promise<{ id: strin
   })
 }
 
-export interface UpdateRuleInput {
+interface UpdateRuleInput {
   id: string
   matcher: RuleMatcher
   categoryId: string

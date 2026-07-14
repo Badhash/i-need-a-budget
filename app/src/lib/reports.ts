@@ -3,7 +3,7 @@
 
 import type { CatColor } from '@/styles/themes'
 
-export interface GroupSpending {
+interface GroupSpending {
   key: string
   label: string
   /** null = depenses non categorisees (rendu neutre) */
@@ -11,13 +11,13 @@ export interface GroupSpending {
   total: number // centimes positifs
 }
 
-export interface MerchantSpending {
+interface MerchantSpending {
   label: string
   total: number // centimes positifs
   count: number
 }
 
-export interface MonthCashflow {
+interface MonthCashflow {
   month: string
   income: number
   spending: number

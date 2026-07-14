@@ -140,7 +140,7 @@ export async function bankFinalizeAuth(code: string): Promise<{ ok: boolean; con
   return syncBankCall<{ ok: boolean; connectionId: string }>('finalizeAuth', { code })
 }
 
-export interface BankSyncResult {
+interface BankSyncResult {
   imported: number
   linked: number
   transfersLinked?: number
@@ -164,7 +164,7 @@ export async function bankSync(
   return syncBankCall<BankSyncResult>('sync', params)
 }
 
-export interface BankReconcileResult {
+interface BankReconcileResult {
   adjusted: { accountId: string; accountName: string; delta: number; newBalance: number }[]
 }
 

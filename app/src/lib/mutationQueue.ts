@@ -54,7 +54,7 @@ export function resolveId(id: string): string {
 }
 
 /** Rejet levé quand la création amont d'un id temporaire a échoué. */
-export class OrphanedMutationError extends Error {
+class OrphanedMutationError extends Error {
   constructor(tempId: string) {
     super(`Mutation orpheline : la création de ${tempId} a échoué.`)
     this.name = 'OrphanedMutationError'

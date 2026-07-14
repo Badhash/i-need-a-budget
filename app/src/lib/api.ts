@@ -7,7 +7,7 @@ import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '@/lib/supabase'
 const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1/api`
 const ANON_KEY = SUPABASE_ANON_KEY
 
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(
     public status: number,
     message: string,

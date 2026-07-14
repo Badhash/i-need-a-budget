@@ -21,14 +21,14 @@ export interface TaxonomyLite {
   groupColor: Map<string, CatColor>
 }
 
-export interface MonthPoint {
+interface MonthPoint {
   month: string
   income: number
   spending: number
   net: number
 }
 
-export interface CategoryStat {
+interface CategoryStat {
   id: string
   name: string
   groupName: string
@@ -39,13 +39,13 @@ export interface CategoryStat {
   deltaVsAvg: number
 }
 
-export interface Subscription {
+interface Subscription {
   label: string
   monthly: number // montant mensuel median
   months: number // nombre de mois distincts ou il apparait
 }
 
-export interface BigTx {
+interface BigTx {
   id: string
   label: string
   amount: number // positif
@@ -54,7 +54,7 @@ export interface BigTx {
   color: CatColor | null
 }
 
-export interface Suggestion {
+interface Suggestion {
   id: string
   title: string
   detail: string

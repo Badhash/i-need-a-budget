@@ -27,7 +27,7 @@ export interface AccountWithBalance extends Account {
   balance: number
 }
 
-export interface NewTransactionInput {
+interface NewTransactionInput {
   accountId: string
   date: string
   label: string
@@ -299,9 +299,9 @@ export function useAccounts(): UseQueryResult<AccountWithBalance[]> {
   return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.accounts })
 }
 
-export const reportsKey = (month: string) => ['reports', month] as const
+const reportsKey = (month: string) => ['reports', month] as const
 
-export function fetchReports(month: string): Promise<ReportsData> {
+function fetchReports(month: string): Promise<ReportsData> {
   return apiCall<ReportsData>('getReports', { month })
 }
 
@@ -361,7 +361,7 @@ export async function apiUpdateTransaction(input: UpdateTransactionInput): Promi
   })
 }
 
-export interface CreateAccountInput {
+interface CreateAccountInput {
   name: string
   institution: string
   kind: AccountKind

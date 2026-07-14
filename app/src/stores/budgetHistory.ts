@@ -5,7 +5,7 @@ import { create } from 'zustand'
 // autre action de l'app n'y touche. En memoire (pas de persistance) : "quelques
 // dernieres actions", remis a zero au changement de mois affiche.
 
-export interface AssignChange {
+interface AssignChange {
   categoryId: string
   month: string
   prev: number // montant assigne AVANT l'action

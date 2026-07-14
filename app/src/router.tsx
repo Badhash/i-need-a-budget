@@ -122,7 +122,7 @@ const budgetRoute = createRoute({
   component: BudgetPage,
 })
 
-export const transactionsRoute = createRoute({
+const transactionsRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: '/transactions',
   component: TransactionsPage,

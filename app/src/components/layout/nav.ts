@@ -1,6 +1,6 @@
 import { ArrowLeftRight, Landmark, PieChart, PiggyBank, Settings, Wand2, type LucideIcon } from 'lucide-react'
 
-export interface NavItem {
+interface NavItem {
   to: string
   label: string
   icon: LucideIcon

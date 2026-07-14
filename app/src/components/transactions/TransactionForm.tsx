@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 
 const MIN_DATE = `${MIN_MONTH}-01`
 
-export type TxKind = 'expense' | 'income'
+type TxKind = 'expense' | 'income'
 
 // Valeurs normalisees remontees a l'appelant : montant signe en centimes,
 // note vide -> null.
@@ -21,7 +21,7 @@ export interface TxFormResult {
   note: string | null
 }
 
-export interface TxFormInitial {
+interface TxFormInitial {
   kind: TxKind
   amount: string
   label: string

@@ -17,23 +17,23 @@ import { apiCall } from '@/lib/api'
 // Structure normalisee
 // ---------------------------------------------------------------------------
 
-export interface ParsedAccount {
+interface ParsedAccount {
   key: string
   name: string
 }
-export interface ParsedGroup {
+interface ParsedGroup {
   key: string
   name: string
   hidden: boolean
 }
-export interface ParsedCategory {
+interface ParsedCategory {
   key: string
   groupKey: string
   name: string
   isIncome: boolean
   hidden: boolean
 }
-export interface ParsedTransaction {
+interface ParsedTransaction {
   accountKey: string
   categoryKey: string | null // null = a categoriser ; '__income__' = revenus
   date: string // YYYY-MM-DD
@@ -42,13 +42,13 @@ export interface ParsedTransaction {
   counterparty: string | null
   notes: string | null
 }
-export interface ParsedAssignment {
+interface ParsedAssignment {
   categoryKey: string
   month: string // YYYY-MM
   amount: number // centimes >= 0
 }
 
-export type DateConvention = 'DMY' | 'MDY' | 'ISO'
+type DateConvention = 'DMY' | 'MDY' | 'ISO'
 
 export interface ParsedImport {
   accounts: ParsedAccount[]
@@ -117,7 +117,7 @@ export function decodeYnabCsv(buffer: ArrayBuffer): string {
 // Parseur CSV robuste (guillemets, virgules internes, CRLF, "" echappe)
 // ---------------------------------------------------------------------------
 
-export function parseCsv(text: string): string[][] {
+function parseCsv(text: string): string[][] {
   const rows: string[][] = []
   let field = ''
   let row: string[] = []
@@ -195,7 +195,7 @@ function findCol(headers: string[], candidates: string[]): number {
 // Montants -> centimes entiers (locale-robuste)
 // ---------------------------------------------------------------------------
 
-export function parseAmountToCents(raw: string): number {
+function parseAmountToCents(raw: string): number {
   if (!raw) return 0
   let s = raw.replace(/ /g, ' ').trim()
   if (!s) return 0
@@ -280,7 +280,7 @@ const MONTH_ABBR: Record<string, string> = {
   juil: '07', aout: '08', sept: '09',
 }
 
-export function parseMonth(raw: string): string | null {
+function parseMonth(raw: string): string | null {
   const s = raw.trim()
   const iso = s.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/)
   if (iso) {
