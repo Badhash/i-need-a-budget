@@ -13,7 +13,7 @@ export function BottomNav() {
   const badge = txs ? uncategorizedCount(txs) : 0
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden">
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] lg:hidden">
       <nav className="pointer-events-auto flex w-full max-w-md items-stretch gap-1 rounded-[26px] border border-line/70 bg-surface/85 p-1.5 shadow-[0_8px_30px_-6px_rgba(0,0,0,0.28)] backdrop-blur-xl">
         {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
           <Link
@@ -43,7 +43,7 @@ export function Fab() {
     <button
       onClick={() => setAddTxOpen(true)}
       aria-label="Ajouter une transaction"
-      className="fixed right-4 bottom-[calc(6.5rem+env(safe-area-inset-bottom))] z-40 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accentfg shadow-fab transition-transform active:scale-95 lg:hidden"
+      className="fixed right-[max(1rem,env(safe-area-inset-right))] bottom-[calc(6.5rem+env(safe-area-inset-bottom))] z-40 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accentfg shadow-fab transition-transform active:scale-95 lg:hidden"
     >
       <Plus className="h-6 w-6" />
     </button>
