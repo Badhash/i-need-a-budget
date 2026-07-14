@@ -105,6 +105,58 @@
   }
 }
 
+/* Ecran de chargement (AppLoader) : respiration du logo + points rebondissants. */
+@keyframes inab-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+@keyframes inab-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.18);
+  }
+}
+@keyframes inab-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-5px);
+  }
+}
+.loader-badge {
+  animation: inab-breathe 2s ease-in-out infinite;
+  will-change: transform;
+}
+.loader-glow {
+  animation: inab-glow 2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+.loader-dot {
+  animation: inab-dot 1.2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .loader-badge,
+  .loader-glow,
+  .loader-dot {
+    animation: none;
+  }
+}
+
 /* Transition douce lors du changement de theme ou de mode */
 html.theme-anim,
 html.theme-anim * {

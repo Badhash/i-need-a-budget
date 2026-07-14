@@ -1,11 +1,36 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { RouterProvider } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { router } from '@/router'
 import { useAuthStore } from '@/stores/auth'
 import { bankFinalizeAuth } from '@/lib/bank'
+import { useBootstrap, useBudgetMonth, useTransactions } from '@/lib/data'
+import { useUiStore } from '@/stores/ui'
+import { AppLoader } from '@/components/shared/AppLoader'
+
+/**
+ * Porte de demarrage (utilisateur connecte) : precharge les donnees de fond
+ * — comptes, budget du mois courant, transactions — et affiche l'ecran de
+ * chargement tant qu'elles ne sont pas pretes. Une fois le cache TanStack
+ * peuple, la navigation entre les vues est instantanee. Sur une base
+ * volumineuse (milliers de transactions), evite d'afficher des pages a moitie
+ * remplies.
+ */
+function AuthedBootGate({ children }: { children: ReactNode }) {
+  const month = useUiStore((s) => s.month)
+  const boot = useBootstrap()
+  const budget = useBudgetMonth(month)
+  const transactions = useTransactions()
+
+  // On attend le socle (comptes) + le budget du mois affiche par defaut. Les
+  // transactions se chargent en parallele ; une erreur ne bloque jamais l'entree
+  // dans l'app (les vues gerent leurs propres etats vides/erreur).
+  if (boot.isLoading || budget.isLoading || transactions.isLoading) {
+    return <AppLoader />
+  }
+  return <>{children}</>
+}
 
 export function App() {
   const queryClient = useQueryClient()
@@ -80,14 +105,10 @@ export function App() {
   }, [status, queryClient])
 
   if (status === 'loading') {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-bg">
-        <Loader2 className="h-6 w-6 animate-spin text-soft" />
-      </div>
-    )
+    return <AppLoader message="Connexion…" />
   }
 
-  return (
+  const routerTree = (
     <RouterProvider
       router={router}
       context={{
@@ -95,4 +116,8 @@ export function App() {
       }}
     />
   )
+
+  // Connecte : on precharge les donnees derriere l'ecran de chargement. Non
+  // connecte : acces direct au routeur (page de connexion).
+  return status === 'authed' ? <AuthedBootGate>{routerTree}</AuthedBootGate> : routerTree
 }
