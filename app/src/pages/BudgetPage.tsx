@@ -147,15 +147,29 @@ function useMoveMutation(month: string) {
   const key = ['budget', month] as const
   return useMutation({
     mutationFn: async ({ fromId, toId, fromAssigned, toAssigned, amount }: MovePayload) => {
-      await apiSetAssigned({ categoryId: fromId, amount: fromAssigned - amount, month })
+      // Comme useAssignMutation : on passe par la file (serialisation FIFO) et on
+      // resout temp -> real au moment de l'envoi. Les deux enveloppes deviennent
+      // des dependances : si l'une porte encore un id 'temp-*' non resolu, la
+      // tache est annulee avant d'atteindre /api.
+      const deps = [fromId, toId]
+      await enqueue(
+        () => apiSetAssigned({ categoryId: resolveId(fromId), amount: fromAssigned - amount, month }),
+        { deps },
+      )
       try {
-        await apiSetAssigned({ categoryId: toId, amount: toAssigned + amount, month })
+        await enqueue(
+          () => apiSetAssigned({ categoryId: resolveId(toId), amount: toAssigned + amount, month }),
+          { deps },
+        )
       } catch (err) {
         // Compensation best-effort : on restaure l'assigne de la source pour
         // eviter un demi-transfert cote serveur. Si elle echoue aussi, la
         // reconciliation Realtime ramenera la verite.
         try {
-          await apiSetAssigned({ categoryId: fromId, amount: fromAssigned, month })
+          await enqueue(
+            () => apiSetAssigned({ categoryId: resolveId(fromId), amount: fromAssigned, month }),
+            { deps },
+          )
         } catch {
           // ignore : le refetch de reconciliation corrigera l'ecart.
         }
