@@ -33,6 +33,7 @@ import {
   type MoveTarget,
 } from '@/components/budget/CategoryActionSheet'
 import { useLongPress } from '@/hooks/useLongPress'
+import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { useBudgetHistory } from '@/stores/budgetHistory'
 import { useReorderCategoriesMutation, useReorderGroupsMutation } from '@/lib/taxonomy'
 import { AvailablePill, AssignActivityPill } from '@/components/budget/AvailablePill'
@@ -881,6 +882,9 @@ export function BudgetPage() {
   const setCollapsedGroups = useUiStore((s) => s.setCollapsedGroups)
   const hideEmptyRows = useUiStore((s) => s.hideEmptyRows)
   const setHideEmptyRows = useUiStore((s) => s.setHideEmptyRows)
+  // Ne monter qu'une seule variante (desktop OU mobile) au lieu de monter les
+  // deux et d'en masquer une en CSS : evite un arbre React entier inutile.
+  const isDesktop = useIsDesktop()
 
   // Undo/redo LOCAL, limite a la page Budget et aux assignations. L'historique est
   // vide au changement de mois affiche (les entrees ne concernent que ce mois-la).
@@ -1054,22 +1058,25 @@ export function BudgetPage() {
           </Button>
         </div>
       )}
-      <DesktopGrid
-        groups={budget.groups}
-        month={month}
-        targets={targetMap}
-        onOpenTarget={setTargetCat}
-        onViewActivity={viewActivity}
-        hideEmptyRows={hideEmptyRows}
-      />
-      <MobileGroups
-        groups={budget.groups}
-        month={month}
-        targets={targetMap}
-        onOpenTarget={setTargetCat}
-        onViewActivity={viewActivity}
-        hideEmptyRows={hideEmptyRows}
-      />
+      {isDesktop ? (
+        <DesktopGrid
+          groups={budget.groups}
+          month={month}
+          targets={targetMap}
+          onOpenTarget={setTargetCat}
+          onViewActivity={viewActivity}
+          hideEmptyRows={hideEmptyRows}
+        />
+      ) : (
+        <MobileGroups
+          groups={budget.groups}
+          month={month}
+          targets={targetMap}
+          onOpenTarget={setTargetCat}
+          onViewActivity={viewActivity}
+          hideEmptyRows={hideEmptyRows}
+        />
+      )}
       <FundTargetsSheet
         open={fundOpen}
         items={fundPlan}
