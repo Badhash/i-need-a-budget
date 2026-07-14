@@ -3,6 +3,7 @@
 // UUID) provient de l'action bootstrap ; les composants la lisent via les
 // selecteurs ci-dessous. Tous les montants sont en centimes.
 
+import { useMemo } from 'react'
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { apiCall } from '@/lib/api'
 import type {
@@ -169,16 +170,22 @@ export function useGroupsList(): CategoryGroup[] {
   return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.groups }).data ?? []
 }
 
+// Les selecteurs ci-dessous partagent la meme query que bootstrap : tant que la
+// donnee ne change pas, la liste source garde la meme reference, donc le useMemo
+// ne reconstruit la Map qu'apres un vrai refetch (et non a chaque render).
 export function useAccountsMap(): Map<string, AccountWithBalance> {
-  return new Map(useAccountsList().map((a) => [a.id, a]))
+  const list = useAccountsList()
+  return useMemo(() => new Map(list.map((a) => [a.id, a])), [list])
 }
 
 export function useCategoriesMap(): Map<string, Category> {
-  return new Map(useCategoriesList().map((c) => [c.id, c]))
+  const list = useCategoriesList()
+  return useMemo(() => new Map(list.map((c) => [c.id, c])), [list])
 }
 
 export function useGroupsMap(): Map<string, CategoryGroup> {
-  return new Map(useGroupsList().map((g) => [g.id, g]))
+  const list = useGroupsList()
+  return useMemo(() => new Map(list.map((g) => [g.id, g])), [list])
 }
 
 // ---------------------------------------------------------------------------

@@ -578,7 +578,18 @@ export function TransactionsPage() {
           (r.category?.name.toLowerCase().includes(q) ?? false),
       )
       .sort((a, b) => (a.tx.date < b.tx.date ? 1 : a.tx.date > b.tx.date ? -1 : 0))
-  }, [txs, boot.data, search, accountFilter, categoryFilter, monthFilter, onlyUncat])
+  }, [
+    txs,
+    boot.data,
+    accountById,
+    categoryById,
+    groupById,
+    search,
+    accountFilter,
+    categoryFilter,
+    monthFilter,
+    onlyUncat,
+  ])
 
   const uncatCount = useMemo(
     () => (txs ?? []).filter((t) => !t.categoryId && !t.transferGroupId).length,
