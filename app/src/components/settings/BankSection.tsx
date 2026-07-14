@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Download, Landmark, Loader2, RefreshCw, Scale } from 'lucide-react'
+import { AlertTriangle, Download, Landmark, Loader2, Scale } from 'lucide-react'
 import {
   useBankConnections,
   useAspsps,
@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
 import { BankCombobox, BankLogo } from '@/components/settings/BankCombobox'
+import { SyncHealth } from '@/components/settings/SyncHealth'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -42,7 +43,6 @@ export function BankSection() {
   const logoByName = new Map((aspsps ?? []).map((a) => [a.name, a.logo]))
   const [selectedBank, setSelectedBank] = useState('')
   const [connecting, setConnecting] = useState(false)
-  const [syncing, setSyncing] = useState(false)
   const [connectMessage, setConnectMessage] = useState<string | null>(null)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [importDays, setImportDays] = useState('90')
@@ -65,26 +65,6 @@ export function BankSection() {
     } catch (err) {
       setConnectMessage(err instanceof Error ? err.message : 'Connexion bancaire indisponible.')
       setConnecting(false)
-    }
-  }
-
-  async function handleSync() {
-    setSyncMessage(null)
-    setSyncing(true)
-    try {
-      const { imported, linked } = await bankSync()
-      setSyncMessage(
-        linked === 0
-          ? "Associe d'abord un compte bancaire à un compte local (menu « Associer à… »), puis synchronise."
-          : imported > 0
-            ? `${imported} transaction${imported > 1 ? 's' : ''} importée${imported > 1 ? 's' : ''}.`
-            : "Aucune nouvelle transaction depuis l'activation de la connexion.",
-      )
-      await queryClient.invalidateQueries()
-    } catch {
-      setSyncMessage('Synchronisation indisponible pour le moment.')
-    } finally {
-      setSyncing(false)
     }
   }
 
@@ -271,12 +251,9 @@ export function BankSection() {
               )
             })}
 
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <Button variant="secondary" onClick={() => void handleSync()} disabled={syncing}>
-                {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                Synchroniser maintenant
-              </Button>
-              {syncMessage && <p className="text-[13px] text-soft">{syncMessage}</p>}
+            <div className="rounded-xl border border-line p-4">
+              <SyncHealth showHistory />
+              {syncMessage && <p className="mt-3 text-[13px] text-soft">{syncMessage}</p>}
             </div>
 
             <div className="space-y-2 rounded-xl border border-line p-4">

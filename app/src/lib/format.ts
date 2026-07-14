@@ -76,6 +76,43 @@ export function fmtDateShort(date: string): string {
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 }
 
+const relTime = new Intl.RelativeTimeFormat('fr-FR', { numeric: 'auto' })
+
+/**
+ * Horodatage ISO -> distance relative en francais ("il y a 3 heures", "hier").
+ * Compare deux instants absolus : independant du fuseau. Renvoie null si la date
+ * est invalide. Une date dans le futur (dérive d'horloge) retombe sur "à l'instant".
+ */
+export function fmtRelativeTime(iso: string): string | null {
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return null
+  const sec = Math.round((Date.now() - then) / 1000)
+  if (Math.abs(sec) < 60) return "à l'instant"
+  const min = Math.round(sec / 60)
+  if (Math.abs(min) < 60) return relTime.format(-min, 'minute')
+  const hr = Math.round(sec / 3600)
+  if (Math.abs(hr) < 24) return relTime.format(-hr, 'hour')
+  const day = Math.round(sec / 86400)
+  return relTime.format(-day, 'day')
+}
+
+/**
+ * Horodatage ISO -> date + heure lisibles au fuseau Europe/Paris ("12 juil. 07:30").
+ * L'affichage absolu est fige sur Paris (fuseau de l'utilisateur), independamment
+ * du fuseau de l'appareil. Renvoie null si la date est invalide.
+ */
+export function fmtDateTimeParis(iso: string): string | null {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toLocaleString('fr-FR', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Paris',
+  })
+}
+
 /** '2026-07-12' -> '2026-07' */
 export function monthOf(date: string): string {
   return date.slice(0, 7)
