@@ -16,9 +16,12 @@ interface AssignSheetProps {
 
 function parseEuros(raw: string): number | null {
   const trimmed = raw.trim()
-  if (!trimmed) return 0
+  // Champ vide ou signe seul -> 0 (etat transitoire de saisie).
+  if (!trimmed || trimmed === '-') return 0
+  // Un montant negatif est accepte : il retire de l'argent de l'enveloppe
+  // vers le Pret a assigner (parite YNAB).
   const parsed = Number.parseFloat(trimmed.replace(/\s/g, '').replace(',', '.'))
-  if (Number.isNaN(parsed) || parsed < 0) return null
+  if (Number.isNaN(parsed)) return null
   return Math.round(parsed * 100)
 }
 
@@ -62,10 +65,15 @@ export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps
   const availableAfter = valid ? row.available + (cents - row.assigned) : row.available
 
   const setCents = (value: number) => {
-    setDraft(toDraft(Math.max(value, 0)))
+    // Pas de clamp a 0 : un assigne negatif est un retrait vers le RTA.
+    setDraft(toDraft(value))
     inputRef.current?.focus()
   }
   const addCents = (delta: number) => setCents((parseEuros(draft) ?? row.assigned) + delta)
+  // Vider l'enveloppe : ramener le disponible a 0 en rendant tout le disponible
+  // au Pret a assigner. available = rollover + assigned + activity, donc pour
+  // available = 0 il faut assigned = assigned - available.
+  const emptyToRta = row.assigned - row.available
 
   const commit = () => {
     if (!valid) return
@@ -139,12 +147,26 @@ export function AssignSheet({ row, target, onCommit, onClose }: AssignSheetProps
             >
               Remettre à 0
             </button>
+            {row.available > 0 && (
+              <button
+                type="button"
+                onClick={() => setCents(emptyToRta)}
+                className="h-9 shrink-0 whitespace-nowrap rounded-full border border-success/40 bg-success/10 px-3.5 text-[13px] font-medium text-success active:bg-success/20"
+              >
+                Vider vers Prêt à assigner
+              </button>
+            )}
           </div>
 
           <Button className="h-12 w-full text-[15px]" onClick={commit} disabled={!valid}>
             <span className="flex w-full items-center justify-between">
-              <span>Assigner</span>
-              <span className={cn('text-[13px] font-medium tnum opacity-90')}>
+              <span>{valid && cents !== null && cents < 0 ? 'Retirer' : 'Assigner'}</span>
+              <span
+                className={cn(
+                  'text-[13px] font-medium tnum opacity-90',
+                  availableAfter < 0 && 'text-danger',
+                )}
+              >
                 Disponible après : {fmtEUR(availableAfter)}
               </span>
             </span>

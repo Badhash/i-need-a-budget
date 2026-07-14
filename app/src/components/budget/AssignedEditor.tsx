@@ -45,8 +45,10 @@ export function AssignedEditor({ value, onCommit, className }: AssignedEditorPro
     setEditing(false)
     if (cancelled.current) return
     const raw = draft.trim()
-    const parsed = raw === '' ? 0 : Number.parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
-    if (Number.isNaN(parsed) || parsed < 0) return
+    // Un montant negatif est accepte : il retire de l'argent de l'enveloppe
+    // vers le Pret a assigner (parite YNAB).
+    const parsed = raw === '' || raw === '-' ? 0 : Number.parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
+    if (Number.isNaN(parsed)) return
     const cents = Math.round(parsed * 100)
     if (cents !== value) onCommit(cents)
   }

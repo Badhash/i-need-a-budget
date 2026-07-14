@@ -888,7 +888,11 @@ async function actionSetAssigned(userId: string, params: Params) {
   const categoryId = requireUuid(params.categoryId, 'categoryId')
   const month = requireMonth(params.month)
   const amount = requireAmount(params.amount)
-  if (amount < 0) throw new ApiError(400, 'montant assigne negatif interdit')
+  // Un assigne negatif est autorise : il correspond a un RETRAIT d'enveloppe
+  // vers le Pret a assigner (parite avec YNAB et avec l'import d'assignations,
+  // actionImportReplaceAssignments, qui accepte deja des montants negatifs).
+  // Le moteur d'enveloppes gere nativement les assignes negatifs : le
+  // disponible de la categorie baisse et le RTA remonte d'autant.
 
   const categories = await loadAll<CategoryPayload>('categories', userId)
   const category = categories.find((c) => c.id === categoryId)
