@@ -35,7 +35,7 @@ import {
 import { useLongPress } from '@/hooks/useLongPress'
 import { useBudgetHistory } from '@/stores/budgetHistory'
 import { useReorderCategoriesMutation, useReorderGroupsMutation } from '@/lib/taxonomy'
-import { AvailablePill } from '@/components/budget/AvailablePill'
+import { AvailablePill, AssignActivityPill } from '@/components/budget/AvailablePill'
 import { TargetBar } from '@/components/budget/TargetBar'
 import { TargetDialog } from '@/components/budget/TargetDialog'
 import { GroupPill } from '@/components/shared/GroupPill'
@@ -715,7 +715,7 @@ function MobileCategoryRow({
           />
         )}
       </div>
-      <AvailablePill cents={row.available} />
+      <AssignActivityPill assigned={row.assigned} activity={row.activity} available={row.available} />
     </button>
   )
 }
