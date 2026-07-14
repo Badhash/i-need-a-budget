@@ -22,7 +22,13 @@ jobs:
             echo "Secrets Supabase absents : ping ignore."
             exit 0
           fi
+          # Le secret peut contenir un chemin (ex. .../rest/v1/) : on ne garde
+          # que l'origine pour construire l'URL.
+          ORIGIN=$(printf '%s' "$SUPABASE_URL" | sed -E 's#^(https?://[^/]+).*#\1#')
+          # Endpoint de sante GoTrue : repond 200 avec la seule cle anon, et
+          # suffit a marquer le projet comme actif.
           curl --fail --silent --show-error \
             -H "apikey: $SUPABASE_ANON_KEY" \
-            "$SUPABASE_URL/rest/v1/" > /dev/null
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            "$ORIGIN/auth/v1/health" > /dev/null
           echo "Ping Supabase OK."
