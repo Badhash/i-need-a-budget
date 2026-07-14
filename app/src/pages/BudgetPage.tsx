@@ -393,8 +393,23 @@ function GroupRows({
                   <Amount cents={row.activity} className="text-soft/60" />
                 )}
               </td>
-              <td className="px-5 py-1.5 text-right">
-                <AvailablePill cents={row.available} />
+              <td className="px-5 py-1.5">
+                <div className="flex items-center justify-end gap-2">
+                  {/* Vider l'enveloppe vers le Pret a assigner : assigne = assigne
+                      - disponible -> disponible ramene a 0, le disponible remonte
+                      au RTA. Revele au survol de la ligne, seulement si dispo > 0. */}
+                  {row.available > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => onAssign(row.category.id, row.assigned - row.available)}
+                      className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-soft opacity-0 transition-opacity hover:text-success focus-visible:opacity-100 group-hover:opacity-100"
+                      title="Vider cette enveloppe vers le Prêt à assigner"
+                    >
+                      Vider
+                    </button>
+                  )}
+                  <AvailablePill cents={row.available} />
+                </div>
               </td>
             </tr>
           )
