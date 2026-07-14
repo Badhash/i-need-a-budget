@@ -26,6 +26,7 @@ import { RULES_KEY, fetchRules } from '@/lib/rules'
 import { TARGETS_KEY, fetchTargets } from '@/lib/targets'
 import { MAX_MONTH, MIN_MONTH } from '@/lib/format'
 import { monthRange } from '@/lib/format'
+import { useUiStore } from '@/stores/ui'
 import { AppLoader } from '@/components/shared/AppLoader'
 
 /**
@@ -43,94 +44,81 @@ import { AppLoader } from '@/components/shared/AppLoader'
  * transactions, objectifs, regles, connexions bancaires, logs de sync, budget de
  * chaque mois, rapport de chaque mois.
  */
-async function preloadAll(
+// Prechargement CRITIQUE (bloque le loader, mais rapide) : le strict minimum
+// pour afficher la premiere page (Budget du mois courant) — taxonomie, budget du
+// mois affiche, transactions. On n'attend PAS tous les mois/rapports : l'ancienne
+// approche (tout precharger avant d'entrer) faisait patienter 20-30 s a chaque
+// lancement. Renvoie la taxonomie pour enchainer le prechargement de fond.
+async function preloadCritical(
   queryClient: QueryClient,
-  onProgress: (completed: number, total: number) => void,
-): Promise<void> {
-  const months = monthRange(MIN_MONTH, MAX_MONTH)
-
-  // Etape bloquante : la taxonomie doit exister avant d'adapter les budgets.
-  // On la compte dans la progression globale. En cas d'echec, on entre quand
-  // meme (les budgets seront alors ignores et se chargeront a la demande).
+  month: string,
+): Promise<Bootstrap | undefined> {
   let taxo: Bootstrap | undefined
-  // bootstrap (1) + 5 lectures globales (transactions, objectifs, regles,
-  // connexions bancaires, logs de sync) + budget & rapport de chaque mois.
-  const total = 1 + 5 + months.length * 2
-  let completed = 0
-  const tick = () => onProgress(++completed, total)
-
   try {
     taxo = await queryClient.ensureQueryData({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap })
   } catch {
-    // Bootstrap indisponible : on n'echoue pas, mais on ne precharge pas les
-    // budgets (ils requierent la taxonomie).
+    // Bootstrap indisponible : on entre quand meme, les vues gerent leurs etats.
   }
-  tick()
+  await Promise.allSettled([
+    queryClient.prefetchQuery({ queryKey: TRANSACTIONS_KEY, queryFn: fetchTransactions }),
+    taxo
+      ? queryClient.prefetchQuery({
+          queryKey: budgetKey(month),
+          queryFn: () => fetchBudgetMonth(month, taxo as Bootstrap),
+        })
+      : Promise.resolve(),
+  ])
+  return taxo
+}
 
+// Prechargement de FOND (non bloquant) : lance APRES l'entree dans l'app, sans
+// aucun loader. Rechauffe silencieusement les autres mois de budget, tous les
+// rapports, et les donnees secondaires (objectifs, regles, banque). Grace au
+// staleTime long, naviguer vers un autre mois est alors instantane ; et si un
+// mois n'est pas encore chaud, sa vue affiche brievement son propre squelette
+// au lieu de bloquer TOUT le demarrage.
+function preloadRest(queryClient: QueryClient, taxo: Bootstrap | undefined, currentMonth: string): void {
   const tasks: Promise<unknown>[] = [
-    queryClient.prefetchQuery({ queryKey: TRANSACTIONS_KEY, queryFn: fetchTransactions }).finally(tick),
-    queryClient.prefetchQuery({ queryKey: TARGETS_KEY, queryFn: fetchTargets }).finally(tick),
-    queryClient.prefetchQuery({ queryKey: RULES_KEY, queryFn: fetchRules }).finally(tick),
-    queryClient
-      .prefetchQuery({ queryKey: BANK_CONNECTIONS_KEY, queryFn: fetchBankConnections })
-      .finally(tick),
-    queryClient.prefetchQuery({ queryKey: SYNC_LOGS_KEY, queryFn: fetchSyncLogs }).finally(tick),
+    queryClient.prefetchQuery({ queryKey: TARGETS_KEY, queryFn: fetchTargets }),
+    queryClient.prefetchQuery({ queryKey: RULES_KEY, queryFn: fetchRules }),
+    queryClient.prefetchQuery({ queryKey: BANK_CONNECTIONS_KEY, queryFn: fetchBankConnections }),
+    queryClient.prefetchQuery({ queryKey: SYNC_LOGS_KEY, queryFn: fetchSyncLogs }),
   ]
-
-  for (const m of months) {
-    if (taxo) {
+  for (const m of monthRange(MIN_MONTH, MAX_MONTH)) {
+    if (taxo && m !== currentMonth) {
       const captured = taxo
       tasks.push(
-        queryClient.prefetchQuery({ queryKey: budgetKey(m), queryFn: () => fetchBudgetMonth(m, captured) }).finally(tick),
+        queryClient.prefetchQuery({ queryKey: budgetKey(m), queryFn: () => fetchBudgetMonth(m, captured) }),
       )
-    } else {
-      // Pas de taxonomie : on ne peut pas construire le budget, mais on marque
-      // l'etape comme terminee pour que la progression atteigne 100 %.
-      tick()
     }
-    tasks.push(
-      queryClient.prefetchQuery({ queryKey: reportsKey(m), queryFn: () => fetchReports(m) }).finally(tick),
-    )
+    tasks.push(queryClient.prefetchQuery({ queryKey: reportsKey(m), queryFn: () => fetchReports(m) }))
   }
-
-  await Promise.allSettled(tasks)
+  void Promise.allSettled(tasks)
 }
 
 /**
- * Porte de demarrage (utilisateur connecte) : precharge toutes les donnees de
- * fond avec une barre de progression, puis rend l'app. Le prechargement est
- * lance une seule fois (garde de ref, robuste au double-montage StrictMode).
+ * Porte de demarrage (utilisateur connecte) : attend UNIQUEMENT le strict
+ * necessaire (mois courant), rend l'app, puis rechauffe le reste en fond. Lance
+ * une seule fois (garde de ref, robuste au double-montage StrictMode).
  */
 function AuthedBootGate({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
+  const month = useUiStore((s) => s.month)
   const [ready, setReady] = useState(false)
-  const [progress, setProgress] = useState(0)
   const startedRef = useRef(false)
 
   useEffect(() => {
-    // Garde de ref (et non un flag "cancelled" de nettoyage) : sous StrictMode
-    // l'effet est monte/demonte/remonte. Un flag cancelled pose au nettoyage du
-    // premier montage annulerait le seul prechargement reellement lance (le
-    // second montage ressort ici immediatement), laissant l'app bloquee. La ref
-    // garantit une unique execution qui va toujours jusqu'a `ready`.
     if (startedRef.current) return
     startedRef.current = true
-
-    // Progression monotone : ensureQueryData/prefetchQuery sont idempotents (le
-    // cache deduplique), donc un eventuel double appel ne fait jamais reculer la
-    // barre.
-    const onProgress = (done: number, total: number) => {
-      setProgress((prev) => Math.max(prev, total > 0 ? (done / total) * 100 : 100))
-    }
-
-    void preloadAll(queryClient, onProgress).finally(() => {
-      setProgress(100)
+    void preloadCritical(queryClient, month).then((taxo) => {
       setReady(true)
+      preloadRest(queryClient, taxo, month)
     })
-  }, [queryClient])
+    // `month` lu une seule fois (garde de ref) : c'est le mois affiche au demarrage.
+  }, [queryClient, month])
 
   if (!ready) {
-    return <AppLoader progress={progress} />
+    return <AppLoader />
   }
   return <>{children}</>
 }
