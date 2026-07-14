@@ -436,21 +436,26 @@ function computeReports(data: DecryptedData, month: string) {
     onBudget.has(t.accountId) &&
     (t.categoryId === null || !income.has(t.categoryId))
 
-  const spendingOf = (m: string) =>
-    data.transactions
-      .filter((t) => t.bookingMonth === m && isSpending(t))
-      .reduce((s, t) => s - t.amount, 0)
-  const incomeOf = (m: string) =>
-    data.transactions
-      .filter(
-        (t) =>
-          t.bookingMonth === m &&
-          t.categoryId !== null &&
-          income.has(t.categoryId) &&
-          onBudget.has(t.accountId) &&
-          !t.transferGroupId,
-      )
-      .reduce((s, t) => s + t.amount, 0)
+  const isIncome = (t: TxPayload) =>
+    t.categoryId !== null &&
+    income.has(t.categoryId) &&
+    onBudget.has(t.accountId) &&
+    !t.transferGroupId
+
+  // Un seul balayage : depense et revenu par mois comptable, memes predicats
+  // qu'avant. spendingOf/incomeOf ne font plus que lire dans ces maps.
+  const spendByMonth = new Map<string, number>()
+  const incomeByMonth = new Map<string, number>()
+  for (const t of data.transactions) {
+    if (isSpending(t)) {
+      spendByMonth.set(t.bookingMonth, (spendByMonth.get(t.bookingMonth) ?? 0) - t.amount)
+    } else if (isIncome(t)) {
+      incomeByMonth.set(t.bookingMonth, (incomeByMonth.get(t.bookingMonth) ?? 0) + t.amount)
+    }
+  }
+
+  const spendingOf = (m: string) => spendByMonth.get(m) ?? 0
+  const incomeOf = (m: string) => incomeByMonth.get(m) ?? 0
 
   const monthTxs = data.transactions.filter((t) => t.bookingMonth === month)
   const byGroup = new Map<string, number>()
