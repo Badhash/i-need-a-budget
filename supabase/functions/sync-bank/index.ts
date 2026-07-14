@@ -791,6 +791,7 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
 async function syncUser(
   userId: string,
   sinceDays?: number,
+  connectionId?: string,
 ): Promise<{ imported: number; linked: number; transfersLinked: number; errors: string[] }> {
   const keys = await getKeys()
 
@@ -830,7 +831,13 @@ async function syncUser(
     }
     activeConnections.push(conn)
   }
-  if (activeConnections.length === 0) {
+  // Import cible sur UNE connexion (ex. importer l'historique d'une seule banque
+  // sans re-toucher aux autres — evite de re-dupliquer un compte deja importe
+  // depuis un autre canal, ex. un import YNAB sans tx_hash).
+  const connectionsToSync = connectionId
+    ? activeConnections.filter((c) => c.id === connectionId)
+    : activeConnections
+  if (connectionsToSync.length === 0) {
     return { imported: 0, linked: 0, transfersLinked: 0, errors: [] }
   }
 
@@ -874,7 +881,7 @@ async function syncUser(
   let linkedCount = 0
   const errors: string[] = []
 
-  for (const conn of activeConnections) {
+  for (const conn of connectionsToSync) {
     let importedForConn = 0
     try {
       // Date de depart : derniere sync REUSSIE de CETTE connexion (moins le
@@ -1128,14 +1135,19 @@ async function actionListAspsps() {
 
 // sync : synchronise les utilisateurs cibles. En mode cron, ne jamais laisser un
 // user isole faire echouer les autres.
-async function actionSync(targetUserIds: string[], isCron: boolean, sinceDays?: number) {
+async function actionSync(
+  targetUserIds: string[],
+  isCron: boolean,
+  sinceDays?: number,
+  connectionId?: string,
+) {
   let imported = 0
   let linked = 0
   let transfersLinked = 0
   const errors: string[] = []
   for (const userId of targetUserIds) {
     try {
-      const r = await syncUser(userId, sinceDays)
+      const r = await syncUser(userId, sinceDays, connectionId)
       imported += r.imported
       linked += r.linked
       transfersLinked += r.transfersLinked
@@ -1448,7 +1460,12 @@ Deno.serve(async (req) => {
           !isCron && typeof rawSince === 'number' && rawSince > 0
             ? Math.min(Math.floor(rawSince), 730)
             : undefined
-        const syncResult = await actionSync(targets, isCron, sinceDays)
+        // Import cible sur une seule connexion (mode user) : n'importer que la
+        // banque demandee, sans re-toucher aux autres comptes deja synchronises.
+        const rawConn = (params as { connectionId?: unknown }).connectionId
+        const connectionId =
+          !isCron && typeof rawConn === 'string' && rawConn ? rawConn : undefined
+        const syncResult = await actionSync(targets, isCron, sinceDays, connectionId)
         // sinceDays peut importer des transactions ANTERIEURES a la date
         // d'activation (donc au solde d'ouverture saisi manuellement) : la
         // reconciliation est enchainee COTE SERVEUR pour garantir des soldes

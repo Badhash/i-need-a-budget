@@ -47,6 +47,9 @@ export function BankSection() {
   const [adding, setAdding] = useState(false)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [importDays, setImportDays] = useState('90')
+  // Import cible sur UNE banque : evite de re-toucher (et re-dupliquer) les
+  // autres comptes deja synchronises, ex. un CA importe depuis YNAB.
+  const [importConnId, setImportConnId] = useState('')
   const [importing, setImporting] = useState(false)
   const [importMessage, setImportMessage] = useState<string | null>(null)
 
@@ -97,10 +100,12 @@ export function BankSection() {
   // Importe l'historique bancaire (sinceDays), puis reconcilie les soldes
   // d'ouverture pour coller au solde bancaire reel.
   async function handleImportHistory() {
+    const connId = importConnId || list[0]?.id
+    if (!connId) return
     setImportMessage(null)
     setImporting(true)
     try {
-      const { imported } = await bankSync(Number(importDays))
+      const { imported } = await bankSync(Number(importDays), connId)
       const { adjusted } = await bankReconcile()
       const totalDelta = adjusted.reduce((s, a) => s + a.delta, 0)
       const importedPart = `${imported} transaction${imported > 1 ? 's' : ''} importée${imported > 1 ? 's' : ''}`
@@ -288,7 +293,23 @@ export function BankSection() {
 
             <div className="space-y-2 rounded-xl border border-line p-4">
               <p className="label-caps">Importer l'historique</p>
+              <p className="text-[12.5px] text-soft">
+                Choisis la banque : l'import ne concerne QUE celle-ci. Évite de l'utiliser sur un
+                compte déjà rempli autrement (ex. import YNAB), au risque de créer des doublons.
+              </p>
               <div className="flex flex-wrap items-center gap-2.5">
+                <Select
+                  value={importConnId || list[0]?.id || ''}
+                  onChange={(e) => setImportConnId(e.target.value)}
+                  className="min-w-[170px]"
+                  aria-label="Banque à importer"
+                >
+                  {list.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.institution}
+                    </option>
+                  ))}
+                </Select>
                 <Select
                   value={importDays}
                   onChange={(e) => setImportDays(e.target.value)}

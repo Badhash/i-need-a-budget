@@ -150,9 +150,18 @@ export interface BankSyncResult {
  * Declenche une synchronisation immediate. `imported` = transactions importees,
  * `linked` = comptes bancaires associes a un compte local (0 = rien a importer).
  * `sinceDays` (optionnel) : profondeur d'import de l'historique en jours.
+ * `connectionId` (optionnel) : cible UNE seule connexion (n'importe que cette
+ * banque, sans re-toucher aux autres — utile pour ne pas re-dupliquer un compte
+ * deja importe autrement, ex. un import YNAB).
  */
-export async function bankSync(sinceDays?: number): Promise<BankSyncResult> {
-  return syncBankCall<BankSyncResult>('sync', sinceDays !== undefined ? { sinceDays } : {})
+export async function bankSync(
+  sinceDays?: number,
+  connectionId?: string,
+): Promise<BankSyncResult> {
+  const params: Record<string, unknown> = {}
+  if (sinceDays !== undefined) params.sinceDays = sinceDays
+  if (connectionId) params.connectionId = connectionId
+  return syncBankCall<BankSyncResult>('sync', params)
 }
 
 export interface BankReconcileResult {
