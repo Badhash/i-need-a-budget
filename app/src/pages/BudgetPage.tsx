@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  GripVertical,
   Sparkles,
   Target as TargetIcon,
 } from 'lucide-react'
@@ -28,7 +29,7 @@ import {
   type MoveTarget,
 } from '@/components/budget/CategoryActionSheet'
 import { useLongPress } from '@/hooks/useLongPress'
-import { useReorderCategoriesMutation } from '@/lib/taxonomy'
+import { useReorderCategoriesMutation, useReorderGroupsMutation } from '@/lib/taxonomy'
 import { AvailablePill } from '@/components/budget/AvailablePill'
 import { TargetBar } from '@/components/budget/TargetBar'
 import { TargetDialog } from '@/components/budget/TargetDialog'
@@ -280,8 +281,194 @@ interface GridProps {
   onViewActivity: (categoryId: string) => void
 }
 
+// Etat du glisser-deposer desktop. Deux natures d'element deplacables :
+// un GROUPE (reordonne les groupes entre eux) ou une CATEGORIE (reordonne les
+// enveloppes DANS leur groupe ; le groupId d'origine borne la cible valide).
+type DragItem =
+  | { kind: 'group'; id: string }
+  | { kind: 'category'; groupId: string; id: string }
+
+// Cible de depot survolee : la ligne et le cote (avant / apres) selon la
+// position du curseur dans la ligne.
+interface DropTarget {
+  id: string
+  after: boolean
+}
+
+interface DndApi {
+  drag: DragItem | null
+  dropTarget: DropTarget | null
+  onGroupDragStart: (e: React.DragEvent, groupId: string) => void
+  onCategoryDragStart: (e: React.DragEvent, groupId: string, categoryId: string) => void
+  onGroupRowOver: (e: React.DragEvent, groupId: string) => void
+  onCategoryRowOver: (e: React.DragEvent, groupId: string, categoryId: string) => void
+  onDrop: () => void
+  onDragEnd: () => void
+}
+
+// True si le curseur est dans la moitie basse de la ligne survolee : on
+// inserera alors l'element APRES cette ligne (sinon avant).
+function isAfter(e: React.DragEvent): boolean {
+  const rect = e.currentTarget.getBoundingClientRect()
+  return e.clientY - rect.top > rect.height / 2
+}
+
+// Classe d'indicateur de depot : lisere accent en haut (avant) ou en bas
+// (apres) de la ligne cible, en box-shadow inset pour ne PAS decaler la grille.
+function dropIndicatorClass(dropTarget: DropTarget | null, rowId: string): string {
+  if (!dropTarget || dropTarget.id !== rowId) return ''
+  return dropTarget.after
+    ? 'shadow-[inset_0_-2px_0_0_rgb(var(--accent))]'
+    : 'shadow-[inset_0_2px_0_0_rgb(var(--accent))]'
+}
+
+// Poignee de glissement, revelee au survol de la ligne (les <tr> portent la
+// classe `group`). Seule la poignee est `draggable` : l'edition inline de
+// l'assigne et les clics existants ne declenchent jamais de drag.
+function DragHandle({
+  onDragStart,
+  onDragEnd,
+  label,
+}: {
+  onDragStart: (e: React.DragEvent) => void
+  onDragEnd: () => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={(e) => e.stopPropagation()}
+      aria-label={label}
+      title={label}
+      className="shrink-0 cursor-grab rounded-md p-0.5 text-soft/60 opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 active:cursor-grabbing"
+    >
+      <GripVertical className="h-4 w-4" aria-hidden />
+    </button>
+  )
+}
+
 function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivity }: GridProps) {
   const assign = useAssignMutation(month)
+  const queryClient = useQueryClient()
+  const reorderCategories = useReorderCategoriesMutation()
+  const reorderGroups = useReorderGroupsMutation()
+  const [drag, setDrag] = useState<DragItem | null>(null)
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
+  const budgetKey = ['budget', month] as const
+
+  const reset = () => {
+    setDrag(null)
+    setDropTarget(null)
+  }
+
+  // Retire `dragId` de `items` et le reinsere avant/apres la cible. Renvoie
+  // null si l'ordre est inchange (drop sur soi-meme, no-op).
+  const reorderIds = (items: string[], dragId: string, target: DropTarget): string[] | null => {
+    const without = items.filter((id) => id !== dragId)
+    let idx = without.indexOf(target.id)
+    if (idx === -1) return null
+    if (target.after) idx += 1
+    without.splice(idx, 0, dragId)
+    if (without.length === items.length && without.every((id, i) => id === items[i])) return null
+    return without
+  }
+
+  const onDrop = () => {
+    if (!drag || !dropTarget) return reset()
+
+    if (drag.kind === 'group') {
+      const next = reorderIds(
+        groups.map((b) => b.group.id),
+        drag.id,
+        dropTarget,
+      )
+      if (next) {
+        reorderGroups.mutate({ orderedIds: next })
+        // Reflet optimiste sur le cache budget (le hook ne touche que
+        // ['bootstrap']) : les groupes se reordonnent instantanement.
+        const pos = new Map(next.map((id, i) => [id, i]))
+        queryClient.setQueryData<BudgetMonth>(budgetKey, (old) =>
+          old
+            ? {
+                ...old,
+                groups: [...old.groups].sort(
+                  (a, b) => (pos.get(a.group.id) ?? 0) - (pos.get(b.group.id) ?? 0),
+                ),
+              }
+            : old,
+        )
+      }
+    } else {
+      // Enveloppe : reordonnancement DANS son groupe uniquement. Un depot sur
+      // un autre groupe n'est jamais une cible valide (onCategoryRowOver le
+      // filtre), donc le drag est ignore proprement.
+      const block = groups.find((b) => b.group.id === drag.groupId)
+      const next = block
+        ? reorderIds(
+            block.rows.map((r) => r.category.id),
+            drag.id,
+            dropTarget,
+          )
+        : null
+      if (next) {
+        reorderCategories.mutate({ groupId: drag.groupId, orderedIds: next })
+        const pos = new Map(next.map((id, i) => [id, i]))
+        queryClient.setQueryData<BudgetMonth>(budgetKey, (old) =>
+          old
+            ? {
+                ...old,
+                groups: old.groups.map((g) =>
+                  g.group.id === drag.groupId
+                    ? {
+                        ...g,
+                        rows: [...g.rows].sort(
+                          (a, b) =>
+                            (pos.get(a.category.id) ?? 0) - (pos.get(b.category.id) ?? 0),
+                        ),
+                      }
+                    : g,
+                ),
+              }
+            : old,
+        )
+      }
+    }
+    reset()
+  }
+
+  const dnd: DndApi = {
+    drag,
+    dropTarget,
+    onGroupDragStart: (e, groupId) => {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', groupId)
+      setDrag({ kind: 'group', id: groupId })
+    },
+    onCategoryDragStart: (e, groupId, categoryId) => {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', categoryId)
+      setDrag({ kind: 'category', groupId, id: categoryId })
+    },
+    // Ligne d'en-tete de groupe : cible valide seulement pour un drag de
+    // groupe. preventDefault autorise le drop.
+    onGroupRowOver: (e, groupId) => {
+      if (!drag || drag.kind !== 'group') return
+      e.preventDefault()
+      setDropTarget({ id: groupId, after: isAfter(e) })
+    },
+    // Ligne d'enveloppe : cible valide seulement pour un drag de categorie
+    // ISSUE DU MEME groupe (inter-groupes hors perimetre).
+    onCategoryRowOver: (e, groupId, categoryId) => {
+      if (!drag || drag.kind !== 'category' || drag.groupId !== groupId) return
+      e.preventDefault()
+      setDropTarget({ id: categoryId, after: isAfter(e) })
+    },
+    onDrop,
+    onDragEnd: reset,
+  }
 
   return (
     <Card className="hidden overflow-hidden lg:block">
@@ -303,6 +490,7 @@ function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivity }: G
               onOpenTarget={onOpenTarget}
               onViewActivity={onViewActivity}
               onAssign={(categoryId, amount) => assign.mutate({ categoryId, amount })}
+              dnd={dnd}
             />
           ))}
         </tbody>
@@ -317,12 +505,14 @@ function GroupRows({
   onOpenTarget,
   onViewActivity,
   onAssign,
+  dnd,
 }: {
   block: BudgetGroupBlock
   targets: Map<string, Target>
   onOpenTarget: (category: Category) => void
   onViewActivity: (categoryId: string) => void
   onAssign: (categoryId: string, amount: number) => void
+  dnd: DndApi
 }) {
   const collapsed = useUiStore((s) => Boolean(s.collapsedGroups[block.group.id]))
   const toggle = useUiStore((s) => s.toggleGroupCollapsed)
@@ -331,12 +521,22 @@ function GroupRows({
   return (
     <>
       <tr
-        className="cursor-pointer select-none bg-surface2/60 transition-colors hover:bg-surface2"
+        className={cn(
+          'group cursor-pointer select-none bg-surface2/60 transition-colors hover:bg-surface2',
+          dropIndicatorClass(dnd.dropTarget, block.group.id),
+        )}
         onClick={() => toggle(block.group.id)}
+        onDragOver={(e) => dnd.onGroupRowOver(e, block.group.id)}
+        onDrop={dnd.onDrop}
         aria-expanded={!collapsed}
       >
         <td className="px-5 py-2">
           <span className="flex items-center gap-2.5">
+            <DragHandle
+              label={`Déplacer le groupe ${block.group.name}`}
+              onDragStart={(e) => dnd.onGroupDragStart(e, block.group.id)}
+              onDragEnd={dnd.onDragEnd}
+            />
             <Chevron className="h-4 w-4 shrink-0 text-soft" aria-hidden />
             <GroupPill group={block.group} size="sm" />
             <span className="font-semibold">{block.group.name}</span>
@@ -362,9 +562,22 @@ function GroupRows({
         block.rows.map((row) => {
           const target = targets.get(row.category.id)
           return (
-            <tr key={row.category.id} className="group border-t border-line/60 transition-colors hover:bg-surface2/40">
+            <tr
+              key={row.category.id}
+              className={cn(
+                'group border-t border-line/60 transition-colors hover:bg-surface2/40',
+                dropIndicatorClass(dnd.dropTarget, row.category.id),
+              )}
+              onDragOver={(e) => dnd.onCategoryRowOver(e, block.group.id, row.category.id)}
+              onDrop={dnd.onDrop}
+            >
               <td className="px-5 py-1.5">
                 <div className="flex items-center gap-1.5">
+                  <DragHandle
+                    label={`Déplacer l'enveloppe ${row.category.name}`}
+                    onDragStart={(e) => dnd.onCategoryDragStart(e, block.group.id, row.category.id)}
+                    onDragEnd={dnd.onDragEnd}
+                  />
                   <p className="font-medium">{row.category.name}</p>
                   <TargetTrigger
                     category={row.category}
