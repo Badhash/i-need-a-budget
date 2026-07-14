@@ -172,6 +172,9 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
   for (const m of monthRange(firstMonth, month)) {
     const monthAssigned = assignedByMonth.get(m)
     const monthActivity = activityByMonth.get(m)
+    // Seul le mois cible conserve ses lignes ; les mois anterieurs ne servent
+    // qu'a derouler rollover et overspending, on n'alloue donc pas leurs objets.
+    const isTarget = m === month
     const rows: CategoryMonth[] = []
     let monthOverspend = 0
 
@@ -180,13 +183,13 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
       const assigned = monthAssigned?.get(cat.id) ?? 0
       const activity = monthActivity?.get(cat.id) ?? 0
       const available = rollover + assigned + activity
-      rows.push({ categoryId: cat.id, rollover, assigned, activity, available })
+      if (isTarget) rows.push({ categoryId: cat.id, rollover, assigned, activity, available })
       if (available < 0) monthOverspend += -available
       prevAvailable.set(cat.id, available)
     }
 
-    if (m !== month) overspendBefore += monthOverspend
-    result = rows
+    if (!isTarget) overspendBefore += monthOverspend
+    else result = rows
   }
 
   const readyToAssign = inflows - assignedCumulative - assignedFuture - overspendBefore
