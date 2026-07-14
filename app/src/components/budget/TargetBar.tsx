@@ -18,7 +18,7 @@ interface TargetBarProps {
  * objectif. Objectif mensuel : progression = assigne / montant. Objectif pour
  * une date : progression = disponible cumule / montant (epargne accumulee).
  */
-export function TargetBar({ target, assigned, available, color }: TargetBarProps) {
+export function TargetBar({ target, assigned, available }: TargetBarProps) {
   const funded = target.type === 'monthly' ? assigned : available
   const safeFunded = Math.max(funded, 0)
   const ratio = target.amount > 0 ? Math.min(safeFunded / target.amount, 1) : 0
@@ -36,17 +36,21 @@ export function TargetBar({ target, assigned, available, color }: TargetBarProps
 
   return (
     // Pleine largeur sur mobile (lisible d'un coup d'oeil), compacte en table
-    // desktop. Piste sur fond pastel du groupe pour que la barre ressorte.
+    // desktop. Couleurs de l'accent du THEME (piste = accent attenue) pour
+    // rester coherent quel que soit le groupe ; vert quand l'objectif est
+    // atteint.
     <div className="mt-2 w-full lg:max-w-[220px]">
       <div
         className="h-2 w-full overflow-hidden rounded-full lg:h-1.5"
-        style={{ backgroundColor: `var(--cat-${color}-bg)` }}
+        style={{
+          backgroundColor: done ? 'rgb(var(--success) / 0.15)' : 'rgb(var(--accent) / 0.15)',
+        }}
       >
         <div
           className="h-full rounded-full transition-[width] duration-300 ease-out"
           style={{
             width: `${Math.max(ratio * 100, safeFunded > 0 ? 3 : 0)}%`,
-            backgroundColor: done ? 'rgb(var(--success))' : `var(--cat-${color}-fg)`,
+            backgroundColor: done ? 'rgb(var(--success))' : 'rgb(var(--accent))',
           }}
         />
       </div>
