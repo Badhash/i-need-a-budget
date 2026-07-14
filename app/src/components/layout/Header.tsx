@@ -135,7 +135,7 @@ export function Header() {
   const showMonth = MONTH_PAGES.has(pathname)
 
   return (
-    <header className="sticky top-0 z-40 border-b border-line bg-bg/85 backdrop-blur-md">
+    <header className="pt-safe px-safe sticky top-0 z-40 border-b border-line bg-bg/85 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-content items-center gap-1.5 px-3 sm:gap-3 sm:px-4 lg:px-8">
         <div className="hidden items-center gap-2.5 min-[380px]:flex lg:hidden">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accentfg">

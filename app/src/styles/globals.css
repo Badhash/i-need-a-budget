@@ -85,6 +85,18 @@
     padding-bottom: env(safe-area-inset-bottom);
   }
 
+  /* Mode standalone iOS (status bar black-translucent) : le contenu passe sous
+     l'encoche et la barre d'etat. Le header colle sous la safe-area haute. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  /* Gouttieres laterales en paysage (encoche/coins arrondis). */
+  .px-safe {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
   /* Hauteur pleine avec repli : 100dvh sur les navigateurs recents (barre
      dynamique iOS), 100vh sinon. Evite les ecrans "non centres" sur iOS. */
   .min-h-app {

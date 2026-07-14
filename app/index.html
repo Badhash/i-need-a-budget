@@ -6,14 +6,22 @@
     <title>I Need A Budget</title>
     <meta name="description" content="Budget par enveloppes, personnel et chiffré." />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <!-- PWA installable : manifest (nom, icones, standalone, couleurs de theme).
+         Chemins relatifs (base './' Vite) pour tenir sous le sous-chemin
+         GitHub Pages ; start_url adapte au hash routing dans le manifest. -->
+    <link rel="manifest" href="./manifest.webmanifest" />
     <!-- iOS "Ajouter a l'ecran d'accueil" : icone PNG 180x180 (Safari ignore le
          SVG), nom court sous l'icone, et lancement plein ecran facon application. -->
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="INAB" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
-    <meta name="theme-color" content="#111018" />
+    <!-- black-translucent : rendu edge-to-edge, le contenu passe SOUS la barre
+         d'etat (les safe-areas du header/nav gerent le decalage). -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- theme-color clair/sombre : la barre systeme suit le mode de l'appareil. -->
+    <meta name="theme-color" content="#FAF9F7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141414" media="(prefers-color-scheme: dark)" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
