@@ -1222,7 +1222,12 @@ async function actionReconcile(userId: string) {
     else txsByAccount.set(tx.payload.accountId, [tx])
   }
 
-  const adjusted: { accountId: string; accountName: string; delta: number }[] = []
+  const adjusted: {
+    accountId: string
+    accountName: string
+    delta: number
+    newBalance: number
+  }[] = []
   const processed = new Set<string>()
 
   for (const conn of activeConnections) {
@@ -1286,7 +1291,12 @@ async function actionReconcile(userId: string) {
         })
       }
 
-      adjusted.push({ accountId: localAccount.id, accountName: localAccount.name, delta })
+      adjusted.push({
+        accountId: localAccount.id,
+        accountName: localAccount.name,
+        delta,
+        newBalance: ebCents,
+      })
     }
   }
 

@@ -125,8 +125,12 @@ export function BankSection() {
       if (adjusted.length === 0) {
         setImportMessage('Les soldes sont déjà exacts.')
       } else {
-        const parts = adjusted.map((a) => `${a.accountName} : ${fmtEUR(a.delta)}`)
-        setImportMessage(`Solde recalé — ${parts.join(', ')}.`)
+        // On affiche le NOUVEAU solde (le solde bancaire reel), avec l'ajustement
+        // applique entre parentheses — plus clair que le seul delta.
+        const parts = adjusted.map(
+          (a) => `${a.accountName} : ${fmtEUR(a.newBalance)} (ajusté de ${fmtEUR(a.delta)})`,
+        )
+        setImportMessage(`Soldes mis à jour — ${parts.join(' · ')}.`)
       }
       await queryClient.invalidateQueries()
     } catch {

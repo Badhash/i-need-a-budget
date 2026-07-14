@@ -156,7 +156,7 @@ export async function bankSync(sinceDays?: number): Promise<BankSyncResult> {
 }
 
 export interface BankReconcileResult {
-  adjusted: { accountId: string; accountName: string; delta: number }[]
+  adjusted: { accountId: string; accountName: string; delta: number; newBalance: number }[]
 }
 
 /**
