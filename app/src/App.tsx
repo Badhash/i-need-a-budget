@@ -24,8 +24,7 @@ import {
 } from '@/lib/data'
 import { RULES_KEY, fetchRules } from '@/lib/rules'
 import { TARGETS_KEY, fetchTargets } from '@/lib/targets'
-import { MAX_MONTH, MIN_MONTH } from '@/lib/format'
-import { monthRange } from '@/lib/format'
+import { MAX_MONTH, MIN_MONTH, addMonths } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { AppLoader } from '@/components/shared/AppLoader'
 
@@ -71,12 +70,17 @@ async function preloadCritical(
   return taxo
 }
 
-// Prechargement de FOND (non bloquant) : lance APRES l'entree dans l'app, sans
-// aucun loader. Rechauffe silencieusement les autres mois de budget, tous les
-// rapports, et les donnees secondaires (objectifs, regles, banque). Grace au
-// staleTime long, naviguer vers un autre mois est alors instantane ; et si un
-// mois n'est pas encore chaud, sa vue affiche brievement son propre squelette
-// au lieu de bloquer TOUT le demarrage.
+// Prechargement de FOND (non bloquant), VOLONTAIREMENT FRUGAL pour menager le
+// free tier Supabase : chaque getBudgetMonth/getReports recharge et dechiffre
+// TOUTES les transactions cote serveur, donc precharger 12 mois + 12 rapports a
+// chaque lancement serait du gaspillage de calcul. On se limite a ce qui est
+// vraiment utile :
+//   - les donnees secondaires (objectifs, regles, banque, logs) : legeres ;
+//   - les mois ADJACENTS (precedent + suivant) au mois affiche : la navigation
+//     la plus frequente est +/- 1 mois.
+// Tout le reste (mois lointains, rapports) se charge A LA DEMANDE au premier
+// affichage, puis reste en cache (staleTime long). Un mois froid montre juste
+// un squelette une fraction de seconde, sans marteler l'API.
 function preloadRest(queryClient: QueryClient, taxo: Bootstrap | undefined, currentMonth: string): void {
   const tasks: Promise<unknown>[] = [
     queryClient.prefetchQuery({ queryKey: TARGETS_KEY, queryFn: fetchTargets }),
@@ -84,14 +88,15 @@ function preloadRest(queryClient: QueryClient, taxo: Bootstrap | undefined, curr
     queryClient.prefetchQuery({ queryKey: BANK_CONNECTIONS_KEY, queryFn: fetchBankConnections }),
     queryClient.prefetchQuery({ queryKey: SYNC_LOGS_KEY, queryFn: fetchSyncLogs }),
   ]
-  for (const m of monthRange(MIN_MONTH, MAX_MONTH)) {
-    if (taxo && m !== currentMonth) {
-      const captured = taxo
-      tasks.push(
-        queryClient.prefetchQuery({ queryKey: budgetKey(m), queryFn: () => fetchBudgetMonth(m, captured) }),
-      )
+  if (taxo) {
+    const captured = taxo
+    for (const m of [addMonths(currentMonth, -1), addMonths(currentMonth, 1)]) {
+      if (m >= MIN_MONTH && m <= MAX_MONTH) {
+        tasks.push(
+          queryClient.prefetchQuery({ queryKey: budgetKey(m), queryFn: () => fetchBudgetMonth(m, captured) }),
+        )
+      }
     }
-    tasks.push(queryClient.prefetchQuery({ queryKey: reportsKey(m), queryFn: () => fetchReports(m) }))
   }
   void Promise.allSettled(tasks)
 }
