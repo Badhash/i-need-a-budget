@@ -163,25 +163,25 @@ export function AssignSheet({ row, target, onCommit, onViewActivity, onClose }: 
               <button
                 type="button"
                 onClick={() => setCents(emptyToRta)}
+                title="Vider cette enveloppe vers le Prêt à assigner"
                 className="h-9 shrink-0 whitespace-nowrap rounded-full border border-success/40 bg-success/10 px-3.5 text-[13px] font-medium text-success active:bg-success/20"
               >
-                Vider vers Prêt à assigner
+                Vider
               </button>
             )}
           </div>
 
-          <Button className="h-12 w-full text-[15px]" onClick={commit} disabled={!valid}>
-            <span className="flex w-full items-center justify-between">
-              <span>{valid && cents !== null && cents < 0 ? 'Retirer' : 'Assigner'}</span>
-              <span
-                className={cn(
-                  'text-[13px] font-medium tnum opacity-90',
-                  availableAfter < 0 && 'text-danger',
-                )}
-              >
-                Disponible après : {fmtEUR(availableAfter)}
-              </span>
+          {/* Effet de l'assignation, HORS du bouton colore (le rouge d'un
+              disponible negatif serait illisible sur le fond accent). */}
+          <div className="flex items-center justify-between px-1 text-[13px]">
+            <span className="text-soft">Disponible après</span>
+            <span className={cn('font-semibold tnum', availableAfter < 0 ? 'text-danger' : 'text-ink')}>
+              {fmtEUR(availableAfter)}
             </span>
+          </div>
+
+          <Button className="h-12 w-full text-[15px]" onClick={commit} disabled={!valid}>
+            {valid && cents !== null && cents < 0 ? 'Retirer' : 'Assigner'}
           </Button>
         </div>
       </DialogContent>
