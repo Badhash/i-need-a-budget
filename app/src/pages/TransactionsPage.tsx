@@ -9,9 +9,10 @@ import {
   useReactTable,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet, X } from 'lucide-react'
+import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, Inbox, MoreHorizontal, Plus, Search, X } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
 import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
+import { useAspsps } from '@/lib/bank'
 import { apiCall } from '@/lib/api'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
@@ -20,6 +21,7 @@ import { fmtDateShort, fmtDayLong, fmtMonthTitle, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
 import { TxKindChip } from '@/components/transactions/TxKindChip'
+import { BankLogo } from '@/components/settings/BankCombobox'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,7 +30,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Amount } from '@/components/shared/Amount'
-import { GroupPill } from '@/components/shared/GroupPill'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -44,6 +45,7 @@ interface TxRow {
   category: Category | null
   group: CategoryGroup | null
   parsed: ParsedLabel
+  logo: string | null
 }
 
 type Maps = {
@@ -52,12 +54,17 @@ type Maps = {
   groupById: Map<string, CategoryGroup>
 }
 
-function toRow(tx: Transaction, maps: Maps): TxRow | null {
+// Resout le logo d'une banque a partir de l'intitule libre du compte : les
+// intitules issus d'une connexion Enable Banking matchent le nom d'ASPSP ; les
+// comptes saisis a la main peuvent ne pas matcher -> repli sur une icone.
+type LogoResolver = (institution: string) => string | null
+
+function toRow(tx: Transaction, maps: Maps, resolveLogo: LogoResolver): TxRow | null {
   const account = maps.accountById.get(tx.accountId)
   if (!account) return null
   const category = tx.categoryId ? (maps.categoryById.get(tx.categoryId) ?? null) : null
   const group = category ? (maps.groupById.get(category.groupId) ?? null) : null
-  return { tx, account, category, group, parsed: parseBankLabel(tx.label) }
+  return { tx, account, category, group, parsed: parseBankLabel(tx.label), logo: resolveLogo(account.institution) }
 }
 
 // Categorisation optimiste : le cache TanStack est mis a jour immediatement,
@@ -267,32 +274,12 @@ function CategoryBadge({ row }: { row: TxRow }) {
   )
 }
 
-// Pastille de compte : distingue d'un coup d'oeil les transactions de la carte
-// a debit differe (violet) de celles des autres comptes (neutre).
-const ACCOUNT_CHIP_META: Record<Account['kind'], { icon: typeof Wallet; card: boolean }> = {
-  checking: { icon: Wallet, card: false },
-  savings: { icon: PiggyBank, card: false },
-  investment: { icon: TrendingUp, card: false },
-  card_deferred: { icon: CreditCard, card: true },
-}
-
-function AccountChip({ account }: { account: Account }) {
-  const meta = ACCOUNT_CHIP_META[account.kind] ?? ACCOUNT_CHIP_META.checking
-  const Icon = meta.icon
+// Logo de la banque en tete de ligne (repli sur une icone si non resolu).
+// Le nom du compte et l'etablissement restent accessibles au survol.
+function BankCell({ row }: { row: TxRow }) {
   return (
-    <span
-      className={cn(
-        'inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
-        !meta.card && 'bg-surface2 text-soft',
-      )}
-      style={
-        meta.card
-          ? { backgroundColor: 'var(--cat-purple-bg)', color: 'var(--cat-purple-fg)' }
-          : undefined
-      }
-    >
-      <Icon className="h-3 w-3 shrink-0" />
-      <span className="truncate">{account.name}</span>
+    <span className="inline-flex" title={`${row.account.name} · ${row.account.institution}`}>
+      <BankLogo logo={row.logo} className="h-8 w-8" />
     </span>
   )
 }
@@ -302,6 +289,11 @@ const PAGE_SIZE = 50
 const columnHelper = createColumnHelper<TxRow>()
 
 const columns = [
+  columnHelper.display({
+    id: 'bank',
+    header: '',
+    cell: (info) => <BankCell row={info.row.original} />,
+  }),
   columnHelper.accessor((r) => r.tx.date, {
     id: 'date',
     header: 'Date',
@@ -314,17 +306,20 @@ const columns = [
     cell: (info) => {
       const row = info.row.original
       return (
-        <div className="min-w-0">
-          <p className="truncate font-medium" title={row.tx.label}>
-            {row.parsed.short}
-          </p>
-          <div className="mt-0.5 flex items-center gap-1.5">
-            {/* Les transferts gardent leur badge dedie : pas de double chip */}
-            {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
-            <AccountChip account={row.account} />
-          </div>
-        </div>
+        <p className="truncate font-medium" title={row.tx.label}>
+          {row.parsed.short}
+        </p>
       )
+    },
+  }),
+  columnHelper.display({
+    id: 'kind',
+    header: 'Type',
+    // Les transferts portent deja leur badge dans la colonne Categorie : pas de
+    // double indication de type ici.
+    cell: (info) => {
+      const row = info.row.original
+      return row.tx.transferGroupId ? null : <TxKindChip kind={row.parsed.kind} />
     },
   }),
   columnHelper.display({
@@ -374,7 +369,9 @@ function DesktopTable({ rows }: { rows: TxRow[] }) {
                   className={cn(
                     'px-5 py-3 text-left label-caps font-medium',
                     header.id === 'amount' && 'text-right',
+                    header.id === 'bank' && 'w-12 pr-0',
                     header.id === 'date' && 'w-28',
+                    header.id === 'kind' && 'w-36',
                     header.id === 'category' && 'w-48',
                     header.id === 'amount' && 'w-36',
                     header.id === 'actions' && 'w-12',
@@ -405,7 +402,11 @@ function DesktopTable({ rows }: { rows: TxRow[] }) {
               {row.getVisibleCells().map((cell) => (
                 <td
                   key={cell.id}
-                  className={cn('px-5 py-3', cell.column.id === 'amount' && 'text-right')}
+                  className={cn(
+                    'px-5 py-3',
+                    cell.column.id === 'amount' && 'text-right',
+                    cell.column.id === 'bank' && 'pr-0',
+                  )}
                 >
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
@@ -443,7 +444,12 @@ function MobileList({ rows }: { rows: TxRow[] }) {
           <Card className="divide-y divide-line/60 overflow-hidden">
             {dayRows.map((row) => (
               <div key={row.tx.id} className="flex min-h-[60px] items-center gap-3 px-4 py-3">
-                <GroupPill group={row.group ?? undefined} size="md" />
+                <span
+                  className="inline-flex shrink-0"
+                  title={`${row.account.name} · ${row.account.institution}`}
+                >
+                  <BankLogo logo={row.logo} className="h-9 w-9" />
+                </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium" title={row.tx.label}>
                     {row.parsed.short}
@@ -452,7 +458,6 @@ function MobileList({ rows }: { rows: TxRow[] }) {
                     <CategoryBadge row={row} />
                     {/* Les transferts gardent leur badge dedie : pas de double chip */}
                     {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
-                    <AccountChip account={row.account} />
                   </div>
                 </div>
                 <Amount
@@ -500,6 +505,26 @@ export function TransactionsPage() {
   const groupById = useGroupsMap()
   const categoriesList = useCategoriesList()
   const groupsList = useGroupsList()
+  const { data: aspsps } = useAspsps()
+
+  // Resolution du logo par intitule de banque : match exact (nom d'ASPSP) puis
+  // repli tolerant (inclusion) pour les intitules saisis a la main. Repli final
+  // sur une icone gere par BankLogo quand rien ne matche.
+  const resolveLogo = useMemo<LogoResolver>(() => {
+    const list = aspsps ?? []
+    const exact = new Map<string, string | null>()
+    for (const a of list) exact.set(a.name.trim().toLowerCase(), a.logo)
+    return (institution: string) => {
+      const key = institution.trim().toLowerCase()
+      if (!key) return null
+      if (exact.has(key)) return exact.get(key) ?? null
+      for (const a of list) {
+        const n = a.name.trim().toLowerCase()
+        if (n && (n.includes(key) || key.includes(n))) return a.logo
+      }
+      return null
+    }
+  }, [aspsps])
 
   // Pre-filtres poses par la navigation (tous optionnels, combinables) :
   //   ?compte=<id>     (depuis Comptes)
@@ -568,7 +593,7 @@ export function TransactionsPage() {
       .filter((t) => categoryFilter === 'all' || t.categoryId === categoryFilter)
       .filter((t) => monthFilter === 'all' || monthOf(t.date) === monthFilter)
       .filter((t) => !onlyUncat || (!t.categoryId && !t.transferGroupId))
-      .map((t) => toRow(t, maps))
+      .map((t) => toRow(t, maps, resolveLogo))
       .filter((r): r is TxRow => r !== null)
       .filter(
         (r) =>
@@ -584,6 +609,7 @@ export function TransactionsPage() {
     accountById,
     categoryById,
     groupById,
+    resolveLogo,
     search,
     accountFilter,
     categoryFilter,
