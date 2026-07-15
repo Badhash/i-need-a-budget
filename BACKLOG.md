@@ -2,40 +2,56 @@
 
 ## Synthèse PO
 
-Le produit est solide sur son cœur : moteur d'enveloppes conforme YNAB, tout-chiffré, budget optimiste, sync Enable Banking 3x/jour avec dédup et virements carte différé auto-détectés, règles de catégorisation, rapports Tremor, export. L'exploration du code révèle des manques concrets : aucune modification de transaction après création (ni montant, ni date, ni note, ni split), pas de déplacement d'argent entre enveloppes (geste central de la méthode YNAB), pas de manifest PWA ni de service worker alors que l'usage principal est un iPhone en écran d'accueil, et aucune visibilité sur la santé de la sync côté UI. La plus grosse valeur immédiate est du côté iOS/quotidien : PWA réelle, édition de transaction, « couvrir un dépassement », et la file de mutations offline qui sécurise l'optimisme existant. Prochain sprint recommandé : INAB-1, INAB-2, INAB-3 et INAB-5 (deux quick wins, deux fondations), le reste au fil de l'eau selon l'usage réel.
+Le produit est solide sur son cœur : moteur d'enveloppes conforme YNAB, tout-chiffré, budget optimiste, sync Enable Banking 3x/jour avec dédup et virements carte différé auto-détectés, règles de catégorisation, rapports Tremor, export.
+
+Tout le lot P1 est désormais livré : édition complète de transaction (INAB-1), déplacement d'argent entre enveloppes / couvrir un dépassement (INAB-2), PWA réelle avec manifest, mode standalone et safe-areas iOS (INAB-3), file de mutations optimistes sérialisée (INAB-4), santé de la synchro visible (INAB-5) et financement guidé des objectifs (INAB-6). L'import YNAB destructif (INAB-19) et le rapport valeur nette (INAB-8) sont également livrés. La page Rapports a été refondue (mobile simple / desktop enrichi : coach d'épargne, valeur nette, calculateur de Zakat), et la page Budget dispose d'un undo/redo local.
+
+Reste principalement du P2/P3 selon l'usage réel : splits (INAB-7), mode offline (INAB-9), import CSV historique (INAB-10), cycle carte différée (INAB-11), objectifs avancés (INAB-12), âge de l'argent (INAB-13), récurrences (INAB-14), puis les items P3.
 
 ---
 
 ## P1 — À faire en premier
 
 ### INAB-1 — Édition complète d'une transaction
+**Statut : FAIT.** Action `/api updateTransaction` + feuille d'édition (EditTransactionDialog), optimiste.
+
 **Problème / opportunité.** Une transaction créée ou importée ne peut être que catégorisée, convertie en virement ou supprimée : impossible de corriger un montant, une date, un libellé ou d'ajouter une note sans supprimer/recréer.
 **Proposition.** Action `/api` `updateTransaction` (re-chiffrement du payload, recalcul de `month_idx` si la date change, `tx_hash` conservé pour les imports) + feuille d'édition mobile (réutiliser AddTransactionDialog) avec mise à jour optimiste et rollback.
 **Valeur** haute — **Effort** M — **Priorité** P1.
 **Risque.** Modifier une transaction importée casse potentiellement la dédup si le montant change : documenter que `tx_hash` reste figé.
 
 ### INAB-2 — Déplacer de l'argent entre enveloppes / couvrir un dépassement
+**Statut : FAIT.** Menu long-press « Couvrir depuis… » / « Déplacer vers… », deux `setAssigned` optimistes.
+
 **Problème / opportunité.** Geste central de YNAB absent : quand une catégorie est en dépassement (available négatif), il faut faire deux assignations mentales pour la renflouer.
 **Proposition.** Dans le menu long-press d'une catégorie : « Couvrir depuis… » (catégorie en négatif) et « Déplacer vers… » (catégorie excédentaire), avec sélecteur de catégorie trié par available décroissant et montant pré-rempli. Deux `setAssigned` atomiques côté client, optimistes.
 **Valeur** haute — **Effort** S — **Priorité** P1.
 
 ### INAB-3 — PWA réelle : manifest, standalone, safe-areas iOS
+**Statut : FAIT.** `manifest.webmanifest`, icônes (dont maskable), meta iOS et safe-areas livrés.
+
 **Problème / opportunité.** L'app est utilisée depuis l'écran d'accueil iPhone mais il n'y a ni `manifest.webmanifest` ni mode standalone : barre Safari visible, splash générique, pas de nom/couleur de thème.
 **Proposition.** Manifest complet (nom, icônes, `display: standalone`, `theme_color` clair/sombre), meta iOS (`apple-mobile-web-app-*`), gestion `env(safe-area-inset-*)` sur BottomNav/FAB/Header, splash screen. Compatible hash routing GitHub Pages.
 **Valeur** haute — **Effort** S — **Priorité** P1.
 
 ### INAB-4 — File de mutations optimistes sérialisée (item TODO)
+**Statut : FAIT.** File FIFO `app/src/lib/mutationQueue.ts`, réconciliation des IDs temporaires.
+
 **Problème / opportunité.** Renommer ou supprimer une catégorie pendant la micro-fenêtre du POST de création renvoie un 400 et un rollback discret : les mutations optimistes concurrentes ne sont pas ordonnées.
 **Proposition.** File FIFO côté client (petit module au-dessus de TanStack Mutation) : les mutations touchant la même entité s'enchaînent, les IDs temporaires sont réconciliés avec les IDs serveur avant l'envoi des mutations suivantes.
 **Valeur** haute — **Effort** M — **Priorité** P1.
 **Dépendance.** Socle pour INAB-9 (offline).
 
 ### INAB-5 — Santé de la synchro visible (monitoring + relance manuelle)
+**Statut : FAIT.** Action `/api listSyncLogs`, composant SyncHealth dans Réglages, relance manuelle.
+
 **Problème / opportunité.** La sync tourne 3x/jour en silence ; en cas d'échec (session expirée, erreur Enable Banking), l'utilisateur ne le découvre qu'en constatant l'absence de transactions.
 **Proposition.** Lecture des `sync_logs` via `/api` : indicateur « dernière synchro il y a X h » dans Comptes/Réglages, badge d'erreur si le dernier run a échoué, bouton « Synchroniser maintenant », historique des 10 derniers runs dans Réglages.
 **Valeur** haute — **Effort** S — **Priorité** P1.
 
 ### INAB-6 — Assignation guidée : « Financer tous les objectifs »
+**Statut : FAIT.** Bouton « Financer les objectifs » (FundTargetsSheet), respect du RTA.
+
 **Problème / opportunité.** Avec des objectifs (targets) posés, l'assignation mensuelle reste manuelle catégorie par catégorie : le rituel de début de mois est fastidieux.
 **Proposition.** Bouton sur la page Budget : « Financer les objectifs » qui pré-remplit les assignations manquantes (montant nécessaire pour atteindre chaque target du mois), avec aperçu du total avant validation et respect du RTA (avertissement si dépassement). Variante par groupe dans le menu long-press.
 **Valeur** haute — **Effort** M — **Priorité** P1.
@@ -51,6 +67,8 @@ Le produit est solide sur son cœur : moteur d'enveloppes conforme YNAB, tout-ch
 **Dépendance.** INAB-1 ; toucher `packages/engine` + tests Vitest.
 
 ### INAB-8 — Rapport valeur nette (net worth)
+**Statut : FAIT.** Widget Patrimoine (NetWorthWidget) : courbe mensuelle actifs − passifs + ventilation par compte.
+
 **Problème / opportunité.** Les comptes tracking (PEA) existent mais aucun rapport n'agrège patrimoine total dans le temps — le rapport signature de Copilot/YNAB manque.
 **Proposition.** Widget Rapports : courbe mensuelle actifs − passifs (soldes reconstruits depuis les transactions, calcul côté `/api`), chiffre héros + tendance vs mois précédent, ventilation par compte.
 **Valeur** haute — **Effort** M — **Priorité** P2.
@@ -109,7 +127,7 @@ Le produit est solide sur son cœur : moteur d'enveloppes conforme YNAB, tout-ch
 **Valeur** moyenne — **Effort** S — **Priorité** P3.
 
 ### INAB-18 — Découpage et durcissement des Edge Functions (dette)
-**Problème / opportunité.** `api/index.ts` (1 581 lignes) et `sync-bank/index.ts` (1 438 lignes) concentrent 40+ actions dans deux fichiers : risque de régression croissant, aucune couverture de test hors engine/crypto.
+**Problème / opportunité.** `api/index.ts` (~2 000 lignes) et `sync-bank/index.ts` (~1 500 lignes) concentrent 40+ actions dans deux fichiers : risque de régression croissant, aucune couverture de test hors engine/crypto.
 **Proposition.** Découper en modules par domaine (transactions, budget, catégories, règles, banque) avec un routeur d'actions typé, extraire la logique pure testable (appariement carte différé, dédup, application des règles) vers des fonctions couvertes par Vitest.
 **Valeur** moyenne — **Effort** M — **Priorité** P3.
 
@@ -117,23 +135,24 @@ Le produit est solide sur son cœur : moteur d'enveloppes conforme YNAB, tout-ch
 
 ## Récapitulatif
 
-| ID | Titre | Valeur | Effort | Priorité |
-|---|---|---|---|---|
-| INAB-1 | Édition complète d'une transaction | Haute | M | P1 |
-| INAB-2 | Déplacer de l'argent / couvrir un dépassement | Haute | S | P1 |
-| INAB-3 | PWA réelle (manifest, standalone, safe-areas) | Haute | S | P1 |
-| INAB-4 | File de mutations optimistes sérialisée | Haute | M | P1 |
-| INAB-5 | Santé de la synchro visible | Haute | S | P1 |
-| INAB-6 | Financer tous les objectifs en un geste | Haute | M | P1 |
-| INAB-7 | Transactions fractionnées | Haute | L | P2 |
-| INAB-8 | Rapport valeur nette | Haute | M | P2 |
-| INAB-9 | Mode offline (cache persistant + rejeu) | Haute | L | P2 |
-| INAB-10 | Import CSV historique | Moyenne | M | P2 |
-| INAB-11 | Cycle de facturation carte différé | Moyenne | M | P2 |
-| INAB-12 | Objectifs avancés (refill, annuel) | Moyenne | M | P2 |
-| INAB-13 | Âge de l'argent | Moyenne | M | P2 |
-| INAB-14 | Transactions récurrentes planifiées | Moyenne | L | P2 |
-| INAB-15 | Notifications push | Moyenne | L | P3 |
-| INAB-16 | Recherche globale et filtres enrichis | Moyenne | S | P3 |
-| INAB-17 | Réconciliation manuelle guidée | Moyenne | S | P3 |
-| INAB-18 | Découpage des Edge Functions | Moyenne | M | P3 |
+| ID | Titre | Valeur | Effort | Priorité | Statut |
+|---|---|---|---|---|---|
+| INAB-1 | Édition complète d'une transaction | Haute | M | P1 | FAIT |
+| INAB-2 | Déplacer de l'argent / couvrir un dépassement | Haute | S | P1 | FAIT |
+| INAB-3 | PWA réelle (manifest, standalone, safe-areas) | Haute | S | P1 | FAIT |
+| INAB-4 | File de mutations optimistes sérialisée | Haute | M | P1 | FAIT |
+| INAB-5 | Santé de la synchro visible | Haute | S | P1 | FAIT |
+| INAB-6 | Financer tous les objectifs en un geste | Haute | M | P1 | FAIT |
+| INAB-7 | Transactions fractionnées | Haute | L | P2 | À faire |
+| INAB-8 | Rapport valeur nette | Haute | M | P2 | FAIT |
+| INAB-9 | Mode offline (cache persistant + rejeu) | Haute | L | P2 | À faire |
+| INAB-10 | Import CSV historique | Moyenne | M | P2 | À faire |
+| INAB-11 | Cycle de facturation carte différé | Moyenne | M | P2 | À faire |
+| INAB-12 | Objectifs avancés (refill, annuel) | Moyenne | M | P2 | À faire |
+| INAB-13 | Âge de l'argent | Moyenne | M | P2 | À faire |
+| INAB-14 | Transactions récurrentes planifiées | Moyenne | L | P2 | À faire |
+| INAB-15 | Notifications push | Moyenne | L | P3 | À faire |
+| INAB-16 | Recherche globale et filtres enrichis | Moyenne | S | P3 | À faire |
+| INAB-17 | Réconciliation manuelle guidée | Moyenne | S | P3 | À faire |
+| INAB-18 | Découpage des Edge Functions | Moyenne | M | P3 | À faire |
+| INAB-19 | Import YNAB destructif | Haute | M | P1 | FAIT |

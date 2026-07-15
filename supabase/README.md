@@ -36,15 +36,21 @@ sign up" = OFF (compte unique cree a la main).
 
 Endpoint unique a actions typees (POST JSON `{ action, params }`, JWT obligatoire).
 Actions : bootstrap, getBudgetMonth, getTransactions, listTransactions, getReports,
-addTransaction, categorizeTransaction, setAssigned, createAccount, seedDefaults,
+addTransaction, categorizeTransaction, updateTransaction, deleteTransaction,
+convertToTransfer, convertTransferToNormal, setAssigned, createAccount, seedDefaults,
+createCategory, updateCategory, deleteCategory, createCategoryGroup,
+updateCategoryGroup, deleteCategoryGroup, reorderCategories, reorderCategoryGroups,
 listRules, createRule, updateRule, deleteRule, applyRulesToUncategorized,
-listTargets, setTarget, deleteTarget, getBankConnections, exportData. Dechiffrement
-en memoire, calculs via packages/engine, aucune donnee metier dans les logs.
+listTargets, setTarget, deleteTarget, getBankConnections, linkBankAccount,
+listSyncLogs, exportData, importReplaceBegin, importReplaceTransactions,
+importReplaceAssignments (import YNAB destructif). Dechiffrement en memoire, calculs
+via packages/engine, aucune donnee metier dans les logs.
 
 ## Edge Function sync-bank (Enable Banking)
 
 Synchronisation bancaire PSD2 (verify_jwt = false ; verification interne du JWT
-utilisateur ou du secret x-cron-secret). Actions : startAuth, finalizeAuth, sync.
+utilisateur ou du secret x-cron-secret). Actions : startAuth, finalizeAuth, sync,
+reconcile (recalage du solde d'ouverture sur le solde reel Enable Banking).
 Secrets, SQL pg_cron et flow de consentement : voir
 `supabase/functions/sync-bank/README.md`. NON active tant que l'app Enable Banking
 n'est pas validee.

@@ -27,10 +27,15 @@ verifie a la main l'identite. Deux modes d'appel :
 - `finalizeAuth { code }` (utilisateur) -> `{ ok: true, connectionId }`
   Echange le `code` renvoye par la banque contre une session EB, puis chiffre et
   insere la `bank_connection` (session_id, comptes EB, `valid_until`).
-- `sync {}` (utilisateur ou cron) -> `{ imported }`
+- `sync { sinceDays? }` (utilisateur ou cron) -> `{ imported }`
   Poll des transactions depuis la derniere sync (ou la date d'activation de la
-  connexion), mapping, dedup (`tx_hash`), categorisation par regles, insertion
-  chiffree, journalisation dans `sync_logs`.
+  connexion ; `sinceDays` force une fenetre plus profonde pour l'import initial,
+  plafonnee a ~730 jours), mapping, dedup (`tx_hash`), categorisation par regles,
+  insertion chiffree, appariement des prelevements carte a debit differe,
+  journalisation dans `sync_logs`.
+- `reconcile {}` (utilisateur ou cron) -> recale le solde d'ouverture de chaque
+  compte lie pour que le solde local corresponde au solde reel Enable Banking.
+  Enchaine automatiquement apres un `sync` declenche avec `sinceDays`.
 
 ## Secrets Edge a configurer (dashboard Supabase > Edge Functions > Secrets)
 

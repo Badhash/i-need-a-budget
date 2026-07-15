@@ -38,10 +38,15 @@ n'est pas validée (production restreinte). Une fois validée :
 
 ## Backlog phase 2 (après usage réel)
 
-- Import CSV historique bancaire
+Le backlog priorisé et à jour vit désormais dans `BACKLOG.md` (statut FAIT / À faire
+par item INAB). Déjà livré depuis ce plan : PWA installable, édition/déplacement de
+transactions, financement des objectifs, santé de la synchro, rapport valeur nette,
+import YNAB destructif. Reste notamment :
+
+- Import CSV historique bancaire (INAB-10)
+- Mode offline : cache persistant + rejeu de la file de mutations (INAB-9)
+- Notifications push génériques (INAB-15)
+- Widget "âge de l'argent" (INAB-13)
+- Transactions récurrentes planifiées (INAB-14)
 - Deuxième utilisateur : comptes partagés, RLS par foyer
 - Connexions supplémentaires (Trade Republic, livrets)
-- PWA installable + notifications locales ("X transactions à catégoriser")
-- Widget "âge de l'argent" (age of money YNAB)
-- Transferts liés + réconciliation
-- Réordonnancement atomique des règles côté serveur (échange de priorités)

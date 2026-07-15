@@ -4,15 +4,29 @@ Application personnelle de budget par enveloppes (zero-based), inspirée de YNAB
 avec une exigence forte sur l'UI/UX (north star : Copilot Money).
 
 - Spécification produit et conventions : [CLAUDE.md](CLAUDE.md)
-- Feuille de route (sessions restantes) : [PLAN.md](PLAN.md)
-- Périmètre MVP (reste à faire) : [PLAN-MVP.md](PLAN-MVP.md)
+- Backlog priorisé (fait / restant) : [BACKLOG.md](BACKLOG.md)
+- Feuille de route (reste à faire) : [PLAN.md](PLAN.md)
+- Périmètre MVP : [PLAN-MVP.md](PLAN-MVP.md)
 
-## Reste à faire
+## État
 
-- Authentification (login email/password + MFA)
-- Branchement du front sur l'Edge Function `/api` (remplacement des mocks) + Realtime
-- Synchronisation bancaire automatique via Enable Banking (Edge Function `sync-bank`)
-- Finitions : règles de catégorisation, targets, export chiffré
+Le produit est livré et branché sur données réelles :
+
+- Authentification email/password + MFA TOTP.
+- Front branché sur l'Edge Function `/api` (aucune donnée mockée) + signal Realtime.
+- Moteur d'enveloppes YNAB (`packages/engine`) et chiffrement (`packages/crypto`),
+  couverts par Vitest.
+- Budget optimiste (undo/redo local), catégorisation en 2 taps, objectifs et
+  financement guidé des objectifs, règles de catégorisation.
+- Édition et déplacement de transactions, cartes à débit différé, import YNAB
+  destructif, PWA installable (manifest + safe-areas iOS), file de mutations,
+  santé de la synchro visible.
+- Page Rapports (mobile simple / desktop enrichi : coach d'épargne, valeur nette,
+  calculateur de Zakat).
+- Synchronisation bancaire Enable Banking (Edge Function `sync-bank`), écrite,
+  à activer une fois l'app Enable Banking validée.
+
+Le détail de ce qui reste est dans [BACKLOG.md](BACKLOG.md) et [PLAN.md](PLAN.md).
 
 ## Structure
 
@@ -20,8 +34,8 @@ avec une exigence forte sur l'UI/UX (north star : Copilot Money).
 /app                  front React (Vite + TypeScript + Tailwind)
 /packages/engine      moteur d'enveloppes (TypeScript pur + tests)
 /packages/crypto      chiffrement AES-256-GCM + index aveugles
-/supabase             schéma chiffré, migrations, Edge Function /api
-/.github/workflows    deploiement GitHub Pages + ping Supabase
+/supabase             Edge Functions /api et sync-bank (schéma non versionné)
+/.github/workflows    deploiement Pages, deploiement Edge Functions, ping Supabase
 ```
 
 ## Developpement local

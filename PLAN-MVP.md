@@ -1,5 +1,9 @@
 # PLAN-MVP.md — Reste à faire (MVP)
 
+> Document largement historique : le code du MVP est livré. Il ne reste que la
+> configuration (secrets Supabase / GitHub) et l'activation d'Enable Banking. Le
+> backlog vivant est dans `BACKLOG.md`.
+
 ## Définition du MVP
 
 Une seule promesse : "Je vois mes transactions bancaires arriver automatiquement,
@@ -30,9 +34,10 @@ Reste, hors code :
 - Rien en clair dans les tables Supabase (vérification visuelle dashboard) — OK.
 - L'app est utilisable et agréable sur mobile et desktop, light et dark — OK.
 
-## Backlog post-MVP (ordre suggéré par valeur)
+## Backlog post-MVP
 
-1. Rapports enrichis (déjà : donut par groupe, cash-flow 6 mois, taux d'épargne)
-2. Transferts liés + réconciliation
-3. Import CSV historique, comptes tracking supplémentaires, PWA
-4. Deuxième utilisateur (RLS par foyer)
+Voir `BACKLOG.md` (priorisé, statut par item). Déjà livré depuis ce plan :
+rapports enrichis (donut par groupe, cash-flow, taux d'épargne, valeur nette,
+coach d'épargne, Zakat), PWA installable, édition/déplacement de transactions,
+cartes à débit différé, import YNAB destructif. Reste notamment : import CSV
+historique bancaire, mode offline, et le deuxième utilisateur (RLS par foyer).

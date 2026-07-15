@@ -5,12 +5,17 @@ Liste des chantiers restants / idees, hors specification figee du CLAUDE.md.
 ## Restant
 
 - [ ] Cycle de facturation configurable par carte a debit differe (verification
-      montant du prelevement = somme des achats du cycle) — raffinement futur.
-- [ ] File de mutations optimistes : renommer/supprimer une categorie pendant la
-      micro-fenetre du POST de creation peut renvoyer 400 (rollback discret).
-- [ ] Import CSV historique (phase 2 du CLAUDE.md).
+      montant du prelevement = somme des achats du cycle) — INAB-11, raffinement futur.
+- [ ] Import CSV historique bancaire (INAB-10, phase 2 du CLAUDE.md). L'import
+      YNAB destructif existe deja ; il s'agit ici de l'import CSV releve bancaire.
 
 ## Fait recemment
+
+### File de mutations optimistes serialisee (INAB-4)
+- [x] File FIFO cote client (app/src/lib/mutationQueue.ts) au-dessus de TanStack :
+      les mutations touchant la meme entite s'enchainent, les IDs temporaires sont
+      reconcilies avec les IDs serveur avant l'envoi des mutations suivantes.
+      Corrige le 400 sur renommer/supprimer pendant la micro-fenetre de creation.
 
 ### Cartes a debit differe (methode YNAB)
 Le prelevement mensuel groupe n'est pas une depense : c'est un virement du compte
