@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ChevronRight, CreditCard, Landmark, Pencil, PiggyBank, Plus, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
+import { CreditCard, Landmark, Pencil, PiggyBank, Plus, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
 import type { AccountKind } from '@/types/domain'
 import { apiCreateAccount, apiUpdateAccount, useAccounts, type AccountWithBalance } from '@/lib/data'
 import { TODAY } from '@/lib/format'
@@ -39,44 +39,44 @@ function AccountCard({
   const meta = KIND_META[account.kind]
   const Icon = meta.icon
   return (
-    <div className="relative">
-      <Link to="/transactions" search={{ compte: account.id }} className="block" aria-label={`Voir les transactions de ${account.name}`}>
-        <Card className="flex items-center gap-4 p-5 transition-transform hover:-translate-y-0.5 hover:shadow-card">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
-            <Icon className="h-5 w-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <p className="truncate font-semibold">{account.name}</p>
-              {!account.onBudget && <Badge variant="neutral">Hors budget</Badge>}
-            </div>
-            <p className="text-[12.5px] text-soft">
-              {account.institution} · {meta.label}
-            </p>
+    // Bouton Modifier integre dans la carte (pas d'imbrication de zones
+    // cliquables) : le Link couvre la zone icone + libelle + montant, le crayon
+    // reste un bouton distinct a droite.
+    <Card className="flex items-center gap-2 p-5">
+      <Link
+        to="/transactions"
+        search={{ compte: account.id }}
+        className="flex min-w-0 flex-1 items-center gap-4 rounded-xl transition-opacity hover:opacity-80"
+        aria-label={`Voir les transactions de ${account.name}`}
+      >
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+          <Icon className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="truncate font-semibold">{account.name}</p>
+            {!account.onBudget && <Badge variant="neutral">Hors budget</Badge>}
           </div>
-          {/* Espace reserve pour ne pas passer sous le bouton Modifier. */}
-          <div className="pr-12 text-right">
-            <Amount cents={account.balance} className="block text-[18px] font-semibold" colored={account.balance < 0} />
-          </div>
-          <ChevronRight className="h-4 w-4 shrink-0 text-soft" />
-        </Card>
+          <p className="text-[12.5px] text-soft">
+            {account.institution} · {meta.label}
+          </p>
+        </div>
+        <Amount cents={account.balance} className="shrink-0 text-[18px] font-semibold" colored={account.balance < 0} />
       </Link>
-      {/* Bouton hors du Link (pas d'imbrication de zones cliquables). */}
       <button
         type="button"
         onClick={() => onEdit(account)}
         aria-label={`Modifier ${account.name}`}
-        className="absolute right-11 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink"
       >
         <Pencil className="h-4 w-4" />
       </button>
-    </div>
+    </Card>
   )
 }
 
 /** Dialog d'edition d'un compte : nom, etablissement, type (le flag budget et le
- * solde d'ouverture ne se modifient pas ici). Renseigner l'etablissement avec le
- * nom de la banque permet d'afficher son logo dans les transactions. */
+ * solde d'ouverture ne se modifient pas ici, ils impacteraient le RTA). */
 function EditAccountDialog({
   account,
   onOpenChange,
@@ -125,8 +125,8 @@ function EditAccountDialog({
         <DialogHeader>
           <DialogTitle>Modifier le compte</DialogTitle>
           <DialogDescription>
-            Renseignez la banque avec son nom exact (par exemple Boursorama, Crédit Agricole) pour
-            afficher son logo sur les transactions.
+            Modifiez le nom, la banque ou le type du compte. Le solde d'ouverture et l'inclusion
+            dans le budget ne se changent pas ici.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 p-5 pt-2">
