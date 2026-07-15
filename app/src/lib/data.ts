@@ -374,6 +374,18 @@ export async function apiCreateAccount(input: CreateAccountInput): Promise<{ id:
   return apiCall<{ id: string }>('createAccount', { ...input })
 }
 
+interface UpdateAccountInput {
+  accountId: string
+  name: string
+  institution: string
+  kind: AccountKind
+}
+
+/** Edite les metadonnees d'un compte (nom, etablissement, type). */
+export async function apiUpdateAccount(input: UpdateAccountInput): Promise<void> {
+  await apiCall('updateAccount', { ...input })
+}
+
 export async function apiSeedDefaults(): Promise<void> {
   await apiCall('seedDefaults')
 }

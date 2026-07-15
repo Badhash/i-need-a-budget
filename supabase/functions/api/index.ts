@@ -967,6 +967,31 @@ async function actionCreateAccount(userId: string, params: Params) {
   return { id: accountId }
 }
 
+// Edition des metadonnees d'un compte : nom, etablissement, type. Le flag
+// on_budget n'est PAS modifiable ici : le basculer changerait le RTA et la
+// categorie du solde d'ouverture (hors perimetre, evite une incoherence moteur).
+async function actionUpdateAccount(userId: string, params: Params) {
+  const accountId = requireUuid(params.accountId, 'accountId')
+  const name = params.name == null ? null : requireText(params.name, 'name', 80)
+  const institution = params.institution == null ? null : requireText(params.institution, 'institution', 80)
+  const kind = params.kind == null ? null : (params.kind as AccountKind)
+  if (kind !== null && !ACCOUNT_KINDS.includes(kind)) {
+    throw new ApiError(400, 'type de compte invalide')
+  }
+
+  const accounts = await loadAll<AccountPayload>('accounts', userId)
+  const account = accounts.find((a) => a.id === accountId)
+  if (!account) throw new ApiError(404, 'compte inconnu')
+
+  const { id, ...payload } = account
+  const next: AccountPayload = { ...payload }
+  if (name !== null) next.name = name
+  if (institution !== null) next.institution = institution
+  if (kind !== null) next.kind = kind
+  await updateEncrypted('accounts', userId, id, next)
+  return { ok: true }
+}
+
 const DEFAULT_STRUCTURE: { group: Omit<GroupPayload, 'sortOrder' | 'hidden'>; categories: string[] }[] = [
   { group: { name: 'Essentiels', color: 'blue', icon: 'home' }, categories: ['Loyer', 'Courses', 'Électricité & gaz', 'Internet & mobile', 'Assurances'] },
   { group: { name: 'Transport', color: 'amber', icon: 'car' }, categories: ['Transports en commun', 'Essence', 'VTC & taxi'] },
@@ -1876,6 +1901,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   categorizeTransaction: actionCategorizeTransaction,
   setAssigned: actionSetAssigned,
   createAccount: actionCreateAccount,
+  updateAccount: actionUpdateAccount,
   seedDefaults: (u) => actionSeedDefaults(u),
   createCategory: actionCreateCategory,
   updateCategory: actionUpdateCategory,

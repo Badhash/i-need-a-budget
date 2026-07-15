@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ChevronRight, CreditCard, Landmark, PiggyBank, Plus, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
+import { ChevronRight, CreditCard, Landmark, Pencil, PiggyBank, Plus, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
 import type { AccountKind } from '@/types/domain'
-import { apiCreateAccount, useAccounts, type AccountWithBalance } from '@/lib/data'
+import { apiCreateAccount, apiUpdateAccount, useAccounts, type AccountWithBalance } from '@/lib/data'
 import { TODAY } from '@/lib/format'
 import { useBankConnections } from '@/lib/bank'
 import { SyncHealth } from '@/components/settings/SyncHealth'
@@ -29,30 +29,137 @@ const KIND_META: Record<AccountKind, { icon: LucideIcon; label: string }> = {
   card_deferred: { icon: CreditCard, label: 'Carte à débit différé' },
 }
 
-function AccountCard({ account }: { account: AccountWithBalance }) {
+function AccountCard({
+  account,
+  onEdit,
+}: {
+  account: AccountWithBalance
+  onEdit: (account: AccountWithBalance) => void
+}) {
   const meta = KIND_META[account.kind]
   const Icon = meta.icon
   return (
-    <Link to="/transactions" search={{ compte: account.id }} className="block" aria-label={`Voir les transactions de ${account.name}`}>
-      <Card className="flex items-center gap-4 p-5 transition-transform hover:-translate-y-0.5 hover:shadow-card">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
-          <Icon className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="truncate font-semibold">{account.name}</p>
-            {!account.onBudget && <Badge variant="neutral">Hors budget</Badge>}
+    <div className="relative">
+      <Link to="/transactions" search={{ compte: account.id }} className="block" aria-label={`Voir les transactions de ${account.name}`}>
+        <Card className="flex items-center gap-4 p-5 transition-transform hover:-translate-y-0.5 hover:shadow-card">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+            <Icon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className="truncate font-semibold">{account.name}</p>
+              {!account.onBudget && <Badge variant="neutral">Hors budget</Badge>}
+            </div>
+            <p className="text-[12.5px] text-soft">
+              {account.institution} · {meta.label}
+            </p>
           </div>
-          <p className="text-[12.5px] text-soft">
-            {account.institution} · {meta.label}
-          </p>
+          {/* Espace reserve pour ne pas passer sous le bouton Modifier. */}
+          <div className="pr-12 text-right">
+            <Amount cents={account.balance} className="block text-[18px] font-semibold" colored={account.balance < 0} />
+          </div>
+          <ChevronRight className="h-4 w-4 shrink-0 text-soft" />
+        </Card>
+      </Link>
+      {/* Bouton hors du Link (pas d'imbrication de zones cliquables). */}
+      <button
+        type="button"
+        onClick={() => onEdit(account)}
+        aria-label={`Modifier ${account.name}`}
+        className="absolute right-11 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink"
+      >
+        <Pencil className="h-4 w-4" />
+      </button>
+    </div>
+  )
+}
+
+/** Dialog d'edition d'un compte : nom, etablissement, type (le flag budget et le
+ * solde d'ouverture ne se modifient pas ici). Renseigner l'etablissement avec le
+ * nom de la banque permet d'afficher son logo dans les transactions. */
+function EditAccountDialog({
+  account,
+  onOpenChange,
+}: {
+  account: AccountWithBalance | null
+  onOpenChange: (o: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const [name, setName] = useState('')
+  const [institution, setInstitution] = useState('')
+  const [kind, setKind] = useState<AccountKind>('checking')
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (account) {
+      setName(account.name)
+      setInstitution(account.institution)
+      setKind(account.kind)
+      setError(null)
+    }
+  }, [account])
+
+  const update = useMutation({
+    mutationFn: apiUpdateAccount,
+    onSuccess: async () => {
+      // Les metadonnees du compte vivent dans le bootstrap (taxonomie + soldes).
+      await queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+      onOpenChange(false)
+    },
+    onError: () => setError('Modification impossible pour le moment. Réessayez.'),
+  })
+
+  const submit = () => {
+    if (!account) return
+    if (!name.trim() || !institution.trim()) {
+      setError('Renseignez le nom du compte et la banque.')
+      return
+    }
+    setError(null)
+    update.mutate({ accountId: account.id, name: name.trim(), institution: institution.trim(), kind })
+  }
+
+  return (
+    <Dialog open={account !== null} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Modifier le compte</DialogTitle>
+          <DialogDescription>
+            Renseignez la banque avec son nom exact (par exemple Boursorama, Crédit Agricole) pour
+            afficher son logo sur les transactions.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 p-5 pt-2">
+          <div>
+            <label className="label-caps mb-1.5 block">Nom du compte</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Carte World Elite" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label-caps mb-1.5 block">Banque</label>
+              <Input
+                value={institution}
+                onChange={(e) => setInstitution(e.target.value)}
+                placeholder="Ma banque"
+              />
+            </div>
+            <div>
+              <label className="label-caps mb-1.5 block">Type</label>
+              <Select value={kind} onChange={(e) => setKind(e.target.value as AccountKind)}>
+                <option value="checking">Compte courant</option>
+                <option value="savings">Épargne</option>
+                <option value="investment">Investissement</option>
+                <option value="card_deferred">Carte à débit différé</option>
+              </Select>
+            </div>
+          </div>
+          {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
+          <Button className="w-full" onClick={submit} disabled={update.isPending}>
+            {update.isPending ? 'Enregistrement…' : 'Enregistrer'}
+          </Button>
         </div>
-        <div className="text-right">
-          <Amount cents={account.balance} className="block text-[18px] font-semibold" colored={account.balance < 0} />
-        </div>
-        <ChevronRight className="h-4 w-4 shrink-0 text-soft" />
-      </Card>
-    </Link>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -212,6 +319,7 @@ export function AccountsPage() {
   const { data: accounts } = useAccounts()
   const { data: connections } = useBankConnections()
   const [addOpen, setAddOpen] = useState(false)
+  const [editAccount, setEditAccount] = useState<AccountWithBalance | null>(null)
 
   if (!accounts) return <AccountsSkeleton />
 
@@ -259,12 +367,13 @@ export function AccountsPage() {
         </Button>
       </div>
       <AddAccountDialog open={addOpen} onOpenChange={setAddOpen} />
+      <EditAccountDialog account={editAccount} onOpenChange={(o) => !o && setEditAccount(null)} />
 
       <section className="space-y-3">
         <h2 className="label-caps px-1">Comptes budget</h2>
         <div className="space-y-3">
           {onBudget.map((acc) => (
-            <AccountCard key={acc.id} account={acc} />
+            <AccountCard key={acc.id} account={acc} onEdit={setEditAccount} />
           ))}
         </div>
       </section>
@@ -273,7 +382,7 @@ export function AccountsPage() {
         <h2 className="label-caps px-1">Suivi (hors budget)</h2>
         <div className="space-y-3">
           {tracking.map((acc) => (
-            <AccountCard key={acc.id} account={acc} />
+            <AccountCard key={acc.id} account={acc} onEdit={setEditAccount} />
           ))}
         </div>
       </section>
