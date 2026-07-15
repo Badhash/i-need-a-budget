@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
 import { BankCombobox, BankLogo } from '@/components/settings/BankCombobox'
+import { Combobox } from '@/components/ui/combobox'
 import { SyncHealth } from '@/components/settings/SyncHealth'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -253,26 +254,28 @@ export function BankSection() {
                               {acc.iban ?? acc.name ?? acc.uid}
                             </p>
                           </div>
-                          <Select
+                          <Combobox
+                            options={[
+                              { value: '', label: 'Non associé' },
+                              ...localAccounts.map((a) => ({ value: a.id, label: a.name })),
+                              {
+                                value: '__create__',
+                                label: '+ Créer un compte pour ce compte bancaire',
+                              },
+                            ]}
                             value={acc.linkedAccountId ?? ''}
-                            onChange={(e) => {
-                              if (e.target.value === '__create__') {
+                            onChange={(v) => {
+                              if (v === '__create__') {
                                 void handleCreateAndLink(c, acc)
                               } else {
-                                void handleLink(c.id, acc.uid, e.target.value || null)
+                                void handleLink(c.id, acc.uid, v || null)
                               }
                             }}
-                            className="min-w-[170px]"
+                            placeholder="Non associé"
+                            searchPlaceholder="Rechercher un compte…"
+                            className="min-w-[170px] flex-1"
                             aria-label="Associer a un compte local"
-                          >
-                            <option value="">Non associé</option>
-                            {localAccounts.map((a) => (
-                              <option key={a.id} value={a.id}>
-                                {a.name}
-                              </option>
-                            ))}
-                            <option value="__create__">+ Créer un compte pour ce compte bancaire</option>
-                          </Select>
+                          />
                         </div>
                       ))}
                       {noneLinked && (

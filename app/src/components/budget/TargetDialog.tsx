@@ -8,6 +8,7 @@ import { CURRENT_MONTH, MAX_MONTH } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { MonthPicker } from '@/components/ui/month-picker'
 import {
   Dialog,
   DialogContent,
@@ -165,16 +166,13 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
             </div>
             {type === 'byDate' && (
               <div>
-                <label htmlFor="target-due" className="label-caps mb-1.5 block">
-                  Mois cible
-                </label>
-                <Input
-                  id="target-due"
-                  type="month"
+                <label className="label-caps mb-1.5 block">Mois cible</label>
+                <MonthPicker
                   value={dueMonth}
+                  onChange={setDueMonth}
                   min={CURRENT_MONTH}
                   max={MAX_MONTH}
-                  onChange={(e) => setDueMonth(e.target.value)}
+                  aria-label="Mois cible"
                 />
               </div>
             )}

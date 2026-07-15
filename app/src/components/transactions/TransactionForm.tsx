@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAccountsList, useCategoriesList, useGroupsList } from '@/lib/data'
 import { MIN_MONTH, TODAY } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { cn } from '@/lib/utils'
 
 const MIN_DATE = `${MIN_MONTH}-01`
@@ -130,6 +130,30 @@ export function TransactionForm({
     .filter((g) => categories.some((c) => c.groupId === g.id && c.isIncome === wantIncome))
     .sort((a, b) => a.sortOrder - b.sortOrder)
 
+  const accountOptions = useMemo<ComboboxOption[]>(
+    () => accounts.map((acc) => ({ value: acc.id, label: acc.name })),
+    [accounts],
+  )
+
+  // Options du combobox categorie : "A categoriser" (value '') puis les
+  // categories du bon sens (revenu / depense), regroupees et colorees.
+  const categoryOptions = useMemo<ComboboxOption[]>(() => {
+    const opts: ComboboxOption[] = [{ value: '', label: 'À catégoriser' }]
+    for (const group of visibleGroups) {
+      for (const cat of categories
+        .filter((c) => c.groupId === group.id && c.isIncome === wantIncome)
+        .sort((a, b) => a.sortOrder - b.sortOrder)) {
+        opts.push({
+          value: cat.id,
+          label: cat.name,
+          group: group.name,
+          colorVar: `cat-${group.color}-fg`,
+        })
+      }
+    }
+    return opts
+  }, [visibleGroups, categories, wantIncome])
+
   return (
     <>
       <div className="flex-1 space-y-4 overflow-y-auto p-5 pt-2">
@@ -195,33 +219,27 @@ export function TransactionForm({
           </div>
           <div>
             <label className="label-caps mb-1.5 block">Compte</label>
-            <Select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-              {accounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.name}
-                </option>
-              ))}
-            </Select>
+            <Combobox
+              options={accountOptions}
+              value={accountId}
+              onChange={setAccountId}
+              placeholder="Choisir un compte"
+              searchPlaceholder="Rechercher un compte…"
+              aria-label="Compte"
+            />
           </div>
         </div>
 
         <div>
           <label className="label-caps mb-1.5 block">Catégorie</label>
-          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-            <option value="">À catégoriser</option>
-            {visibleGroups.map((group) => (
-              <optgroup key={group.id} label={group.name}>
-                {categories
-                  .filter((c) => c.groupId === group.id && c.isIncome === wantIncome)
-                  .sort((a, b) => a.sortOrder - b.sortOrder)
-                  .map((cat) => (
-                    <option key={cat.id} value={cat.id}>
-                      {cat.name}
-                    </option>
-                  ))}
-              </optgroup>
-            ))}
-          </Select>
+          <Combobox
+            options={categoryOptions}
+            value={categoryId}
+            onChange={setCategoryId}
+            placeholder="À catégoriser"
+            searchPlaceholder="Rechercher une catégorie…"
+            aria-label="Catégorie"
+          />
         </div>
 
         <div>

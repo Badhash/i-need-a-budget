@@ -16,7 +16,7 @@ import { apiCall } from '@/lib/api'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
-import { fmtDateShort, fmtDayLong, fmtMonthTitle, monthOf } from '@/lib/format'
+import { fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
 import { TxKindChip } from '@/components/transactions/TxKindChip'
@@ -34,7 +34,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { MonthPicker } from '@/components/ui/month-picker'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
@@ -524,21 +525,43 @@ export function TransactionsPage() {
     if (mois) setMonthFilter(mois)
   }, [mois])
 
-  // Options de mois : mois comptables (date -> YYYY-MM) reellement presents,
-  // ordre anti-chronologique.
-  const monthOptions = useMemo(() => {
-    const set = new Set<string>()
-    for (const t of txs ?? []) set.add(monthOf(t.date))
-    return [...set].sort((a, b) => (a < b ? 1 : -1))
+  // Bornes de mois : premier / dernier mois comptable reellement present, pour
+  // borner la navigation du selecteur de mois (le filtre reste libre via 'all').
+  const monthBounds = useMemo(() => {
+    let min: string | undefined
+    let max: string | undefined
+    for (const t of txs ?? []) {
+      const m = monthOf(t.date)
+      if (!min || m < min) min = m
+      if (!max || m > max) max = m
+    }
+    return { min, max }
   }, [txs])
 
-  // Ordre des categories pour le select : groupe par groupe (optgroups).
-  const categoriesByGroup = useMemo(() => {
-    return groupsList.map((group) => ({
-      group,
-      cats: categoriesList.filter((c) => c.groupId === group.id),
-    }))
+  // Options du combobox categorie : regroupees par groupe, pastille coloree.
+  const categoryOptions = useMemo<ComboboxOption[]>(() => {
+    const opts: ComboboxOption[] = [{ value: 'all', label: 'Toutes les catégories' }]
+    for (const group of groupsList) {
+      for (const cat of categoriesList.filter((c) => c.groupId === group.id)) {
+        opts.push({
+          value: cat.id,
+          label: cat.name,
+          group: group.name,
+          colorVar: `cat-${group.color}-fg`,
+        })
+      }
+    }
+    return opts
   }, [groupsList, categoriesList])
+
+  // Options du combobox compte.
+  const accountOptions = useMemo<ComboboxOption[]>(
+    () => [
+      { value: 'all', label: 'Tous les comptes' },
+      ...accounts.map((acc) => ({ value: acc.id, label: acc.name })),
+    ],
+    [accounts],
+  )
 
   const hasFilters =
     Boolean(search) ||
@@ -619,51 +642,33 @@ export function TransactionsPage() {
             className="pl-10"
           />
         </div>
-        <Select
+        <Combobox
+          options={categoryOptions}
           value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
+          onChange={setCategoryFilter}
+          placeholder="Toutes les catégories"
+          searchPlaceholder="Rechercher une catégorie…"
           className="w-48"
           aria-label="Filtrer par catégorie"
-        >
-          <option value="all">Toutes les catégories</option>
-          {categoriesByGroup.map(({ group, cats }) =>
-            cats.length > 0 ? (
-              <optgroup key={group.id} label={group.name}>
-                {cats.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
-              </optgroup>
-            ) : null,
-          )}
-        </Select>
-        <Select
+        />
+        <Combobox
+          options={accountOptions}
           value={accountFilter}
-          onChange={(e) => setAccountFilter(e.target.value)}
+          onChange={setAccountFilter}
+          placeholder="Tous les comptes"
+          searchPlaceholder="Rechercher un compte…"
           className="w-44"
           aria-label="Filtrer par compte"
-        >
-          <option value="all">Tous les comptes</option>
-          {accounts.map((acc) => (
-            <option key={acc.id} value={acc.id}>
-              {acc.name}
-            </option>
-          ))}
-        </Select>
-        <Select
+        />
+        <MonthPicker
           value={monthFilter}
-          onChange={(e) => setMonthFilter(e.target.value)}
+          onChange={setMonthFilter}
+          min={monthBounds.min}
+          max={monthBounds.max}
+          allowAll
           className="w-40"
           aria-label="Filtrer par mois"
-        >
-          <option value="all">Tous les mois</option>
-          {monthOptions.map((m) => (
-            <option key={m} value={m}>
-              {fmtMonthTitle(m)}
-            </option>
-          ))}
-        </Select>
+        />
         <button
           onClick={() => setOnlyUncat((v) => !v)}
           className={cn(
