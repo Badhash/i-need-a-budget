@@ -382,7 +382,7 @@ interface DecryptedData {
   assignments: WithId<AssignmentPayload>[]
 }
 
-async function loadBudgetData(userId: string): Promise<DecryptedData> {
+async function loadBudgetDataFromDb(userId: string): Promise<DecryptedData> {
   const [accounts, groups, categories, transactions, assignments] = await Promise.all([
     loadAll<AccountPayload>('accounts', userId),
     loadAll<GroupPayload>('category_groups', userId),
@@ -403,6 +403,44 @@ async function loadReportsData(userId: string): Promise<DecryptedData> {
     loadAll<TxPayload>('transactions', userId),
   ])
   return { accounts, groups, categories, transactions, assignments: [] }
+}
+
+// ---------------------------------------------------------------------------
+// Cache memoire TTL tres court de loadBudgetData (REF K) — reduction egress
+// ---------------------------------------------------------------------------
+//
+// L'isolate Deno reste chaud quelques minutes : une meme invocation en sert
+// plusieurs rapprochees (rafale bootstrap/getBudgetMonth/getReports au
+// demarrage). Ce cache module-level, CLE STRICTEMENT PAR userId, evite de
+// relire les 5 tables a chaque action en quelques ms.
+//
+// Garanties multi-tenant : la seule cle est le userId (jamais partage entre
+// tenants). Aucun contenu dechiffre n'est jamais logge. TTL tres court pour
+// borner toute fraicheur perdue. Toute action d'ecriture PURGE l'entree du
+// user (voir invalidateBudgetCache + dispatcher) pour ne jamais servir du
+// perime. On memorise la PROMISE (pas seulement la valeur resolue) pour
+// dedupliquer aussi les chargements concurrents dans la meme invocation.
+const BUDGET_CACHE_TTL_MS = 3_000
+const budgetDataCache = new Map<string, { promise: Promise<DecryptedData>; expiresAt: number }>()
+
+function invalidateBudgetCache(userId: string): void {
+  budgetDataCache.delete(userId)
+}
+
+async function loadBudgetData(userId: string): Promise<DecryptedData> {
+  const now = Date.now()
+  const cached = budgetDataCache.get(userId)
+  if (cached && cached.expiresAt > now) {
+    return cached.promise
+  }
+  const promise = loadBudgetDataFromDb(userId).catch((err) => {
+    // Ne jamais garder en cache un chargement en echec.
+    const current = budgetDataCache.get(userId)
+    if (current && current.promise === promise) budgetDataCache.delete(userId)
+    throw err
+  })
+  budgetDataCache.set(userId, { promise, expiresAt: now + BUDGET_CACHE_TTL_MS })
+  return promise
 }
 
 function toEngineInput(data: DecryptedData, month: string) {
@@ -1977,6 +2015,27 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   importReplaceAssignments: actionImportReplaceAssignments,
 }
 
+// Actions strictement en LECTURE : elles ne modifient aucune table, donc ne
+// purgent pas le cache loadBudgetData (elles peuvent au contraire le peupler /
+// le consommer pendant une rafale). Toute action ABSENTE de cet ensemble est
+// traitee comme une ecriture : le dispatcher purge alors l'entree du user
+// AVANT execution, garantissant qu'aucune lecture ulterieure (meme invocation
+// chaude) ne serve un etat perime. Choix fail-safe : une action mal classee en
+// ecriture ne fait que rater le cache (correct), jamais servir du perime.
+const READ_ONLY_ACTIONS = new Set<string>([
+  'bootstrap',
+  'bootstrapFull',
+  'getBudgetMonth',
+  'getTransactions',
+  'listTransactions',
+  'getReports',
+  'listRules',
+  'listTargets',
+  'getBankConnections',
+  'listSyncLogs',
+  'exportData',
+])
+
 // Lecture du corps bornee sur les octets REELLEMENT recus : l'en-tete
 // Content-Length est controlee par le client (omission / Transfer-Encoding),
 // on ne s'y fie pas. On annule la lecture des que la limite est depassee.
@@ -2052,6 +2111,12 @@ Deno.serve(async (req) => {
       throw new ApiError(400, 'action inconnue')
     }
     action = body.action
+
+    // Ecriture : purge le cache du user AVANT execution pour ne jamais servir
+    // du perime (cle stricte par userId, aucun effet inter-tenant).
+    if (!READ_ONLY_ACTIONS.has(action)) {
+      invalidateBudgetCache(userId)
+    }
 
     const result = await ACTIONS[action](userId, (body.params as Params) ?? {})
     return new Response(JSON.stringify(result), { status: 200, headers })
