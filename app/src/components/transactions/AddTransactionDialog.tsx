@@ -19,12 +19,10 @@ export function AddTransactionDialog() {
   const mutation = useMutation({
     mutationFn: apiAddTransaction,
     onSuccess: () => {
-      // Ajouter une transaction touche la liste, l'activite des enveloppes
-      // (budget), les agregats (reports) et les soldes/compteurs (bootstrap).
+      // On rafraichit la seule liste (pour afficher la nouvelle ligne) ; le
+      // budget/les rapports/les soldes sont reconcilies en fond par le signal
+      // Realtime coalesce, sans recharger toute la table chiffree.
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      void queryClient.invalidateQueries({ queryKey: ['budget'] })
-      void queryClient.invalidateQueries({ queryKey: ['reports'] })
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
       setOpen(false)
     },
   })

@@ -41,15 +41,9 @@ function useUpdateTransaction() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
     },
-    // Reconciliation silencieuse en arriere-plan : editer une transaction touche
-    // la liste, l'activite des enveloppes (budget), les agregats (reports) et les
-    // soldes/compteurs (bootstrap).
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      void queryClient.invalidateQueries({ queryKey: ['budget'] })
-      void queryClient.invalidateQueries({ queryKey: ['reports'] })
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
-    },
+    // Deja reflete de facon optimiste : reconciliation en fond via le signal
+    // Realtime coalesce (pas d'invalidation directe qui rechargerait toute la
+    // table chiffree a chaque edition).
   })
 }
 

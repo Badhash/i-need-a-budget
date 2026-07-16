@@ -83,15 +83,11 @@ function useCategorize() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
     },
-    // Reconciliation silencieuse en arriere-plan : categoriser change l'activite
-    // d'une enveloppe (budget), les agregats (reports) et le compteur "a
-    // categoriser" (bootstrap), en plus de la liste elle-meme.
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      void queryClient.invalidateQueries({ queryKey: ['budget'] })
-      void queryClient.invalidateQueries({ queryKey: ['reports'] })
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
-    },
+    // Pas d'invalidation directe ici : le cache est deja exact (mise a jour
+    // optimiste), et le signal Realtime declenche une reconciliation UNIQUE et
+    // coalescee en fond (cf. useRealtimeSync + realtimeGate). Invalider les 4
+    // clefs a chaque clic rechargeait toute la table chiffree 2x par
+    // categorisation (poste d'egress dominant sur le free tier).
   })
 }
 
@@ -107,11 +103,12 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
   const convert = useMutation({
     mutationFn: (targetAccountId: string) =>
       apiCall('convertToTransfer', { transactionId: row.tx.id, targetAccountId }),
+    // Pas de mise a jour optimiste ici : on rafraichit la seule liste des
+    // transactions pour un retour visuel prompt. Le budget/les rapports/le
+    // bootstrap sont reconcilies en fond par le signal Realtime coalesce (pas
+    // de rechargement de la table entiere a chaque conversion).
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      void queryClient.invalidateQueries({ queryKey: ['budget'] })
-      void queryClient.invalidateQueries({ queryKey: ['reports'] })
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     },
     onError: (err) => showError(err),
   })
@@ -119,9 +116,6 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
     mutationFn: () => apiCall('convertTransferToNormal', { transactionId: row.tx.id }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      void queryClient.invalidateQueries({ queryKey: ['budget'] })
-      void queryClient.invalidateQueries({ queryKey: ['reports'] })
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     },
     onError: (err) => showError(err),
   })
@@ -140,12 +134,9 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
       showError(err)
     },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      void queryClient.invalidateQueries({ queryKey: ['budget'] })
-      void queryClient.invalidateQueries({ queryKey: ['reports'] })
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
-    },
+    // Suppression deja refletee de facon optimiste : reconciliation en fond via
+    // le signal Realtime coalesce (pas d'invalidation directe qui rechargerait
+    // toute la table chiffree).
   })
   // Confirmation en deux temps dans le menu : premier clic arme, second supprime.
   const [confirmDelete, setConfirmDelete] = useState(false)
