@@ -33,14 +33,27 @@ export function OnboardingPage() {
   const [openingDate, setOpeningDate] = useState(TODAY)
   const [error, setError] = useState<string | null>(null)
 
+  // Onboarding : le cache est quasi vide, l'impact est negligeable, mais on
+  // scope par coherence (le seed cree la taxonomie ; creer un compte ajoute un
+  // solde d'ouverture qui touche transactions/budget/rapports).
   const seed = useMutation({
     mutationFn: apiSeedDefaults,
-    onSuccess: () => queryClient.invalidateQueries(),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
+        queryClient.invalidateQueries({ queryKey: ['budget'] }),
+      ]),
   })
 
   const createAccount = useMutation({
     mutationFn: apiCreateAccount,
-    onSuccess: () => queryClient.invalidateQueries(),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
+        queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+        queryClient.invalidateQueries({ queryKey: ['budget'] }),
+        queryClient.invalidateQueries({ queryKey: ['reports'] }),
+      ]),
   })
 
   const submitAccount = () => {

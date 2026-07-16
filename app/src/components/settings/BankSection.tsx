@@ -98,6 +98,19 @@ export function BankSection() {
     )
   }
 
+  // Invalidation scopee apres un import / une reconciliation : seules les
+  // donnees reellement affectees (soldes, transactions, budget, rapports,
+  // connexions, journaux) sont rechargees — pas un invalidateQueries() global.
+  const invalidateBankData = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
+      queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+      queryClient.invalidateQueries({ queryKey: ['budget'] }),
+      queryClient.invalidateQueries({ queryKey: ['reports'] }),
+      queryClient.invalidateQueries({ queryKey: ['bankConnections'] }),
+      queryClient.invalidateQueries({ queryKey: ['syncLogs'] }),
+    ])
+
   // Importe l'historique bancaire (sinceDays), puis reconcilie les soldes
   // d'ouverture pour coller au solde bancaire reel.
   async function handleImportHistory() {
@@ -113,7 +126,10 @@ export function BankSection() {
       const deltaPart =
         totalDelta === 0 ? 'solde déjà exact' : `solde ajusté de ${fmtEUR(totalDelta)}`
       setImportMessage(`${importedPart}, ${deltaPart}.`)
-      await queryClient.invalidateQueries()
+      // Import + reconciliation : soldes, transactions, budget, rapports et
+      // journaux de sync changent. On scope au lieu d'un invalidateQueries()
+      // global qui rechargerait aussi targets/rules/aspsps inutilement.
+      await invalidateBankData()
     } catch {
       setImportMessage("Import de l'historique indisponible pour le moment.")
     } finally {
@@ -138,7 +154,7 @@ export function BankSection() {
         )
         setImportMessage(`Soldes mis à jour — ${parts.join(' · ')}.`)
       }
-      await queryClient.invalidateQueries()
+      await invalidateBankData()
     } catch {
       setImportMessage('Recalcul des soldes indisponible pour le moment.')
     } finally {
@@ -150,7 +166,9 @@ export function BankSection() {
   async function handleLink(connectionId: string, providerAccountUid: string, accountId: string | null) {
     try {
       await apiLinkBankAccount({ connectionId, providerAccountUid, accountId })
-      await queryClient.invalidateQueries()
+      // Association : seule la liste des connexions change (les soldes/tx sont
+      // recales par l'import, pas ici).
+      await queryClient.invalidateQueries({ queryKey: ['bankConnections'] })
     } catch {
       // silencieux : l'utilisateur peut reessayer
     }
@@ -172,7 +190,13 @@ export function BankSection() {
         openingDate: TODAY,
       })
       await apiLinkBankAccount({ connectionId: c.id, providerAccountUid: acc.uid, accountId: id })
-      await queryClient.invalidateQueries()
+      // Nouveau compte local (+ solde d'ouverture) et association : soldes,
+      // liste et connexions changent. Pas budget/reports (solde d'ouverture 0).
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
+        queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+        queryClient.invalidateQueries({ queryKey: ['bankConnections'] }),
+      ])
       setSyncMessage(
         `Compte « ${acc.product ?? acc.name ?? 'Compte bancaire'} » créé et associé. Lance « Importer l'historique » pour récupérer les transactions et caler le solde.`,
       )

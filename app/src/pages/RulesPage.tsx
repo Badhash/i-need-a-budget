@@ -135,7 +135,12 @@ export function RulesPage() {
   const [formKey, setFormKey] = useState(0)
   const [reorderError, setReorderError] = useState(false)
 
-  const invalidate = () => queryClient.invalidateQueries()
+  // Le CRUD et le reordonnancement des regles ne touchent QUE la liste des
+  // regles : on scope l'invalidation a ['rules'] pour ne pas re-telecharger a
+  // chaque clic la liste complete des transactions (query toujours active via
+  // le badge de nav) ni le budget/les rapports. Appliquer les regles, en
+  // revanche, categorise des transactions : invalidation plus large ci-dessous.
+  const invalidateRules = () => queryClient.invalidateQueries({ queryKey: ['rules'] })
 
   const nextPriority =
     rules && rules.length > 0 ? Math.max(...rules.map((r) => r.priority)) + 1 : 1
@@ -146,7 +151,7 @@ export function RulesPage() {
     onSuccess: () => {
       setFormKey((k) => k + 1)
       setApplyResult(null)
-      invalidate()
+      invalidateRules()
     },
   })
 
@@ -159,13 +164,13 @@ export function RulesPage() {
     }) => apiUpdateRule(input),
     onSuccess: () => {
       setEditing(null)
-      invalidate()
+      invalidateRules()
     },
   })
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => apiDeleteRule(id),
-    onSuccess: invalidate,
+    onSuccess: invalidateRules,
   })
 
   const swapMut = useMutation({
@@ -175,7 +180,7 @@ export function RulesPage() {
     },
     onSuccess: () => {
       setReorderError(false)
-      invalidate()
+      invalidateRules()
     },
     // L'echange n'est pas atomique : si un des deux updates echoue, on
     // resynchronise l'UI sur l'ordre reel du serveur et on signale l'echec.
@@ -189,7 +194,12 @@ export function RulesPage() {
     mutationFn: () => apiApplyRules(),
     onSuccess: (categorized) => {
       setApplyResult(categorized)
-      invalidate()
+      // Appliquer les regles categorise des transactions : la liste, l'activite
+      // des enveloppes, les rapports et le compteur "a categoriser" changent.
+      queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      queryClient.invalidateQueries({ queryKey: ['budget'] })
+      queryClient.invalidateQueries({ queryKey: ['reports'] })
+      queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     },
   })
 

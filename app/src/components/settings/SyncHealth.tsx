@@ -55,8 +55,16 @@ export function SyncHealth({ showHistory = false }: { showHistory?: boolean }) {
             ? `${imported} transaction${imported > 1 ? 's' : ''} importée${imported > 1 ? 's' : ''}.`
             : 'Aucune nouvelle transaction depuis la dernière synchronisation.',
       )
-      // Rafraichit les donnees ET l'historique des runs.
-      await queryClient.invalidateQueries()
+      // Rafraichit les donnees affectees par une sync (soldes, transactions,
+      // budget, rapports) ET l'historique des runs — scope au lieu d'un
+      // invalidateQueries() global qui rechargerait aussi targets/rules/aspsps.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
+        queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+        queryClient.invalidateQueries({ queryKey: ['budget'] }),
+        queryClient.invalidateQueries({ queryKey: ['reports'] }),
+        queryClient.invalidateQueries({ queryKey: ['syncLogs'] }),
+      ])
     } catch {
       setMessage('Synchronisation indisponible pour le moment.')
     } finally {
