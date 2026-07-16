@@ -1883,29 +1883,32 @@ async function actionExportData(userId: string) {
 // Idempotent : une ligne migree sort du filtre, relancer l'action ne retouche
 // rien. A appeler APRES le deploiement du code compatible et l'ajout des colonnes
 // et RPC SQL (H-split-payload.sql compose avec D).
+// UN SEUL lot par appel (pas de boucle interne) : rechiffrer des milliers de
+// lignes en une invocation depasse la limite CPU/temps de l'Edge Function
+// (erreur 546 WORKER_RESOURCE_LIMIT). L'appelant (snippet console / futur bouton)
+// rappelle l'action tant que `migrated > 0`. BATCH volontairement petit pour
+// tenir largement sous la limite, meme sur le free tier.
 async function actionMigrateSplitPayload(userId: string) {
   const keys = await getKeys()
-  const BATCH = 200
+  const BATCH = 50
+  const { data, error } = await admin
+    .from('transactions')
+    .select('id, enc_payload:enc_b64')
+    .eq('user_id', userId)
+    .is('enc_core', null)
+    .not('enc_payload', 'is', null)
+    .limit(BATCH)
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  if (!data || data.length === 0) return { migrated: 0 }
   let migrated = 0
-  for (;;) {
-    const { data, error } = await admin
-      .from('transactions')
-      .select('id, enc_payload:enc_b64')
-      .eq('user_id', userId)
-      .is('enc_core', null)
-      .not('enc_payload', 'is', null)
-      .limit(BATCH)
-    if (error) throw new ApiError(500, 'lecture transactions impossible')
-    if (!data || data.length === 0) break
-    for (const row of data) {
-      const payload = await decryptJson<TxPayload>(
-        keys,
-        base64ToBytes(row.enc_payload as string),
-        ['transactions', userId],
-      )
-      await updateTx(userId, row.id as string, payload)
-      migrated += 1
-    }
+  for (const row of data) {
+    const payload = await decryptJson<TxPayload>(
+      keys,
+      base64ToBytes(row.enc_payload as string),
+      ['transactions', userId],
+    )
+    await updateTx(userId, row.id as string, payload)
+    migrated += 1
   }
   return { migrated }
 }
