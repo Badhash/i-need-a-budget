@@ -10,10 +10,12 @@ import {
   Eye,
   EyeOff,
   GripVertical,
+  LifeBuoy,
   Redo2,
   Sparkles,
   Target as TargetIcon,
   Undo2,
+  Wand2,
 } from 'lucide-react'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import type { Category } from '@/types/domain'
@@ -950,6 +952,34 @@ export function BudgetPage() {
 
   const fundTotal = fundPlan.reduce((sum, item) => sum + item.add, 0)
 
+  // Enveloppes en depassement (disponible < 0) du mois affiche : couvrir un
+  // depassement = assigner le manque pour ramener le disponible a 0 (l'argent
+  // vient du Pret a assigner). budget peut etre undefined avant le garde-fou de
+  // rendu : on securise avec un tableau vide (les hooks restent inconditionnels).
+  const overspentRows = useMemo(() => {
+    const rows: { categoryId: string; assigned: number; missing: number }[] = []
+    if (!budget) return rows
+    for (const block of budget.groups) {
+      for (const row of block.rows) {
+        if (row.available < 0) {
+          rows.push({ categoryId: row.category.id, assigned: row.assigned, missing: -row.available })
+        }
+      }
+    }
+    return rows
+  }, [budget])
+
+  const overspentTotal = overspentRows.reduce((sum, r) => sum + r.missing, 0)
+
+  // Couvre TOUS les depassements en une action : chaque enveloppe negative
+  // recoit le manque (nouvel assigne = assigne + manque -> disponible = 0).
+  // Chaque mutate part independamment (rollback par ligne si echec reseau).
+  const coverOverspending = () => {
+    for (const row of overspentRows) {
+      assign.mutate({ categoryId: row.categoryId, amount: row.assigned + row.missing })
+    }
+  }
+
   const confirmFunding = () => {
     // Applique chaque assignation en absolu (assigne actuel + supplement). Chaque
     // mutate part independamment : rollback individuel en cas d'echec reseau.
@@ -1016,6 +1046,37 @@ export function BudgetPage() {
               <Redo2 className="h-4 w-4" />
               <span className="hidden sm:inline">Refaire</span>
             </button>
+            {/* Actions rapides DESKTOP UNIQUEMENT : affecter automatiquement.
+                Assigner aux objectifs (financer le supplement necessaire ce
+                mois) et couvrir les depassements (ramener les disponibles
+                negatifs a 0). Chacune est desactivee quand elle n'a rien a
+                faire, avec le montant concerne en indice. */}
+            {(fundTotal > 0 || overspentTotal > 0) && (
+              <div className="ml-1.5 hidden items-center gap-1.5 border-l border-line pl-2.5 lg:flex">
+                <button
+                  type="button"
+                  onClick={() => setFundOpen(true)}
+                  disabled={fundTotal === 0}
+                  title="Assigner automatiquement le montant nécessaire aux objectifs de ce mois"
+                  className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-accent transition-colors hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Wand2 className="h-4 w-4" />
+                  Assigner aux objectifs
+                  {fundTotal > 0 && <span className="tnum text-soft">{fmtEUR(fundTotal)}</span>}
+                </button>
+                <button
+                  type="button"
+                  onClick={coverOverspending}
+                  disabled={overspentTotal === 0}
+                  title="Couvrir les enveloppes en dépassement (ramener le disponible à 0)"
+                  className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-soft transition-colors hover:bg-surface2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <LifeBuoy className="h-4 w-4" />
+                  Couvrir les dépassements
+                  {overspentTotal > 0 && <span className="tnum text-danger">{fmtEUR(overspentTotal)}</span>}
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1.5">
           <button
@@ -1042,7 +1103,7 @@ export function BudgetPage() {
         </div>
       )}
       {fundPlan.length > 0 && (
-        <div className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card">
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card lg:hidden">
           <div className="min-w-0">
             <p className="text-[15px] font-semibold">Financer les objectifs</p>
             <p className="text-[13px] text-soft">
