@@ -74,8 +74,8 @@ async function preloadCritical(
 // chaque lancement serait du gaspillage de calcul. On se limite a ce qui est
 // vraiment utile :
 //   - les donnees secondaires (objectifs, regles, banque, logs) : legeres ;
-//   - les mois ADJACENTS (precedent + suivant) au mois affiche : la navigation
-//     la plus frequente est +/- 1 mois.
+//   - le mois PRECEDENT (M-1) uniquement : c'est la navigation la plus
+//     frequente. Le mois suivant (M+1) se charge a la demande (squelette bref).
 // Tout le reste (mois lointains, rapports) se charge A LA DEMANDE au premier
 // affichage, puis reste en cache (staleTime long). Un mois froid montre juste
 // un squelette une fraction de seconde, sans marteler l'API.
@@ -88,7 +88,7 @@ function preloadRest(queryClient: QueryClient, taxo: Bootstrap | undefined, curr
   ]
   if (taxo) {
     const captured = taxo
-    for (const m of [addMonths(currentMonth, -1), addMonths(currentMonth, 1)]) {
+    for (const m of [addMonths(currentMonth, -1)]) {
       if (m >= MIN_MONTH && m <= MAX_MONTH) {
         tasks.push(
           queryClient.prefetchQuery({ queryKey: budgetKey(m), queryFn: () => fetchBudgetMonth(m, captured) }),
