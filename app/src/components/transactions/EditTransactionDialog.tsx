@@ -1,5 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiUpdateTransaction, type UpdateTransactionInput } from '@/lib/data'
+import {
+  apiUpdateTransaction,
+  countsAsUncategorized,
+  patchUncategorizedCount,
+  type UpdateTransactionInput,
+} from '@/lib/data'
 import type { Transaction } from '@/types/domain'
 import { useUiStore } from '@/stores/ui'
 import { useKeyboardInset } from '@/hooks/useKeyboardInset'
@@ -21,6 +26,16 @@ function useUpdateTransaction() {
     onMutate: async (input) => {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
       const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
+      // Une edition peut changer la categorie ou le mois : on reajuste le
+      // compteur « À catégoriser » du badge en optimiste.
+      const prev = snapshot?.find((t) => t.id === input.transactionId)
+      let countDelta = 0
+      if (prev) {
+        const before = countsAsUncategorized(prev.categoryId, prev.transferGroupId, prev.date)
+        const after = countsAsUncategorized(input.categoryId, prev.transferGroupId, input.date)
+        countDelta = (after ? 1 : 0) - (before ? 1 : 0)
+        patchUncategorizedCount(queryClient, countDelta)
+      }
       queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
         old?.map((t) =>
           t.id === input.transactionId
@@ -36,10 +51,11 @@ function useUpdateTransaction() {
             : t,
         ),
       )
-      return { snapshot }
+      return { snapshot, countDelta }
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
+      if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
     },
     // Deja reflete de facon optimiste : reconciliation en fond via le signal
     // Realtime coalesce (pas d'invalidation directe qui rechargerait toute la

@@ -1,8 +1,8 @@
 import { Link } from '@tanstack/react-router'
 import { Wallet } from 'lucide-react'
 import { NAV_ITEMS, RULES_ITEM, SETTINGS_ITEM } from '@/components/layout/nav'
-import { useBudgetMonth, useTransactions } from '@/lib/queries'
-import { uncategorizedCount, useBootstrap } from '@/lib/data'
+import { useBudgetMonth } from '@/lib/queries'
+import { useBootstrap } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
 import { Amount } from '@/components/shared/Amount'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -29,8 +29,10 @@ export function Sidebar() {
   const month = useUiStore((s) => s.month)
   const boot = useBootstrap()
   const { data: budget, isError: budgetError } = useBudgetMonth(month)
-  const { data: txs } = useTransactions()
-  const badge = txs ? uncategorizedCount(txs) : 0
+  // Compteur « À catégoriser » deja calcule serveur et porte par le cache
+  // bootstrap : on ne charge PLUS toute la liste des transactions dans la nav
+  // (elle restait active en permanence et se rechargeait a chaque mutation).
+  const badge = boot.data?.uncategorizedCount ?? 0
   // Une erreur du bootstrap desactive la query budget : on la surveille aussi
   // pour ne pas rester bloque en skeleton dans la nav.
   const hasBudgetError = budgetError || boot.isError

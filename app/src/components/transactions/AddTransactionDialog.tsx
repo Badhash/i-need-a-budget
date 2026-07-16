@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiAddTransaction, useAccountsList } from '@/lib/data'
+import { apiAddTransaction, countsAsUncategorized, patchUncategorizedCount, useAccountsList } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
 import {
   Dialog,
@@ -18,11 +18,16 @@ export function AddTransactionDialog() {
 
   const mutation = useMutation({
     mutationFn: apiAddTransaction,
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       // On rafraichit la seule liste (pour afficher la nouvelle ligne) ; le
       // budget/les rapports/les soldes sont reconcilies en fond par le signal
       // Realtime coalesce, sans recharger toute la table chiffree.
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      // Une saisie manuelle sans categorie (jusqu'a aujourd'hui) alimente le
+      // badge « À catégoriser » : on incremente le compteur porte par bootstrap.
+      if (countsAsUncategorized(vars.categoryId, null, vars.date)) {
+        patchUncategorizedCount(queryClient, 1)
+      }
       setOpen(false)
     },
   })

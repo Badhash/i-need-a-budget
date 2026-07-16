@@ -4,7 +4,7 @@
 // selecteurs ci-dessous. Tous les montants sont en centimes.
 
 import { useMemo } from 'react'
-import { useQuery, type UseQueryResult } from '@tanstack/react-query'
+import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { apiCall } from '@/lib/api'
 import type {
   Account,
@@ -427,4 +427,30 @@ export function uncategorizedCount(list: Transaction[]): number {
   return list.filter(
     (t) => !t.categoryId && !t.transferGroupId && monthOf(t.date) <= monthOf(TODAY),
   ).length
+}
+
+/**
+ * True si une transaction compte dans le badge « À catégoriser » : sans
+ * categorie, hors transfert, et pas dans le futur (meme regle que le serveur,
+ * cf. buildBootstrap dans l'Edge Function /api).
+ */
+export function countsAsUncategorized(
+  categoryId: string | null,
+  transferGroupId: string | null | undefined,
+  date: string,
+): boolean {
+  return !categoryId && !transferGroupId && monthOf(date) <= monthOf(TODAY)
+}
+
+/**
+ * Ajuste de facon OPTIMISTE le compteur « À catégoriser » porte par le cache
+ * bootstrap. Le badge de la nav lit ce compteur (deja calcule serveur) au lieu
+ * de charger toute la liste des transactions : sans ce patch, il ne bougerait
+ * qu'a la prochaine reconciliation (fenetre de silence Realtime de 30s).
+ */
+export function patchUncategorizedCount(queryClient: QueryClient, delta: number): void {
+  if (delta === 0) return
+  queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) =>
+    old ? { ...old, uncategorizedCount: Math.max(0, old.uncategorizedCount + delta) } : old,
+  )
 }

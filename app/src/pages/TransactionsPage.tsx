@@ -11,7 +11,7 @@ import {
 } from '@tanstack/react-table'
 import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet, X } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
-import { apiCategorize, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
+import { apiCategorize, countsAsUncategorized, patchUncategorizedCount, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
@@ -75,13 +75,24 @@ function useCategorize() {
     onMutate: async ({ txId, categoryId }) => {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
       const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
+      // Compteur « À catégoriser » du badge nav : maintenu en optimiste car la
+      // nav ne charge plus la liste complete pour le calculer.
+      const prev = snapshot?.find((t) => t.id === txId)
+      let countDelta = 0
+      if (prev) {
+        const before = countsAsUncategorized(prev.categoryId, prev.transferGroupId, prev.date)
+        const after = countsAsUncategorized(categoryId, prev.transferGroupId, prev.date)
+        countDelta = (after ? 1 : 0) - (before ? 1 : 0)
+        patchUncategorizedCount(queryClient, countDelta)
+      }
       queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
         old?.map((t) => (t.id === txId ? { ...t, categoryId } : t)),
       )
-      return { snapshot }
+      return { snapshot, countDelta }
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
+      if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
     },
     // Pas d'invalidation directe ici : le cache est deja exact (mise a jour
     // optimiste), et le signal Realtime declenche une reconciliation UNIQUE et
@@ -109,6 +120,9 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
     // de rechargement de la table entiere a chaque conversion).
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      // Conversion rare : un rafraichissement du bootstrap remet le compteur
+      // « À catégoriser » du badge d'aplomb (le transfert sort du decompte).
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     },
     onError: (err) => showError(err),
   })
@@ -116,6 +130,7 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
     mutationFn: () => apiCall('convertTransferToNormal', { transactionId: row.tx.id }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     },
     onError: (err) => showError(err),
   })
@@ -125,13 +140,19 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
       const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
+      // Si la ligne supprimee comptait dans le badge, on decremente en optimiste.
+      const countDelta = countsAsUncategorized(row.tx.categoryId, row.tx.transferGroupId, row.tx.date)
+        ? -1
+        : 0
+      patchUncategorizedCount(queryClient, countDelta)
       queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
         old?.filter((t) => t.id !== row.tx.id),
       )
-      return { snapshot }
+      return { snapshot, countDelta }
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
+      if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
       showError(err)
     },
     // Suppression deja refletee de facon optimiste : reconciliation en fond via

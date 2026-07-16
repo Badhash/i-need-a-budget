@@ -1,16 +1,16 @@
 import { Link } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
 import { NAV_ITEMS } from '@/components/layout/nav'
-import { useTransactions } from '@/lib/queries'
-import { uncategorizedCount } from '@/lib/data'
+import { useBootstrap } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
 
 // Barre de navigation flottante facon iOS : pilule arrondie, verre depoli, posee
 // au-dessus de l'indicateur home (safe-area). Les gouttieres laterales laissent
 // passer les taps (pointer-events-none sur le conteneur, auto sur la barre).
 export function BottomNav() {
-  const { data: txs } = useTransactions()
-  const badge = txs ? uncategorizedCount(txs) : 0
+  // Compteur porte par le cache bootstrap (calcule serveur) : la nav ne charge
+  // plus toute la liste des transactions (cf. Sidebar).
+  const badge = useBootstrap().data?.uncategorizedCount ?? 0
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] lg:hidden">
