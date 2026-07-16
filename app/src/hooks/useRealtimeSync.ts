@@ -6,6 +6,17 @@ import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
+import { msSinceLocalWrite } from '@/lib/realtimeGate'
+
+// Fenetre de silence : un signal Realtime qui tombe dans les QUIET_WINDOW_MS
+// apres une ecriture LOCALE est considere comme l'echo de cette ecriture. Le
+// cache optimiste etant deja exact, on ne reconcilie pas immediatement ; on
+// attend que l'activite se calme pour ne faire qu'UN seul refetch de securite.
+// Cela evite de retelecharger toute la table chiffree a chaque clic (le poste
+// d'egress dominant sur le free tier). Les signaux SANS ecriture locale recente
+// (sync bancaire, autre appareil) sont, eux, reconcilies promptement.
+const QUIET_WINDOW_MS = 4000
+const EXTERNAL_DEBOUNCE_MS = 300
 
 export function useRealtimeSync() {
   const queryClient = useQueryClient()
@@ -15,16 +26,26 @@ export function useRealtimeSync() {
     let active = true
     let timer: ReturnType<typeof setTimeout> | null = null
 
-    // Reconciliation debouncee : une rafale d'ecritures (ex. plusieurs
-    // assignations d'affilee, ou un import de 50 lignes) declenche UN seul
-    // refetch ~300ms apres la derniere. Combine aux mises a jour optimistes,
-    // l'UI reste instantanee et le reseau discret (voir CLAUDE.md, reactivite).
+    // Planifie la reconciliation en fonction de l'origine probable du signal :
+    // - ecriture locale recente -> on repousse jusqu'a la fin de la fenetre de
+    //   silence ; tant que tu cliques, le refetch est differe, puis UN seul
+    //   refetch tombe une fois l'activite calmee (rafale coalescee).
+    // - aucune ecriture locale recente (= changement externe) -> petit debounce
+    //   puis refetch, pour refleter vite la nouveaute (ex. sync bancaire).
     const scheduleInvalidate = () => {
       if (timer) clearTimeout(timer)
+      const since = msSinceLocalWrite()
+      const delay = since < QUIET_WINDOW_MS ? QUIET_WINDOW_MS - since : EXTERNAL_DEBOUNCE_MS
       timer = setTimeout(() => {
+        // Une nouvelle ecriture locale a pu tomber pendant l'attente : on
+        // repousse encore tant qu'on est dans la fenetre de silence.
+        if (msSinceLocalWrite() < QUIET_WINDOW_MS) {
+          scheduleInvalidate()
+          return
+        }
         timer = null
         void queryClient.invalidateQueries()
-      }, 300)
+      }, delay)
     }
 
     void (async () => {
