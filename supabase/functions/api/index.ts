@@ -23,8 +23,8 @@ import {
   deriveKeys,
   encryptJson,
   normalizeLabel,
-  pgHexToBytes,
-  bytesToPgHex,
+  base64ToBytes,
+  bytesToBase64,
   targetIdx,
   txMonthIdx,
   type CryptoKeys,
@@ -296,7 +296,7 @@ async function decryptRows<T>(
   return Promise.all(
     rows.map(async (row) => ({
       id: row.id,
-      ...(await decryptJson<T>(keys, pgHexToBytes(row.enc_payload), context)),
+      ...(await decryptJson<T>(keys, base64ToBytes(row.enc_payload), context)),
     })),
   )
 }
@@ -329,7 +329,7 @@ async function loadAll<T>(table: string, userId: string): Promise<WithId<T>[]> {
   const rows = await loadAllRows<{ id: string; enc_payload: string }>(
     table,
     userId,
-    'id, enc_payload',
+    'id, enc_payload:enc_b64',
   )
   return decryptRows<T>(table, userId, rows)
 }
@@ -341,17 +341,17 @@ async function insertEncrypted(
   extra: Record<string, string> = {},
 ): Promise<string> {
   const keys = await getKeys()
-  const { data, error } = await admin
-    .from(table)
-    .insert({
-      user_id: userId,
-      enc_payload: bytesToPgHex(await encryptJson(keys, payload, [table, userId])),
-      ...extra,
-    })
-    .select('id')
-    .single()
-  if (error) throw new ApiError(500, `ecriture ${table} impossible`)
-  return data.id
+  // Ecriture via RPC enc_insert : enc_payload transporte en base64 (decode(...,
+  // 'base64') cote Postgres). -33% de volume vs le litteral hex bytea.
+  const row = {
+    user_id: userId,
+    enc_payload: bytesToBase64(await encryptJson(keys, payload, [table, userId])),
+    ...extra,
+  }
+  const { data, error } = await admin.rpc('enc_insert', { p_table: table, p_rows: [row] })
+  const id = Array.isArray(data) ? (data[0] as string | undefined) : undefined
+  if (error || !id) throw new ApiError(500, `ecriture ${table} impossible`)
+  return id
 }
 
 async function updateEncrypted(
@@ -362,11 +362,15 @@ async function updateEncrypted(
   extra: Record<string, string> = {},
 ): Promise<void> {
   const keys = await getKeys()
-  const { error } = await admin
-    .from(table)
-    .update({ enc_payload: bytesToPgHex(await encryptJson(keys, payload, [table, userId])), ...extra })
-    .eq('user_id', userId)
-    .eq('id', id)
+  const { error } = await admin.rpc('enc_update', {
+    p_table: table,
+    p_user: userId,
+    p_id: id,
+    p_row: {
+      enc_payload: bytesToBase64(await encryptJson(keys, payload, [table, userId])),
+      ...extra,
+    },
+  })
   if (error) throw new ApiError(500, `mise a jour ${table} impossible`)
 }
 
@@ -636,7 +640,7 @@ async function actionGetTransactions(userId: string, params: Params) {
   const idx = await txMonthIdx(keys, userId, month)
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload')
+    .select('id, enc_payload:enc_b64')
     .eq('user_id', userId)
     .eq('month_idx', idx)
   if (error) throw new ApiError(500, 'lecture transactions impossible')
@@ -699,7 +703,7 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
 
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload')
+    .select('id, enc_payload:enc_b64')
     .eq('user_id', userId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -712,7 +716,7 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
   }
 
   const keys = await getKeys()
-  const payload = await decryptJson<TxPayload>(keys, pgHexToBytes(data.enc_payload), [
+  const payload = await decryptJson<TxPayload>(keys, base64ToBytes(data.enc_payload), [
     'transactions',
     userId,
   ])
@@ -732,7 +736,7 @@ async function actionUpdateTransaction(userId: string, params: Params) {
 
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload')
+    .select('id, enc_payload:enc_b64')
     .eq('user_id', userId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -740,7 +744,7 @@ async function actionUpdateTransaction(userId: string, params: Params) {
   if (!data) throw new ApiError(404, 'transaction inconnue')
 
   const keys = await getKeys()
-  const existing = await decryptJson<TxPayload>(keys, pgHexToBytes(data.enc_payload), [
+  const existing = await decryptJson<TxPayload>(keys, base64ToBytes(data.enc_payload), [
     'transactions',
     userId,
   ])
@@ -790,7 +794,7 @@ async function actionConvertToTransfer(userId: string, params: Params) {
 
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload')
+    .select('id, enc_payload:enc_b64')
     .eq('user_id', userId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -798,7 +802,7 @@ async function actionConvertToTransfer(userId: string, params: Params) {
   if (!data) throw new ApiError(404, 'transaction inconnue')
 
   const keys = await getKeys()
-  const payload = await decryptJson<TxPayload>(keys, pgHexToBytes(data.enc_payload), [
+  const payload = await decryptJson<TxPayload>(keys, base64ToBytes(data.enc_payload), [
     'transactions',
     userId,
   ])
@@ -862,14 +866,14 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   const data = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
     'transactions',
     userId,
-    'id, enc_payload, tx_hash',
+    'id, enc_payload:enc_b64, tx_hash',
   )
   const keys = await getKeys()
   const rows = await Promise.all(
     data.map(async (row) => ({
       id: row.id as string,
       txHash: (row.tx_hash as string | null) ?? null,
-      payload: await decryptJson<TxPayload>(keys, pgHexToBytes(row.enc_payload), [
+      payload: await decryptJson<TxPayload>(keys, base64ToBytes(row.enc_payload), [
         'transactions',
         userId,
       ]),
@@ -916,7 +920,7 @@ async function actionDeleteTransaction(userId: string, params: Params) {
 
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload, tx_hash')
+    .select('id, enc_payload:enc_b64, tx_hash')
     .eq('user_id', userId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -924,7 +928,7 @@ async function actionDeleteTransaction(userId: string, params: Params) {
   if (!data) throw new ApiError(404, 'transaction inconnue')
 
   const keys = await getKeys()
-  const payload = await decryptJson<TxPayload>(keys, pgHexToBytes(data.enc_payload), [
+  const payload = await decryptJson<TxPayload>(keys, base64ToBytes(data.enc_payload), [
     'transactions',
     userId,
   ])
@@ -936,11 +940,11 @@ async function actionDeleteTransaction(userId: string, params: Params) {
     const rows = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
       'transactions',
       userId,
-      'id, enc_payload, tx_hash',
+      'id, enc_payload:enc_b64, tx_hash',
     )
     for (const row of rows) {
       if (row.id === transactionId) continue
-      const other = await decryptJson<TxPayload>(keys, pgHexToBytes(row.enc_payload), [
+      const other = await decryptJson<TxPayload>(keys, base64ToBytes(row.enc_payload), [
         'transactions',
         userId,
       ])
@@ -988,15 +992,18 @@ async function actionSetAssigned(userId: string, params: Params) {
 
   const keys = await getKeys()
   const payload: AssignmentPayload = { categoryId, month, amount }
-  const { error } = await admin.from('assignments').upsert(
-    {
-      user_id: userId,
-      assign_idx: await assignIdx(keys, userId, categoryId, month),
-      month_idx: await assignMonthIdx(keys, userId, month),
-      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['assignments', userId])),
-    },
-    { onConflict: 'user_id,assign_idx' },
-  )
+  const { error } = await admin.rpc('enc_insert', {
+    p_table: 'assignments',
+    p_rows: [
+      {
+        user_id: userId,
+        assign_idx: await assignIdx(keys, userId, categoryId, month),
+        month_idx: await assignMonthIdx(keys, userId, month),
+        enc_payload: bytesToBase64(await encryptJson(keys, payload, ['assignments', userId])),
+      },
+    ],
+    p_conflict: 'user_id,assign_idx',
+  })
   if (error) throw new ApiError(500, 'ecriture assignments impossible')
   return { ok: true }
 }
@@ -1526,14 +1533,17 @@ async function actionSetTarget(userId: string, params: Params) {
   const keys = await getKeys()
   const payload: TargetPayload = { categoryId, type, amount, dueMonth }
   // Upsert par target_idx : un seul objectif par categorie (modele actionSetAssigned).
-  const { error } = await admin.from('targets').upsert(
-    {
-      user_id: userId,
-      target_idx: await targetIdx(keys, userId, categoryId),
-      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['targets', userId])),
-    },
-    { onConflict: 'user_id,target_idx' },
-  )
+  const { error } = await admin.rpc('enc_insert', {
+    p_table: 'targets',
+    p_rows: [
+      {
+        user_id: userId,
+        target_idx: await targetIdx(keys, userId, categoryId),
+        enc_payload: bytesToBase64(await encryptJson(keys, payload, ['targets', userId])),
+      },
+    ],
+    p_conflict: 'user_id,target_idx',
+  })
   if (error) throw new ApiError(500, 'ecriture targets impossible')
   return { ok: true }
 }
@@ -1641,7 +1651,7 @@ async function actionListSyncLogs(userId: string) {
   const keys = await getKeys()
   const { data, error } = await admin
     .from('sync_logs')
-    .select('id, enc_payload, run_at')
+    .select('id, enc_payload:enc_b64, run_at')
     .eq('user_id', userId)
     .order('run_at', { ascending: false })
     .limit(10)
@@ -1656,7 +1666,7 @@ async function actionListSyncLogs(userId: string) {
   }[] = []
   for (const row of data ?? []) {
     try {
-      const payload = await decryptJson<SyncLogPayload>(keys, pgHexToBytes(row.enc_payload), [
+      const payload = await decryptJson<SyncLogPayload>(keys, base64ToBytes(row.enc_payload), [
         'sync_logs',
         userId,
       ])
@@ -1916,12 +1926,12 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
     // imports Enable Banking). month_idx calcule pour le filtre par mois.
     rows.push({
       user_id: userId,
-      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['transactions', userId])),
+      enc_payload: bytesToBase64(await encryptJson(keys, payload, ['transactions', userId])),
       month_idx: await txMonthIdx(keys, userId, bookingMonth),
     })
   }
   if (rows.length > 0) {
-    const { error } = await admin.from('transactions').insert(rows)
+    const { error } = await admin.rpc('enc_insert', { p_table: 'transactions', p_rows: rows })
     if (error) throw new ApiError(500, 'ecriture transactions impossible')
   }
   return { inserted: rows.length }
@@ -1955,15 +1965,17 @@ async function actionImportReplaceAssignments(userId: string, params: Params) {
       user_id: userId,
       assign_idx: await assignIdx(keys, userId, categoryId, month),
       month_idx: await assignMonthIdx(keys, userId, month),
-      enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['assignments', userId])),
+      enc_payload: bytesToBase64(await encryptJson(keys, payload, ['assignments', userId])),
     })
   }
   if (rows.length > 0) {
     // Upsert par (user_id, assign_idx) : idempotent si un meme (categorie, mois)
     // revient dans un lot ulterieur. Le parser garantit l'unicite intra-lot.
-    const { error } = await admin
-      .from('assignments')
-      .upsert(rows, { onConflict: 'user_id,assign_idx' })
+    const { error } = await admin.rpc('enc_insert', {
+      p_table: 'assignments',
+      p_rows: rows,
+      p_conflict: 'user_id,assign_idx',
+    })
     if (error) throw new ApiError(500, 'ecriture assignments impossible')
   }
   return { upserted: rows.length }

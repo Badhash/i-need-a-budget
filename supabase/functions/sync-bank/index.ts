@@ -27,13 +27,13 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import {
   base64Decode,
+  base64ToBytes,
   base64UrlEncode,
-  bytesToPgHex,
+  bytesToBase64,
   decryptJson,
   deriveKeys,
   encryptJson,
   normalizeLabel,
-  pgHexToBytes,
   txHashIdx,
   txMonthIdx,
   type CryptoKeys,
@@ -171,7 +171,7 @@ async function decryptRows<T>(
   return Promise.all(
     rows.map(async (row) => ({
       id: row.id,
-      ...(await decryptJson<T>(keys, pgHexToBytes(row.enc_payload), context)),
+      ...(await decryptJson<T>(keys, base64ToBytes(row.enc_payload), context)),
     })),
   )
 }
@@ -203,7 +203,7 @@ async function loadAll<T>(table: string, userId: string): Promise<WithId<T>[]> {
   const rows = await loadAllRows<{ id: string; enc_payload: string }>(
     table,
     userId,
-    'id, enc_payload',
+    'id, enc_payload:enc_b64',
   )
   return decryptRows<T>(table, userId, rows)
 }
@@ -215,17 +215,16 @@ async function insertEncrypted(
   extra: Record<string, string> = {},
 ): Promise<string> {
   const keys = await getKeys()
-  const { data, error } = await admin
-    .from(table)
-    .insert({
-      user_id: userId,
-      enc_payload: bytesToPgHex(await encryptJson(keys, payload, [table, userId])),
-      ...extra,
-    })
-    .select('id')
-    .single()
-  if (error) throw new ApiError(500, `ecriture ${table} impossible`)
-  return data.id
+  // enc_payload transporte en base64 (RPC enc_insert -> decode(...,'base64')).
+  const row = {
+    user_id: userId,
+    enc_payload: bytesToBase64(await encryptJson(keys, payload, [table, userId])),
+    ...extra,
+  }
+  const { data, error } = await admin.rpc('enc_insert', { p_table: table, p_rows: [row] })
+  const id = Array.isArray(data) ? (data[0] as string | undefined) : undefined
+  if (error || !id) throw new ApiError(500, `ecriture ${table} impossible`)
+  return id
 }
 
 // Transaction dechiffree accompagnee de son tx_hash en clair : permet de
@@ -245,7 +244,7 @@ async function decryptTxRows(
     rows.map(async (row) => ({
       id: row.id,
       txHash: row.tx_hash,
-      payload: await decryptJson<TxPayload>(keys, pgHexToBytes(row.enc_payload), [
+      payload: await decryptJson<TxPayload>(keys, base64ToBytes(row.enc_payload), [
         'transactions',
         userId,
       ]),
@@ -263,11 +262,15 @@ async function updateEncrypted(
   extra: Record<string, string> = {},
 ): Promise<void> {
   const keys = await getKeys()
-  const { error } = await admin
-    .from(table)
-    .update({ enc_payload: bytesToPgHex(await encryptJson(keys, payload, [table, userId])), ...extra })
-    .eq('user_id', userId)
-    .eq('id', id)
+  const { error } = await admin.rpc('enc_update', {
+    p_table: table,
+    p_user: userId,
+    p_id: id,
+    p_row: {
+      enc_payload: bytesToBase64(await encryptJson(keys, payload, [table, userId])),
+      ...extra,
+    },
+  })
   if (error) throw new ApiError(500, `mise a jour ${table} impossible`)
 }
 
@@ -283,12 +286,19 @@ async function insertImportedTransaction(
   txHash: string,
 ): Promise<void> {
   const keys = await getKeys()
-  const { error } = await admin.from('transactions').insert({
-    user_id: userId,
-    enc_payload: bytesToPgHex(await encryptJson(keys, payload, ['transactions', userId])),
-    month_idx: monthIdx,
-    tx_hash: txHash,
+  const { error } = await admin.rpc('enc_insert', {
+    p_table: 'transactions',
+    p_rows: [
+      {
+        user_id: userId,
+        enc_payload: bytesToBase64(await encryptJson(keys, payload, ['transactions', userId])),
+        month_idx: monthIdx,
+        tx_hash: txHash,
+      },
+    ],
   })
+  // Violation d'unicite (course concurrente cron/manuel sur l'index partiel
+  // tx_hash) : le SQLSTATE 23505 remonte tel quel depuis la RPC, on l'ignore.
   if (error && error.code !== '23505') {
     throw new ApiError(500, 'ecriture transactions impossible')
   }
@@ -584,7 +594,7 @@ async function loadRecentSyncLogs(
   const keys = await getKeys()
   const { data, error } = await admin
     .from('sync_logs')
-    .select('id, enc_payload, run_at')
+    .select('id, enc_payload:enc_b64, run_at')
     .eq('user_id', userId)
     .order('run_at', { ascending: false })
     // 50 suffit largement : on ne cherche que la derniere sync `ok` par
@@ -598,7 +608,7 @@ async function loadRecentSyncLogs(
     try {
       const payload = await decryptJson<SyncLogPayload>(
         keys,
-        pgHexToBytes(row.enc_payload),
+        base64ToBytes(row.enc_payload),
         ['sync_logs', userId],
       )
       out.push({ runAt: String(row.run_at), payload })
@@ -679,7 +689,7 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
   for (let from = 0; ; from += READ_PAGE) {
     const { data: page, error } = await admin
       .from('transactions')
-      .select('id, enc_payload, tx_hash')
+      .select('id, enc_payload:enc_b64, tx_hash')
       .eq('user_id', userId)
       .in('month_idx', monthIdxs)
       .order('id', { ascending: true })
@@ -872,7 +882,7 @@ async function syncUser(
   // Connexions bancaires actives de l'utilisateur.
   const { data: connRows, error: connErr } = await admin
     .from('bank_connections')
-    .select('id, enc_payload, created_at')
+    .select('id, enc_payload:enc_b64, created_at')
     .eq('user_id', userId)
     .limit(100)
   if (connErr) throw new ApiError(500, 'lecture bank_connections impossible')
@@ -883,7 +893,7 @@ async function syncUser(
       createdAt: row.created_at as string,
       payload: await decryptJson<BankConnectionPayload>(
         keys,
-        pgHexToBytes(row.enc_payload),
+        base64ToBytes(row.enc_payload),
         ['bank_connections', userId],
       ),
     })),
@@ -1258,7 +1268,7 @@ async function actionReconcile(userId: string) {
   // statut ici : c'est le role de la sync, reconcile reste en lecture cote EB.
   const { data: connRows, error: connErr } = await admin
     .from('bank_connections')
-    .select('id, enc_payload')
+    .select('id, enc_payload:enc_b64')
     .eq('user_id', userId)
     .limit(100)
   if (connErr) throw new ApiError(500, 'lecture bank_connections impossible')
@@ -1295,7 +1305,7 @@ async function actionReconcile(userId: string) {
   const txRows = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
     'transactions',
     userId,
-    'id, enc_payload, tx_hash',
+    'id, enc_payload:enc_b64, tx_hash',
   )
   const allTxs = await decryptTxRows(userId, txRows)
   const txsByAccount = new Map<string, DecryptedTx[]>()

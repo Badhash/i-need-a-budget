@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   assignIdx,
   base64Encode,
+  base64ToBytes,
   blindIndex,
+  bytesToBase64,
   bytesToPgHex,
   decryptJson,
   deriveKeys,
@@ -142,6 +144,61 @@ describe('contexte AAD', () => {
     const a = await txHashIdx(keys, USER, 'acc-1', '2026-07-10', -100, 'SNCF\u001fCONNECT')
     const b = await txHashIdx(keys, USER, 'acc-1', '2026-07-10', -100, 'sncf connect')
     expect(a).toBe(b)
+  })
+})
+
+describe('transport base64 (enc_payload)', () => {
+  it('fait l aller-retour sur des octets arbitraires', () => {
+    const bytes = new Uint8Array([0, 1, 15, 16, 255, 128, 64, 200])
+    expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes)
+  })
+
+  it('produit une chaine base64 standard plus courte que l hex', () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(96))
+    const b64 = bytesToBase64(bytes)
+    expect(b64).toMatch(/^[A-Za-z0-9+/]*={0,2}$/)
+    // hex Postgres = 2 caracteres/octet + prefixe \x ; base64 ~1,33/octet
+    expect(b64.length).toBeLessThan(bytesToPgHex(bytes).length)
+  })
+
+  it('gere le tableau vide', () => {
+    expect(bytesToBase64(new Uint8Array(0))).toBe('')
+    expect(base64ToBytes('')).toEqual(new Uint8Array(0))
+  })
+
+  it('rejette une chaine qui n est pas du base64', () => {
+    expect(() => base64ToBytes('pas du base64 !!!')).toThrow('base64 de transport invalide')
+    expect(() => base64ToBytes('****')).toThrow('invalide')
+  })
+
+  it('reste coherent avec un payload chiffre (aller-retour transport)', async () => {
+    const keys = await deriveKeys(KEY_A)
+    const encrypted = await encryptJson(keys, { montant: 987654, label: 'Café' }, CTX)
+    const roundtrip = base64ToBytes(bytesToBase64(encrypted))
+    expect(await decryptJson(keys, roundtrip, CTX)).toEqual({ montant: 987654, label: 'Café' })
+  })
+
+  it('decode la sortie encode(...,base64) de Postgres avec ses sauts de ligne RFC 2045', async () => {
+    const keys = await deriveKeys(KEY_A)
+    // Payload > 57 octets : encode(...,'base64') de Postgres depasse 76 caracteres
+    // et insere donc au moins un \n. base64ToBytes DOIT le tolerer.
+    const payload = { label: 'Boulangerie Chez Amélie — carte de fidélité', amount: -1250, notes: 'x'.repeat(80) }
+    const encrypted = await encryptJson(keys, payload, CTX)
+    expect(encrypted.length).toBeGreaterThan(57)
+    // Simule la sortie Postgres : base64 puis un \n tous les 76 caracteres.
+    const wrapped = (bytesToBase64(encrypted).match(/.{1,76}/g) ?? []).join('\n')
+    expect(wrapped).toContain('\n')
+    const decoded = base64ToBytes(wrapped)
+    expect(decoded).toEqual(encrypted)
+    expect(await decryptJson(keys, decoded, CTX)).toEqual(payload)
+  })
+
+  it('decode ce que encode(...,base64) de Postgres produirait (vecteur connu)', () => {
+    // Buffer.from(x).toString('base64') == encode(x,'base64') cote Postgres
+    const bytes = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05])
+    const expected = Buffer.from(bytes).toString('base64')
+    expect(bytesToBase64(bytes)).toBe(expected)
+    expect(base64ToBytes(expected)).toEqual(bytes)
   })
 })
 

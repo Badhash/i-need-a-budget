@@ -48,6 +48,29 @@ export function base64UrlEncode(bytes: Uint8Array): string {
   return base64Encode(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
+/**
+ * Uint8Array -> base64 standard, encodage de TRANSPORT de enc_payload.
+ * ~1,33 caractere/octet contre 2 pour l'hex Postgres : -33% de volume sur tout
+ * le trafic chiffre (lecture via computed column encode(...,'base64'), ecriture
+ * via RPC decode(...,'base64')). Le ciphertext stocke reste identique.
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
+  return base64Encode(bytes)
+}
+
+/**
+ * base64 standard -> Uint8Array (decodage transport de enc_payload).
+ * Tolere les blancs : encode(...,'base64') de Postgres (RFC 2045) insere un
+ * saut de ligne tous les 76 caracteres ; on les retire avant de valider.
+ */
+export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+  const s = b64.replace(/\s+/g, '')
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(s)) {
+    throw new Error('base64 de transport invalide')
+  }
+  return base64Decode(s)
+}
+
 /** Uint8Array -> litteral bytea Postgres ('\x...') pour insertion via supabase-js */
 export function bytesToPgHex(bytes: Uint8Array): string {
   let hex = '\\x'
