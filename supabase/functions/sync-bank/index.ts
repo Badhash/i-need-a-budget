@@ -587,7 +587,11 @@ async function loadRecentSyncLogs(
     .select('id, enc_payload, run_at')
     .eq('user_id', userId)
     .order('run_at', { ascending: false })
-    .limit(500)
+    // 50 suffit largement : on ne cherche que la derniere sync `ok` par
+    // connexion et le tri run_at desc garantit que la premiere correspondance
+    // gagne. Une purge pg_cron borne par ailleurs la croissance de la table
+    // (voir supabase/migrations-manual/F-purge-sync-logs.sql).
+    .limit(50)
   if (error) throw new ApiError(500, 'lecture sync_logs impossible')
   const out: { runAt: string; payload: SyncLogPayload }[] = []
   for (const row of data ?? []) {
