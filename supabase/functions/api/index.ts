@@ -525,8 +525,10 @@ function computeReports(data: DecryptedData, month: string) {
 
 type Params = Record<string, unknown>
 
-async function actionBootstrap(userId: string) {
-  const data = await loadBudgetData(userId)
+// Construit la reponse `bootstrap` (taxonomie + soldes) a partir de donnees deja
+// dechiffrees : partage entre l'action bootstrap et l'action consolidee
+// bootstrapFull (un seul loadBudgetData pour les deux).
+function buildBootstrap(data: DecryptedData) {
   const balances = new Map<string, number>()
   for (const t of data.transactions) {
     balances.set(t.accountId, (balances.get(t.accountId) ?? 0) + t.amount)
@@ -539,6 +541,36 @@ async function actionBootstrap(userId: string) {
     uncategorizedCount: data.transactions.filter(
       (t) => !t.categoryId && !t.transferGroupId && t.bookingMonth <= currentMonth,
     ).length,
+  }
+}
+
+// Liste complete des transactions (memes tri et forme que actionListTransactions)
+// a partir de donnees deja dechiffrees.
+function buildTransactionList(data: DecryptedData) {
+  const rows = data.transactions.slice()
+  rows.sort((a, b) => (a.bookingDate < b.bookingDate ? 1 : -1))
+  return { transactions: rows }
+}
+
+async function actionBootstrap(userId: string) {
+  const data = await loadBudgetData(userId)
+  return buildBootstrap(data)
+}
+
+// Action consolidee de demarrage : UN SEUL loadBudgetData (donc une seule
+// lecture/dechiffrement de la table transactions) sert a produire d'un coup la
+// taxonomie, le budget du mois, la liste des transactions et les agregats
+// rapports du mois. Evite le double/triple chargement de la table transactions
+// au lancement (bootstrap + getBudgetMonth + listTransactions). Le front hydrate
+// les caches TanStack correspondants a partir de la reponse.
+async function actionBootstrapFull(userId: string, params: Params) {
+  const month = requireMonth(params.month)
+  const data = await loadBudgetData(userId)
+  return {
+    bootstrap: buildBootstrap(data),
+    budget: computeBudget(toEngineInput(data, month)),
+    transactions: buildTransactionList(data).transactions,
+    reports: computeReports(data, month),
   }
 }
 
@@ -1893,6 +1925,7 @@ async function actionImportReplaceAssignments(userId: string, params: Params) {
 
 const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknown>> = {
   bootstrap: (u) => actionBootstrap(u),
+  bootstrapFull: actionBootstrapFull,
   getBudgetMonth: actionGetBudgetMonth,
   getTransactions: actionGetTransactions,
   listTransactions: (u) => actionListTransactions(u),

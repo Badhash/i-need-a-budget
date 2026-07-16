@@ -299,10 +299,42 @@ export function useAccounts(): UseQueryResult<AccountWithBalance[]> {
   return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.accounts })
 }
 
-const reportsKey = (month: string) => ['reports', month] as const
+export const reportsKey = (month: string) => ['reports', month] as const
 
 function fetchReports(month: string): Promise<ReportsData> {
   return apiCall<ReportsData>('getReports', { month })
+}
+
+// ---------------------------------------------------------------------------
+// Demarrage consolide : un seul appel /api (bootstrapFull) qui derive taxonomie,
+// budget du mois, transactions et rapports d'un UNIQUE chargement serveur des
+// transactions. Evite le double/triple chargement de la table au lancement.
+// ---------------------------------------------------------------------------
+
+interface BootstrapFullResponse {
+  bootstrap: BootstrapResponse
+  budget: FlatBudgetMonth
+  transactions: ApiTransaction[]
+  reports: ReportsData
+}
+
+/** Donnees de demarrage hydratees, pretes a peupler les caches TanStack. */
+export interface BootstrapFull {
+  bootstrap: Bootstrap
+  budget: BudgetMonth
+  transactions: Transaction[]
+  reports: ReportsData
+}
+
+export async function fetchBootstrapFull(month: string): Promise<BootstrapFull> {
+  const raw = await apiCall<BootstrapFullResponse>('bootstrapFull', { month })
+  const bootstrap = hydrateBootstrap(raw.bootstrap)
+  return {
+    bootstrap,
+    budget: adaptBudget(raw.budget, bootstrap),
+    transactions: raw.transactions.map(toTransaction),
+    reports: raw.reports,
+  }
 }
 
 export function useReports(month: string): UseQueryResult<ReportsData> {

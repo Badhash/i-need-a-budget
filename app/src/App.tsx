@@ -15,9 +15,9 @@ import {
   BOOTSTRAP_KEY,
   TRANSACTIONS_KEY,
   budgetKey,
-  fetchBootstrap,
+  fetchBootstrapFull,
   fetchBudgetMonth,
-  fetchTransactions,
+  reportsKey,
   type Bootstrap,
 } from '@/lib/data'
 import { RULES_KEY, fetchRules } from '@/lib/rules'
@@ -50,22 +50,23 @@ async function preloadCritical(
   queryClient: QueryClient,
   month: string,
 ): Promise<Bootstrap | undefined> {
-  let taxo: Bootstrap | undefined
   try {
-    taxo = await queryClient.ensureQueryData({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap })
+    // UN SEUL appel serveur (une seule lecture/dechiffrement des transactions)
+    // qui renvoie taxonomie + budget du mois + transactions + rapports. On
+    // hydrate directement les caches TanStack concernes, sans refetch : les
+    // hooks (useBootstrap, useBudgetMonth, useTransactions, useReports) trouvent
+    // leur donnee deja en place, comme s'ils avaient charge separement.
+    const full = await fetchBootstrapFull(month)
+    queryClient.setQueryData(BOOTSTRAP_KEY, full.bootstrap)
+    queryClient.setQueryData(budgetKey(month), full.budget)
+    queryClient.setQueryData(TRANSACTIONS_KEY, full.transactions)
+    queryClient.setQueryData(reportsKey(month), full.reports)
+    return full.bootstrap
   } catch {
-    // Bootstrap indisponible : on entre quand meme, les vues gerent leurs etats.
+    // Demarrage consolide indisponible : on entre quand meme, les vues gerent
+    // leurs propres etats vides/erreur et referont les appels a la demande.
+    return undefined
   }
-  await Promise.allSettled([
-    queryClient.prefetchQuery({ queryKey: TRANSACTIONS_KEY, queryFn: fetchTransactions }),
-    taxo
-      ? queryClient.prefetchQuery({
-          queryKey: budgetKey(month),
-          queryFn: () => fetchBudgetMonth(month, taxo as Bootstrap),
-        })
-      : Promise.resolve(),
-  ])
-  return taxo
 }
 
 // Prechargement de FOND (non bloquant), VOLONTAIREMENT FRUGAL pour menager le
