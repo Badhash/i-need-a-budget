@@ -789,6 +789,76 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
 }
 
 // ---------------------------------------------------------------------------
+// Fenetre de dedup
+// ---------------------------------------------------------------------------
+
+// Repli sur le chargement complet si la fenetre est anormalement large (ex.
+// connexion activee il y a des annees mais jamais synchronisee avec succes :
+// dateFrom = activation). Au-dela de ce plafond, on prefere payer un scan
+// complet plutot que de risquer de laisser passer un doublon. Valeur large :
+// le mode incremental normal ne couvre que quelques jours, et sinceDays est
+// deja plafonne a ~730 jours (~25 mois) en amont.
+const DEDUP_WINDOW_MAX_MONTHS = 120
+
+// Charge les tx_hash existants pertinents pour la dedup de ce run, restreints
+// aux mois de la fenetre [plus ancienne dateFrom .. mois courant] via l'index
+// aveugle month_idx. Garantie anti-doublon : un tx_hash ne collisionne qu'avec
+// une transaction de MEME booking_date (le hash en depend), donc de meme mois,
+// et ce mois est necessairement >= le mois de la dateFrom de sa connexion
+// (EB ne renvoie rien avant date_from) et <= le mois courant. La fenetre couvre
+// donc l'integralite des collisions possibles. En repli (fenetre trop large ou
+// absente), on recharge tous les tx_hash du user : justesse preservee.
+async function loadSeenHashesWindow(
+  userId: string,
+  dateFromByConn: Map<string, string>,
+): Promise<Set<string>> {
+  const keys = await getKeys()
+  const seenHashes = new Set<string>()
+
+  let earliest: string | null = null
+  for (const d of dateFromByConn.values()) {
+    if (earliest === null || d < earliest) earliest = d
+  }
+
+  const currentMonth = new Date().toISOString().slice(0, 7)
+  const months: string[] = []
+  let truncated = false
+  if (earliest !== null) {
+    for (let m = earliest.slice(0, 7); m <= currentMonth; m = nextMonth(m)) {
+      if (months.length >= DEDUP_WINDOW_MAX_MONTHS) {
+        truncated = true
+        break
+      }
+      months.push(m)
+    }
+  }
+  const windowed = earliest !== null && !truncated
+
+  // Filtre month_idx uniquement quand la fenetre est fiable ; sinon scan complet.
+  const monthIdxs = windowed
+    ? await Promise.all(months.map((m) => txMonthIdx(keys, userId, m)))
+    : null
+
+  for (let from = 0; ; from += READ_PAGE) {
+    let query = admin
+      .from('transactions')
+      .select('tx_hash')
+      .eq('user_id', userId)
+      .not('tx_hash', 'is', null)
+    if (monthIdxs) query = query.in('month_idx', monthIdxs)
+    const { data, error } = await query
+      .order('tx_hash', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) throw new ApiError(500, 'lecture tx_hash impossible')
+    if (!data || data.length === 0) break
+    for (const r of data) seenHashes.add(r.tx_hash as string)
+    if (data.length < READ_PAGE) break
+  }
+
+  return seenHashes
+}
+
+// ---------------------------------------------------------------------------
 // Synchronisation d'un utilisateur
 // ---------------------------------------------------------------------------
 
@@ -857,29 +927,40 @@ async function syncUser(
     if (acc.providerAccountUid) accountByUid.set(acc.providerAccountUid, acc)
   }
 
-  // Ensemble des tx_hash existants du user (dedup import bancaire). Pagine :
-  // sans ca la dedup ne verrait que les 1000 premiers hash (plafond PostgREST)
-  // et reimporterait en double toutes les transactions au-dela.
-  const seenHashes = new Set<string>()
-  for (let from = 0; ; from += READ_PAGE) {
-    const { data, error } = await admin
-      .from('transactions')
-      .select('tx_hash')
-      .eq('user_id', userId)
-      .not('tx_hash', 'is', null)
-      .order('tx_hash', { ascending: true })
-      .range(from, from + READ_PAGE - 1)
-    if (error) throw new ApiError(500, 'lecture tx_hash impossible')
-    if (!data || data.length === 0) break
-    for (const r of data) seenHashes.add(r.tx_hash as string)
-    if (data.length < READ_PAGE) break
-  }
-
   // Marqueur incremental : on charge et dechiffre les derniers sync_logs pour
   // retrouver, par connexion, la derniere sync REUSSIE (status 'ok' relu apres
   // dechiffrement). Un run en echec n'avance donc jamais la borne d'une
   // connexion, et une connexion saine n'influe pas sur une connexion en panne.
   const recentLogs = await loadRecentSyncLogs(userId)
+
+  // Date de depart de chaque connexion, precalculee AVANT le poll : elle sert a
+  // la fois de borne date_from EB et de borne basse a la fenetre de dedup.
+  //   - derniere sync REUSSIE de CETTE connexion (moins le recouvrement), sinon
+  //     date d'activation (created_at, en clair). On ne remonte jamais avant
+  //     l'activation : seules les transactions posterieures sont importees (le
+  //     solde d'ouverture est saisi manuellement).
+  //   - sinceDays (mode user, diagnostic / import initial) : force la fenetre a
+  //     aujourd'hui - N jours, en ignorant la borne d'activation.
+  const today = new Date().toISOString().slice(0, 10)
+  const dateFromByConn = new Map<string, string>()
+  for (const conn of connectionsToSync) {
+    const activationDate = conn.createdAt.slice(0, 10)
+    const lastOkDate = lastSuccessfulRunDate(recentLogs, conn.id)
+    const dateFrom =
+      sinceDays != null
+        ? shiftDays(today, -sinceDays)
+        : lastOkDate
+          ? maxDate(shiftDays(lastOkDate, -OVERLAP_DAYS), activationDate)
+          : activationDate
+    dateFromByConn.set(conn.id, dateFrom)
+  }
+
+  // Ensemble des tx_hash existants susceptibles de collisionner avec ce run,
+  // limite aux mois couverts par la fenetre de dedup [plus ancienne dateFrom ..
+  // mois courant]. Un doublon partage FORCEMENT la meme booking_date que la
+  // transaction importee (tx_hash en depend), donc le meme mois : filtrer par
+  // month_idx sur cette fenetre contient a coup sur tout doublon potentiel.
+  const seenHashes = await loadSeenHashesWindow(userId, dateFromByConn)
 
   let importedTotal = 0
   let linkedCount = 0
@@ -888,21 +969,7 @@ async function syncUser(
   for (const conn of connectionsToSync) {
     let importedForConn = 0
     try {
-      // Date de depart : derniere sync REUSSIE de CETTE connexion (moins le
-      // recouvrement), sinon date d'activation (created_at, en clair). On ne
-      // remonte jamais avant l'activation : seules les transactions posterieures
-      // sont importees (le solde d'ouverture est saisi manuellement).
-      const activationDate = conn.createdAt.slice(0, 10)
-      const lastOkDate = lastSuccessfulRunDate(recentLogs, conn.id)
-      // sinceDays (mode user, diagnostic / import initial) : force la fenetre a
-      // aujourd'hui - N jours, en ignorant la borne d'activation.
-      const today = new Date().toISOString().slice(0, 10)
-      const dateFrom =
-        sinceDays != null
-          ? shiftDays(today, -sinceDays)
-          : lastOkDate
-            ? maxDate(shiftDays(lastOkDate, -OVERLAP_DAYS), activationDate)
-            : activationDate
+      const dateFrom = dateFromByConn.get(conn.id)!
 
       for (const ebAccount of conn.payload.accounts) {
         const localAccount = accountByUid.get(ebAccount.uid)
