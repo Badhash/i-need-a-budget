@@ -393,6 +393,18 @@ async function loadBudgetData(userId: string): Promise<DecryptedData> {
   return { accounts, groups, categories, transactions, assignments }
 }
 
+// Chargeur allege pour les rapports : computeReports n'utilise jamais les
+// assignments, on evite donc de charger cette table entiere (egress inutile).
+async function loadReportsData(userId: string): Promise<DecryptedData> {
+  const [accounts, groups, categories, transactions] = await Promise.all([
+    loadAll<AccountPayload>('accounts', userId),
+    loadAll<GroupPayload>('category_groups', userId),
+    loadAll<CategoryPayload>('categories', userId),
+    loadAll<TxPayload>('transactions', userId),
+  ])
+  return { accounts, groups, categories, transactions, assignments: [] }
+}
+
 function toEngineInput(data: DecryptedData, month: string) {
   const accounts: EngineAccount[] = data.accounts.map((a) => ({ id: a.id, onBudget: a.onBudget }))
   const categories: EngineCategory[] = data.categories.map((c) => ({
@@ -603,7 +615,7 @@ async function actionListTransactions(userId: string) {
 
 async function actionGetReports(userId: string, params: Params) {
   const month = requireMonth(params.month)
-  const data = await loadBudgetData(userId)
+  const data = await loadReportsData(userId)
   return computeReports(data, month)
 }
 
