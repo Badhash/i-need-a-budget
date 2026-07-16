@@ -15,7 +15,13 @@ import { msSinceLocalWrite } from '@/lib/realtimeGate'
 // Cela evite de retelecharger toute la table chiffree a chaque clic (le poste
 // d'egress dominant sur le free tier). Les signaux SANS ecriture locale recente
 // (sync bancaire, autre appareil) sont, eux, reconcilies promptement.
-const QUIET_WINDOW_MS = 4000
+//
+// Fenetre volontairement large (30s) : elle ne retarde QUE la reconciliation de
+// tes propres ecritures, deja refletees a l'ecran (aucun effet visible). Plus
+// elle est large, plus une longue session d'edition se coalesce en un seul
+// refetch. Un changement externe survenant pendant ton activite est reconcilie
+// au plus tard a la fin de la fenetre ; hors activite, il l'est en 300ms.
+const QUIET_WINDOW_MS = 30000
 const EXTERNAL_DEBOUNCE_MS = 300
 
 export function useRealtimeSync() {
