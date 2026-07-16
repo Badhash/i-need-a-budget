@@ -73,6 +73,16 @@ interface TxPayload {
   notes?: string | null
 }
 
+// REF H : payload transaction scinde en enc_core (leger) et enc_text (lourd),
+// chiffres avec une AAD distincte par colonne. Meme contrat que l'Edge /api.
+// Transport base64 (REF D) : colonnes lues via enc_core_b64/enc_text_b64,
+// ecrites via enc_insert/enc_update (decode(...,'base64')).
+type TxCore = Pick<
+  TxPayload,
+  'accountId' | 'categoryId' | 'bookingDate' | 'bookingMonth' | 'amount' | 'transferGroupId'
+>
+type TxText = Pick<TxPayload, 'label' | 'counterparty' | 'notes'>
+
 type RuleMatcher = { field: 'label'; op: 'contains' | 'equals' | 'startsWith'; value: string }
 interface RulePayload {
   matcher: RuleMatcher
@@ -235,19 +245,107 @@ interface DecryptedTx {
   payload: TxPayload
 }
 
-async function decryptTxRows(
+// ---------------------------------------------------------------------------
+// Transactions : colonnes chiffrees enc_core / enc_text (REF H) sur transport
+// base64 (REF D) + fallback legacy enc_payload
+// ---------------------------------------------------------------------------
+
+const txCoreCtx = (userId: string): string[] => ['transactions', 'core', userId]
+const txTextCtx = (userId: string): string[] => ['transactions', 'text', userId]
+
+// Ligne transaction lue en base : colonnes chiffrees exposees en base64 (REF D).
+interface TxRow {
+  id: string
+  enc_core?: string | null
+  enc_text?: string | null
+  enc_payload?: string | null
+  tx_hash?: string | null
+}
+
+// Reconstitue le payload complet : enc_core + enc_text (migre) ou enc_payload
+// (legacy). Chaque colonne arrive en base64 (REF D). Compatible pendant et apres
+// le backfill migrateSplitPayload.
+async function decodeTx(keys: CryptoKeys, userId: string, row: TxRow): Promise<TxPayload> {
+  if (row.enc_core) {
+    const core = await decryptJson<TxCore>(keys, base64ToBytes(row.enc_core), txCoreCtx(userId))
+    const text = row.enc_text
+      ? await decryptJson<TxText>(keys, base64ToBytes(row.enc_text), txTextCtx(userId))
+      : { label: '', counterparty: null, notes: null }
+    return { ...core, ...text }
+  }
+  if (!row.enc_payload) throw new ApiError(500, 'transaction sans payload dechiffrable')
+  return decryptJson<TxPayload>(keys, base64ToBytes(row.enc_payload), ['transactions', userId])
+}
+
+// Colonnes chiffrees a ecrire (base64, REF D). enc_payload remis a NULL :
+// migration au passage.
+async function encodeTxColumns(
+  keys: CryptoKeys,
   userId: string,
-  rows: { id: string; enc_payload: string; tx_hash: string | null }[],
-): Promise<DecryptedTx[]> {
+  payload: TxPayload,
+): Promise<{ enc_core: string; enc_text: string; enc_payload: null }> {
+  const core: TxCore = {
+    accountId: payload.accountId,
+    categoryId: payload.categoryId,
+    bookingDate: payload.bookingDate,
+    bookingMonth: payload.bookingMonth,
+    amount: payload.amount,
+    transferGroupId: payload.transferGroupId ?? null,
+  }
+  const text: TxText = {
+    label: payload.label,
+    counterparty: payload.counterparty ?? null,
+    notes: payload.notes ?? null,
+  }
+  return {
+    enc_core: bytesToBase64(await encryptJson(keys, core, txCoreCtx(userId))),
+    enc_text: bytesToBase64(await encryptJson(keys, text, txTextCtx(userId))),
+    enc_payload: null,
+  }
+}
+
+// Insert d'une transaction (colonnes scindees) via la RPC enc_insert de la REF D.
+async function insertTx(
+  userId: string,
+  payload: TxPayload,
+  extra: Record<string, string> = {},
+): Promise<string> {
+  const keys = await getKeys()
+  const cols = await encodeTxColumns(keys, userId, payload)
+  const { data, error } = await admin.rpc('enc_insert', {
+    p_table: 'transactions',
+    p_rows: [{ user_id: userId, ...cols, ...extra }],
+  })
+  const id = Array.isArray(data) ? (data[0] as string | undefined) : undefined
+  if (error || !id) throw new ApiError(500, 'ecriture transactions impossible')
+  return id
+}
+
+// Update d'une transaction (colonnes scindees, migre la ligne) via enc_update.
+async function updateTx(
+  userId: string,
+  id: string,
+  payload: TxPayload,
+  extra: Record<string, string> = {},
+): Promise<void> {
+  const keys = await getKeys()
+  const cols = await encodeTxColumns(keys, userId, payload)
+  const { error } = await admin.rpc('enc_update', {
+    p_table: 'transactions',
+    p_user: userId,
+    p_id: id,
+    p_row: { ...cols, ...extra },
+  })
+  if (error) throw new ApiError(500, 'mise a jour transactions impossible')
+}
+
+async function decryptTxRows(userId: string, rows: TxRow[]): Promise<DecryptedTx[]> {
   const keys = await getKeys()
   return Promise.all(
     rows.map(async (row) => ({
       id: row.id,
-      txHash: row.tx_hash,
-      payload: await decryptJson<TxPayload>(keys, base64ToBytes(row.enc_payload), [
-        'transactions',
-        userId,
-      ]),
+      txHash: row.tx_hash ?? null,
+      payload: await decodeTx(keys, userId, row),
     })),
   )
 }
@@ -286,12 +384,13 @@ async function insertImportedTransaction(
   txHash: string,
 ): Promise<void> {
   const keys = await getKeys()
+  const cols = await encodeTxColumns(keys, userId, payload)
   const { error } = await admin.rpc('enc_insert', {
     p_table: 'transactions',
     p_rows: [
       {
         user_id: userId,
-        enc_payload: bytesToBase64(await encryptJson(keys, payload, ['transactions', userId])),
+        ...cols,
         month_idx: monthIdx,
         tx_hash: txHash,
       },
@@ -685,18 +784,18 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
   const monthIdxs = await Promise.all(months.map((m) => txMonthIdx(keys, userId, m)))
   // Pagine (plafond PostgREST) : sur une fenetre profonde (import historique)
   // la fenetre peut depasser 1000 transactions.
-  const data: { id: string; enc_payload: string; tx_hash: string | null }[] = []
+  const data: TxRow[] = []
   for (let from = 0; ; from += READ_PAGE) {
     const { data: page, error } = await admin
       .from('transactions')
-      .select('id, enc_payload:enc_b64, tx_hash')
+      .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash')
       .eq('user_id', userId)
       .in('month_idx', monthIdxs)
       .order('id', { ascending: true })
       .range(from, from + READ_PAGE - 1)
     if (error) throw new ApiError(500, 'lecture transactions impossible')
     if (!page || page.length === 0) break
-    data.push(...(page as { id: string; enc_payload: string; tx_hash: string | null }[]))
+    data.push(...(page as TxRow[]))
     if (page.length < READ_PAGE) break
   }
   const txs = await decryptTxRows(userId, data)
@@ -743,12 +842,12 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
       if (rivals.length > 0) continue
 
       const transferGroupId = crypto.randomUUID()
-      await updateEncrypted('transactions', userId, candidate.id, {
+      await updateTx(userId, candidate.id, {
         ...candidate.payload,
         categoryId: null,
         transferGroupId,
       })
-      await updateEncrypted('transactions', userId, credit.id, {
+      await updateTx(userId, credit.id, {
         ...credit.payload,
         categoryId: null,
         transferGroupId,
@@ -781,10 +880,10 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
         transferGroupId,
         notes: null,
       }
-      await insertEncrypted('transactions', userId, mirror, {
+      await insertTx(userId, mirror, {
         month_idx: await txMonthIdx(keys, userId, mirror.bookingMonth),
       })
-      await updateEncrypted('transactions', userId, candidate.id, {
+      await updateTx(userId, candidate.id, {
         ...candidate.payload,
         categoryId: null,
         transferGroupId,
@@ -1302,10 +1401,10 @@ async function actionReconcile(userId: string) {
   // TOUTES les transactions du user (tx_hash en clair pour reperer les saisies
   // manuelles), dechiffrees une fois puis regroupees par compte local. Pagine
   // (plafond PostgREST) sinon le rapprochement ignore les tx au-dela de 1000.
-  const txRows = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
+  const txRows = await loadAllRows<TxRow>(
     'transactions',
     userId,
-    'id, enc_payload:enc_b64, tx_hash',
+    'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash',
   )
   const allTxs = await decryptTxRows(userId, txRows)
   const txsByAccount = new Map<string, DecryptedTx[]>()
@@ -1353,7 +1452,7 @@ async function actionReconcile(userId: string) {
       if (opening) {
         // Ajustement : l'ecart est absorbe dans le montant d'ouverture. Pas
         // d'extra : month_idx et tx_hash de la ligne restent intacts.
-        await updateEncrypted('transactions', userId, opening.id, {
+        await updateTx(userId, opening.id, {
           ...opening.payload,
           amount: opening.payload.amount + delta,
         })
@@ -1379,7 +1478,7 @@ async function actionReconcile(userId: string) {
           transferGroupId: null,
         }
         // tx_hash reste NULL : saisie systeme, pas de dedup bancaire.
-        await insertEncrypted('transactions', userId, payload, {
+        await insertTx(userId, payload, {
           month_idx: await txMonthIdx(keys, userId, bookingMonth),
         })
       }

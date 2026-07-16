@@ -75,6 +75,21 @@ interface TxPayload {
   notes?: string | null
 }
 
+// REF H : le payload transaction est scinde en deux colonnes chiffrees.
+// - enc_core : champs legers (compte, categorie, mois, montant, transfert, date)
+//   lus par le moteur budget, les rapports, le bootstrap et les soldes.
+// - enc_text : champs lourds en texte libre (libelle, contrepartie, notes) lus
+//   uniquement par la liste des transactions et les top-marchands des rapports.
+// Chaque colonne a une AAD distincte (txCoreCtx / txTextCtx) : un ciphertext
+// recopie d'une colonne a l'autre ne se dechiffre pas. Transport : les deux
+// colonnes passent par la base64 de la REF D (enc_core_b64 / enc_text_b64 en
+// lecture, decode(...,'base64') via enc_insert/enc_update en ecriture).
+type TxCore = Pick<
+  TxPayload,
+  'accountId' | 'categoryId' | 'bookingDate' | 'bookingMonth' | 'amount' | 'transferGroupId'
+>
+type TxText = Pick<TxPayload, 'label' | 'counterparty' | 'notes'>
+
 interface AssignmentPayload {
   categoryId: string
   month: string
@@ -375,10 +390,156 @@ async function updateEncrypted(
 }
 
 // ---------------------------------------------------------------------------
+// Transactions : colonnes chiffrees enc_core / enc_text (REF H) sur transport
+// base64 (REF D) + fallback legacy enc_payload
+// ---------------------------------------------------------------------------
+
+// Contextes AAD par colonne : lient chaque ciphertext a [table, colonne, user].
+// L'ancien contexte ['transactions', user] reste utilise pour LIRE les lignes
+// non encore migrees (colonne enc_payload). On n'ecrit plus jamais enc_payload.
+const txCoreCtx = (userId: string): string[] => ['transactions', 'core', userId]
+const txTextCtx = (userId: string): string[] => ['transactions', 'text', userId]
+
+// Ligne transaction telle que lue en base : colonnes chiffrees exposees en
+// base64 (computed columns REF D) + index en clair.
+interface TxRow {
+  id: string
+  enc_core?: string | null
+  enc_text?: string | null
+  enc_payload?: string | null
+  tx_hash?: string | null
+}
+
+// Reconstitue le payload complet. Ligne migree : enc_core + enc_text (AAD par
+// colonne). Ligne legacy (enc_core NULL) : fallback sur enc_payload (ancienne
+// AAD). Chaque colonne arrive en base64 (REF D) -> base64ToBytes avant dechiffrement.
+async function decodeTx(keys: CryptoKeys, userId: string, row: TxRow): Promise<TxPayload> {
+  if (row.enc_core) {
+    const core = await decryptJson<TxCore>(keys, base64ToBytes(row.enc_core), txCoreCtx(userId))
+    const text = row.enc_text
+      ? await decryptJson<TxText>(keys, base64ToBytes(row.enc_text), txTextCtx(userId))
+      : { label: '', counterparty: null, notes: null }
+    return { ...core, ...text }
+  }
+  if (!row.enc_payload) throw new ApiError(500, 'transaction sans payload dechiffrable')
+  return decryptJson<TxPayload>(keys, base64ToBytes(row.enc_payload), ['transactions', userId])
+}
+
+// Variante allegee : ne dechiffre QUE enc_core. Sur une ligne legacy,
+// enc_payload contient deja tous les champs de core (superset), on le relit.
+async function decodeTxCore(keys: CryptoKeys, userId: string, row: TxRow): Promise<TxCore> {
+  if (row.enc_core) {
+    return decryptJson<TxCore>(keys, base64ToBytes(row.enc_core), txCoreCtx(userId))
+  }
+  if (!row.enc_payload) throw new ApiError(500, 'transaction sans payload dechiffrable')
+  return decryptJson<TxCore>(keys, base64ToBytes(row.enc_payload), ['transactions', userId])
+}
+
+// Colonnes chiffrees a ecrire pour une transaction, transportees en base64 (REF
+// D) : enc_insert/enc_update les decodent via decode(...,'base64'). enc_payload
+// est remis a NULL : toute ecriture (insert ou update) migre la ligne vers la
+// forme scindee.
+async function encodeTxColumns(
+  keys: CryptoKeys,
+  userId: string,
+  payload: TxPayload,
+): Promise<{ enc_core: string; enc_text: string; enc_payload: null }> {
+  const core: TxCore = {
+    accountId: payload.accountId,
+    categoryId: payload.categoryId,
+    bookingDate: payload.bookingDate,
+    bookingMonth: payload.bookingMonth,
+    amount: payload.amount,
+    transferGroupId: payload.transferGroupId ?? null,
+  }
+  const text: TxText = {
+    label: payload.label,
+    counterparty: payload.counterparty ?? null,
+    notes: payload.notes ?? null,
+  }
+  return {
+    enc_core: bytesToBase64(await encryptJson(keys, core, txCoreCtx(userId))),
+    enc_text: bytesToBase64(await encryptJson(keys, text, txTextCtx(userId))),
+    enc_payload: null,
+  }
+}
+
+// Insert d'une transaction (colonnes scindees) via la RPC enc_insert de la REF D.
+// `extra` porte les index en clair (month_idx, tx_hash).
+async function insertTx(
+  userId: string,
+  payload: TxPayload,
+  extra: Record<string, string> = {},
+): Promise<string> {
+  const keys = await getKeys()
+  const cols = await encodeTxColumns(keys, userId, payload)
+  const { data, error } = await admin.rpc('enc_insert', {
+    p_table: 'transactions',
+    p_rows: [{ user_id: userId, ...cols, ...extra }],
+  })
+  const id = Array.isArray(data) ? (data[0] as string | undefined) : undefined
+  if (error || !id) throw new ApiError(500, 'ecriture transactions impossible')
+  return id
+}
+
+// Update d'une transaction (colonnes scindees, migre la ligne au passage) via la
+// RPC enc_update de la REF D. enc_payload remis a NULL.
+async function updateTx(
+  userId: string,
+  id: string,
+  payload: TxPayload,
+  extra: Record<string, string> = {},
+): Promise<void> {
+  const keys = await getKeys()
+  const cols = await encodeTxColumns(keys, userId, payload)
+  const { error } = await admin.rpc('enc_update', {
+    p_table: 'transactions',
+    p_user: userId,
+    p_id: id,
+    p_row: { ...cols, ...extra },
+  })
+  if (error) throw new ApiError(500, 'mise a jour transactions impossible')
+}
+
+// Chargements en masse (pagines). loadTxFull dechiffre les deux colonnes ;
+// loadTxCore ne lit que enc_core (moins d'egress pour budget/bootstrap/soldes).
+async function loadTxFull(userId: string): Promise<WithId<TxPayload>[]> {
+  const rows = await loadAllRows<TxRow>(
+    'transactions',
+    userId,
+    'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64',
+  )
+  const keys = await getKeys()
+  return Promise.all(rows.map(async (r) => ({ id: r.id, ...(await decodeTx(keys, userId, r)) })))
+}
+
+async function loadTxCore(userId: string): Promise<WithId<TxCore>[]> {
+  const rows = await loadAllRows<TxRow>(
+    'transactions',
+    userId,
+    'id, enc_core:enc_core_b64, enc_payload:enc_b64',
+  )
+  const keys = await getKeys()
+  return Promise.all(rows.map(async (r) => ({ id: r.id, ...(await decodeTxCore(keys, userId, r)) })))
+}
+
+// ---------------------------------------------------------------------------
 // Assemblage moteur
 // ---------------------------------------------------------------------------
 
+// Budget / bootstrap / soldes ne lisent QUE enc_core : transactions typees TxCore.
 interface DecryptedData {
+  accounts: WithId<AccountPayload>[]
+  groups: WithId<GroupPayload>[]
+  categories: WithId<CategoryPayload>[]
+  transactions: WithId<TxCore>[]
+  assignments: WithId<AssignmentPayload>[]
+}
+
+// Variante transactions COMPLETES (enc_core + enc_text) : liste des transactions
+// et rapports (top-marchands ont besoin du libelle). TxPayload etant un superset
+// de TxCore, une FullData est structurellement assignable a DecryptedData.
+interface FullData {
   accounts: WithId<AccountPayload>[]
   groups: WithId<GroupPayload>[]
   categories: WithId<CategoryPayload>[]
@@ -391,7 +552,21 @@ async function loadBudgetDataFromDb(userId: string): Promise<DecryptedData> {
     loadAll<AccountPayload>('accounts', userId),
     loadAll<GroupPayload>('category_groups', userId),
     loadAll<CategoryPayload>('categories', userId),
-    loadAll<TxPayload>('transactions', userId),
+    loadTxCore(userId),
+    loadAll<AssignmentPayload>('assignments', userId),
+  ])
+  return { accounts, groups, categories, transactions, assignments }
+}
+
+// Chargeur complet (taxonomie + assignments + transactions completes) : sert
+// l'action consolidee bootstrapFull, qui a besoin du libelle pour la liste et
+// les rapports.
+async function loadFullBudgetData(userId: string): Promise<FullData> {
+  const [accounts, groups, categories, transactions, assignments] = await Promise.all([
+    loadAll<AccountPayload>('accounts', userId),
+    loadAll<GroupPayload>('category_groups', userId),
+    loadAll<CategoryPayload>('categories', userId),
+    loadTxFull(userId),
     loadAll<AssignmentPayload>('assignments', userId),
   ])
   return { accounts, groups, categories, transactions, assignments }
@@ -399,12 +574,13 @@ async function loadBudgetDataFromDb(userId: string): Promise<DecryptedData> {
 
 // Chargeur allege pour les rapports : computeReports n'utilise jamais les
 // assignments, on evite donc de charger cette table entiere (egress inutile).
-async function loadReportsData(userId: string): Promise<DecryptedData> {
+// Transactions COMPLETES (les top-marchands lisent le libelle).
+async function loadReportsData(userId: string): Promise<FullData> {
   const [accounts, groups, categories, transactions] = await Promise.all([
     loadAll<AccountPayload>('accounts', userId),
     loadAll<GroupPayload>('category_groups', userId),
     loadAll<CategoryPayload>('categories', userId),
-    loadAll<TxPayload>('transactions', userId),
+    loadTxFull(userId),
   ])
   return { accounts, groups, categories, transactions, assignments: [] }
 }
@@ -479,7 +655,7 @@ function prevMonth(month: string, delta: number): string {
   return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`
 }
 
-function computeReports(data: DecryptedData, month: string) {
+function computeReports(data: FullData, month: string) {
   const onBudget = new Set(data.accounts.filter((a) => a.onBudget).map((a) => a.id))
   const income = new Set(data.categories.filter((c) => c.isIncome).map((c) => c.id))
   const catToGroup = new Map(data.categories.map((c) => [c.id, c.groupId]))
@@ -600,7 +776,7 @@ function buildBootstrap(data: DecryptedData) {
 
 // Liste complete des transactions (memes tri et forme que actionListTransactions)
 // a partir de donnees deja dechiffrees.
-function buildTransactionList(data: DecryptedData) {
+function buildTransactionList(data: FullData) {
   const rows = data.transactions.slice()
   rows.sort((a, b) => (a.bookingDate < b.bookingDate ? 1 : -1))
   return { transactions: rows }
@@ -619,7 +795,9 @@ async function actionBootstrap(userId: string) {
 // les caches TanStack correspondants a partir de la reponse.
 async function actionBootstrapFull(userId: string, params: Params) {
   const month = requireMonth(params.month)
-  const data = await loadBudgetData(userId)
+  // Transactions COMPLETES : la reponse porte la liste des transactions (libelle)
+  // et les top-marchands des rapports. Un seul chargement sert les 4 blocs.
+  const data = await loadFullBudgetData(userId)
   return {
     bootstrap: buildBootstrap(data),
     budget: computeBudget(toEngineInput(data, month)),
@@ -640,17 +818,19 @@ async function actionGetTransactions(userId: string, params: Params) {
   const idx = await txMonthIdx(keys, userId, month)
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload:enc_b64')
+    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
     .eq('user_id', userId)
     .eq('month_idx', idx)
   if (error) throw new ApiError(500, 'lecture transactions impossible')
-  const rows = await decryptRows<TxPayload>('transactions', userId, data ?? [])
+  const rows = await Promise.all(
+    (data ?? []).map(async (r) => ({ id: r.id, ...(await decodeTx(keys, userId, r as TxRow)) })),
+  )
   rows.sort((a, b) => (a.bookingDate < b.bookingDate ? 1 : -1))
   return { transactions: rows }
 }
 
 async function actionListTransactions(userId: string) {
-  const rows = await loadAll<TxPayload>('transactions', userId)
+  const rows = await loadTxFull(userId)
   rows.sort((a, b) => (a.bookingDate < b.bookingDate ? 1 : -1))
   return { transactions: rows }
 }
@@ -691,7 +871,7 @@ async function actionAddTransaction(userId: string, params: Params) {
     transferGroupId: null,
   }
   // tx_hash reste NULL : saisie manuelle, pas de dedup (doublons legitimes)
-  const id = await insertEncrypted('transactions', userId, payload, {
+  const id = await insertTx(userId, payload, {
     month_idx: await txMonthIdx(keys, userId, bookingMonth),
   })
   return { id }
@@ -703,7 +883,7 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
 
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload:enc_b64')
+    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
     .eq('user_id', userId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -716,12 +896,9 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
   }
 
   const keys = await getKeys()
-  const payload = await decryptJson<TxPayload>(keys, base64ToBytes(data.enc_payload), [
-    'transactions',
-    userId,
-  ])
+  const payload = await decodeTx(keys, userId, data as TxRow)
   if (payload.transferGroupId) throw new ApiError(400, 'un transfert ne se categorise pas')
-  await updateEncrypted('transactions', userId, transactionId, { ...payload, categoryId })
+  await updateTx(userId, transactionId, { ...payload, categoryId })
   return { ok: true }
 }
 
@@ -736,7 +913,7 @@ async function actionUpdateTransaction(userId: string, params: Params) {
 
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload:enc_b64')
+    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
     .eq('user_id', userId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -744,10 +921,7 @@ async function actionUpdateTransaction(userId: string, params: Params) {
   if (!data) throw new ApiError(404, 'transaction inconnue')
 
   const keys = await getKeys()
-  const existing = await decryptJson<TxPayload>(keys, base64ToBytes(data.enc_payload), [
-    'transactions',
-    userId,
-  ])
+  const existing = await decodeTx(keys, userId, data as TxRow)
   // Un transfert doit rester coherent avec son miroir (montant oppose, meme
   // date) : on ne l'edite pas ici, l'utilisateur l'annule d'abord via
   // convertTransferToNormal.
@@ -778,7 +952,7 @@ async function actionUpdateTransaction(userId: string, params: Params) {
   // month_idx recalcule (identique si le mois n'a pas change). tx_hash n'est
   // PAS repasse en extra : il reste fige, la dedup des imports ne bouge pas
   // meme si le montant ou la date changent.
-  await updateEncrypted('transactions', userId, transactionId, payload, {
+  await updateTx(userId, transactionId, payload, {
     month_idx: await txMonthIdx(keys, userId, bookingMonth),
   })
   return { ok: true }
@@ -794,7 +968,7 @@ async function actionConvertToTransfer(userId: string, params: Params) {
 
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload:enc_b64')
+    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
     .eq('user_id', userId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -802,10 +976,7 @@ async function actionConvertToTransfer(userId: string, params: Params) {
   if (!data) throw new ApiError(404, 'transaction inconnue')
 
   const keys = await getKeys()
-  const payload = await decryptJson<TxPayload>(keys, base64ToBytes(data.enc_payload), [
-    'transactions',
-    userId,
-  ])
+  const payload = await decodeTx(keys, userId, data as TxRow)
   if (payload.transferGroupId) throw new ApiError(400, 'transaction deja liee a un transfert')
   if (payload.accountId === targetAccountId) {
     throw new ApiError(400, 'le compte cible doit etre different du compte d origine')
@@ -835,18 +1006,18 @@ async function actionConvertToTransfer(userId: string, params: Params) {
   // l'origine ; un miroir orphelin fausserait silencieusement le solde du
   // compte cible, alors qu'un demi-transfert sur l'origine reste visible et
   // annulable via convertTransferToNormal.
-  await updateEncrypted('transactions', userId, transactionId, {
+  await updateTx(userId, transactionId, {
     ...payload,
     categoryId: null,
     transferGroupId,
   })
   try {
-    await insertEncrypted('transactions', userId, mirror, {
+    await insertTx(userId, mirror, {
       month_idx: await txMonthIdx(keys, userId, payload.bookingMonth),
     })
   } catch (err) {
     try {
-      await updateEncrypted('transactions', userId, transactionId, payload)
+      await updateTx(userId, transactionId, payload)
     } catch {
       // Rollback impossible : l'origine reste liee a un groupe sans miroir,
       // etat reparable par convertTransferToNormal ou une nouvelle conversion.
@@ -863,20 +1034,17 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   // NULL, ecriture synthetique) d'un vrai import bancaire (tx_hash non NULL,
   // cas des paires liees par sync-bank) : un import reel ne doit JAMAIS etre
   // supprime, sous peine de fausser durablement le solde du compte.
-  const data = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
+  const data = await loadAllRows<TxRow>(
     'transactions',
     userId,
-    'id, enc_payload:enc_b64, tx_hash',
+    'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash',
   )
   const keys = await getKeys()
   const rows = await Promise.all(
     data.map(async (row) => ({
-      id: row.id as string,
-      txHash: (row.tx_hash as string | null) ?? null,
-      payload: await decryptJson<TxPayload>(keys, base64ToBytes(row.enc_payload), [
-        'transactions',
-        userId,
-      ]),
+      id: row.id,
+      txHash: row.tx_hash ?? null,
+      payload: await decodeTx(keys, userId, row),
     })),
   )
   const kept = rows.find((t) => t.id === transactionId)
@@ -900,7 +1068,7 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
     } else {
       // Import bancaire reel : on delie au lieu de supprimer, la transaction
       // redevient une ecriture normale a recategoriser.
-      await updateEncrypted('transactions', userId, mirror.id, {
+      await updateTx(userId, mirror.id, {
         ...mirror.payload,
         transferGroupId: null,
       })
@@ -908,7 +1076,7 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   }
   // La transaction conservee redevient normale ; categoryId reste null,
   // l'utilisateur la recategorise ensuite.
-  await updateEncrypted('transactions', userId, transactionId, {
+  await updateTx(userId, transactionId, {
     ...kept.payload,
     transferGroupId: null,
   })
@@ -920,7 +1088,7 @@ async function actionDeleteTransaction(userId: string, params: Params) {
 
   const { data, error } = await admin
     .from('transactions')
-    .select('id, enc_payload:enc_b64, tx_hash')
+    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash')
     .eq('user_id', userId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -928,26 +1096,20 @@ async function actionDeleteTransaction(userId: string, params: Params) {
   if (!data) throw new ApiError(404, 'transaction inconnue')
 
   const keys = await getKeys()
-  const payload = await decryptJson<TxPayload>(keys, base64ToBytes(data.enc_payload), [
-    'transactions',
-    userId,
-  ])
+  const payload = await decodeTx(keys, userId, data as TxRow)
 
   // Transfert : le miroir est traite comme dans convertTransferToNormal —
   // supprime s'il est synthetique (tx_hash NULL), simplement delie s'il s'agit
   // d'un vrai import bancaire (jamais de perte de donnees bancaires implicite).
   if (payload.transferGroupId) {
-    const rows = await loadAllRows<{ id: string; enc_payload: string; tx_hash: string | null }>(
+    const rows = await loadAllRows<TxRow>(
       'transactions',
       userId,
-      'id, enc_payload:enc_b64, tx_hash',
+      'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash',
     )
     for (const row of rows) {
       if (row.id === transactionId) continue
-      const other = await decryptJson<TxPayload>(keys, base64ToBytes(row.enc_payload), [
-        'transactions',
-        userId,
-      ])
+      const other = await decodeTx(keys, userId, row)
       if (other.transferGroupId !== payload.transferGroupId) continue
       if ((row.tx_hash as string | null) === null) {
         const { error: delErr } = await admin
@@ -957,7 +1119,7 @@ async function actionDeleteTransaction(userId: string, params: Params) {
           .eq('id', row.id)
         if (delErr) throw new ApiError(500, 'suppression transactions impossible')
       } else {
-        await updateEncrypted('transactions', userId, row.id as string, {
+        await updateTx(userId, row.id, {
           ...other,
           transferGroupId: null,
         })
@@ -1049,7 +1211,7 @@ async function actionCreateAccount(userId: string, params: Params) {
       label: "Solde d'ouverture",
       transferGroupId: null,
     }
-    await insertEncrypted('transactions', userId, txPayload, {
+    await insertTx(userId, txPayload, {
       month_idx: await txMonthIdx(keys, userId, bookingMonth),
     })
   }
@@ -1246,7 +1408,7 @@ async function actionDeleteCategory(userId: string, params: Params) {
   if (category.isIncome) throw new ApiError(400, 'les categories de revenus ne se suppriment pas')
 
   const [transactions, assignments, targets, rules] = await Promise.all([
-    loadAll<TxPayload>('transactions', userId),
+    loadTxFull(userId),
     loadAll<AssignmentPayload>('assignments', userId),
     loadAll<TargetPayload>('targets', userId),
     loadAll<RulePayload>('rules', userId),
@@ -1258,7 +1420,7 @@ async function actionDeleteCategory(userId: string, params: Params) {
   for (const tx of transactions) {
     if (tx.categoryId !== categoryId) continue
     const { id, ...payload } = tx
-    await updateEncrypted('transactions', userId, id, { ...payload, categoryId: null })
+    await updateTx(userId, id, { ...payload, categoryId: null })
     uncategorized += 1
   }
 
@@ -1491,7 +1653,7 @@ async function actionDeleteRule(userId: string, params: Params) {
 async function actionApplyRulesToUncategorized(userId: string) {
   const [rules, transactions] = await Promise.all([
     loadAll<RulePayload>('rules', userId),
-    loadAll<TxPayload>('transactions', userId),
+    loadTxFull(userId),
   ])
   rules.sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
 
@@ -1504,7 +1666,7 @@ async function actionApplyRulesToUncategorized(userId: string) {
     // On retire id du payload et on ne passe PAS d'extra : month_idx et
     // tx_hash de la ligne restent intacts.
     const { id, ...payload } = tx
-    await updateEncrypted('transactions', userId, id, { ...payload, categoryId: rule.categoryId })
+    await updateTx(userId, id, { ...payload, categoryId: rule.categoryId })
     categorized += 1
   }
   return { categorized }
@@ -1694,7 +1856,7 @@ async function actionExportData(userId: string) {
       loadAll<AccountPayload>('accounts', userId),
       loadAll<GroupPayload>('category_groups', userId),
       loadAll<CategoryPayload>('categories', userId),
-      loadAll<TxPayload>('transactions', userId),
+      loadTxFull(userId),
       loadAll<AssignmentPayload>('assignments', userId),
       loadAll<TargetPayload>('targets', userId),
       loadAll<RulePayload>('rules', userId),
@@ -1709,6 +1871,43 @@ async function actionExportData(userId: string) {
     targets,
     rules,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Backfill REF H : migration des lignes legacy (enc_payload) vers enc_core/enc_text
+// ---------------------------------------------------------------------------
+
+// Rechiffre par lots les transactions non migrees (enc_core NULL) : dechiffre
+// l'ancien enc_payload (lu en base64, REF D) puis reecrit enc_core + enc_text via
+// updateTx (qui remet enc_payload a NULL). month_idx et tx_hash restent intacts.
+// Idempotent : une ligne migree sort du filtre, relancer l'action ne retouche
+// rien. A appeler APRES le deploiement du code compatible et l'ajout des colonnes
+// et RPC SQL (H-split-payload.sql compose avec D).
+async function actionMigrateSplitPayload(userId: string) {
+  const keys = await getKeys()
+  const BATCH = 200
+  let migrated = 0
+  for (;;) {
+    const { data, error } = await admin
+      .from('transactions')
+      .select('id, enc_payload:enc_b64')
+      .eq('user_id', userId)
+      .is('enc_core', null)
+      .not('enc_payload', 'is', null)
+      .limit(BATCH)
+    if (error) throw new ApiError(500, 'lecture transactions impossible')
+    if (!data || data.length === 0) break
+    for (const row of data) {
+      const payload = await decryptJson<TxPayload>(
+        keys,
+        base64ToBytes(row.enc_payload as string),
+        ['transactions', userId],
+      )
+      await updateTx(userId, row.id as string, payload)
+      migrated += 1
+    }
+  }
+  return { migrated }
 }
 
 // ---------------------------------------------------------------------------
@@ -1897,7 +2096,13 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
   const categoryIds = new Set(categories.map((c) => c.id))
 
   const keys = await getKeys()
-  const rows: { user_id: string; enc_payload: string; month_idx: string }[] = []
+  const rows: {
+    user_id: string
+    enc_core: string
+    enc_text: string
+    enc_payload: null
+    month_idx: string
+  }[] = []
   for (const t of raw) {
     const o = requireObject(t, 'transactions[]')
     const accountId = requireUuid(o.accountId, 'accountId')
@@ -1926,7 +2131,7 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
     // imports Enable Banking). month_idx calcule pour le filtre par mois.
     rows.push({
       user_id: userId,
-      enc_payload: bytesToBase64(await encryptJson(keys, payload, ['transactions', userId])),
+      ...(await encodeTxColumns(keys, userId, payload)),
       month_idx: await txMonthIdx(keys, userId, bookingMonth),
     })
   }
@@ -2022,6 +2227,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   linkBankAccount: actionLinkBankAccount,
   listSyncLogs: (u) => actionListSyncLogs(u),
   exportData: (u) => actionExportData(u),
+  migrateSplitPayload: (u) => actionMigrateSplitPayload(u),
   importReplaceBegin: actionImportReplaceBegin,
   importReplaceTransactions: actionImportReplaceTransactions,
   importReplaceAssignments: actionImportReplaceAssignments,
