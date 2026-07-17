@@ -9,7 +9,7 @@ import {
   useReactTable,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, PiggyBank, Plus, Search, TrendingUp, Wallet, X } from 'lucide-react'
+import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, Plus, Search, Sprout, TrendingUp, Wallet, X } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
 import { apiCategorize, countsAsUncategorized, patchUncategorizedCount, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
@@ -284,7 +284,7 @@ function CategoryBadge({ row }: { row: TxRow }) {
 // a debit differe (violet) de celles des autres comptes (neutre).
 const ACCOUNT_CHIP_META: Record<Account['kind'], { icon: typeof Wallet; card: boolean }> = {
   checking: { icon: Wallet, card: false },
-  savings: { icon: PiggyBank, card: false },
+  savings: { icon: Sprout, card: false },
   investment: { icon: TrendingUp, card: false },
   card_deferred: { icon: CreditCard, card: true },
 }

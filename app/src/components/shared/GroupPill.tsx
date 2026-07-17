@@ -3,20 +3,22 @@ import {
   Car,
   CircleHelp,
   Home,
-  PiggyBank,
   Repeat,
   Sparkles,
+  Sprout,
   type LucideIcon,
 } from 'lucide-react'
 import type { CategoryGroup, GroupIcon } from '@/types/domain'
 import { cn } from '@/lib/utils'
 
+// La cle 'piggy' est HISTORIQUE : elle vit dans les payloads chiffres des
+// groupes existants, on ne la migre pas. Seule l'icone rendue change (pousse).
 const ICONS: Record<GroupIcon, LucideIcon> = {
   home: Home,
   car: Car,
   sparkles: Sparkles,
   repeat: Repeat,
-  piggy: PiggyBank,
+  piggy: Sprout,
   banknote: Banknote,
 }
 

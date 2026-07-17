@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { CreditCard, Landmark, Pencil, PiggyBank, Plus, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
+import { CreditCard, Landmark, Pencil, Plus, Sprout, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
 import type { AccountKind } from '@/types/domain'
 import { apiCreateAccount, apiUpdateAccount, useAccounts, type AccountWithBalance } from '@/lib/data'
 import { TODAY } from '@/lib/format'
@@ -24,7 +24,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 const KIND_META: Record<AccountKind, { icon: LucideIcon; label: string }> = {
   checking: { icon: Wallet, label: 'Compte courant' },
-  savings: { icon: PiggyBank, label: 'Épargne' },
+  savings: { icon: Sprout, label: 'Épargne' },
   investment: { icon: TrendingUp, label: 'Investissement' },
   card_deferred: { icon: CreditCard, label: 'Carte à débit différé' },
 }

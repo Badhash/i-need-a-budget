@@ -149,10 +149,40 @@
   animation: inab-dot 1.2s ease-in-out infinite;
   will-change: transform, opacity;
 }
+/* Pieces qui tombent dans le portefeuille : chute depuis le haut, leger
+   rebond a l'approche, puis la piece glisse derriere le badge (z-index) en
+   retrecissant — illusion d'entrer dans le portefeuille. */
+@keyframes inab-coin {
+  0% {
+    opacity: 0;
+    transform: translateY(-46px) scale(0.85);
+  }
+  18% {
+    opacity: 1;
+  }
+  62% {
+    opacity: 1;
+    transform: translateY(-6px) scale(1);
+  }
+  82% {
+    opacity: 0.9;
+    transform: translateY(2px) scale(0.7);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.4);
+  }
+}
+.loader-coin {
+  opacity: 0;
+  animation: inab-coin 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: transform, opacity;
+}
 @media (prefers-reduced-motion: reduce) {
   .loader-badge,
   .loader-glow,
-  .loader-dot {
+  .loader-dot,
+  .loader-coin {
     animation: none;
   }
 }

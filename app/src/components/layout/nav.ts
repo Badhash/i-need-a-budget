@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Landmark, PieChart, PiggyBank, Settings, Wand2, type LucideIcon } from 'lucide-react'
+import { ArrowLeftRight, HandCoins, Landmark, PieChart, Settings, Wand2, type LucideIcon } from 'lucide-react'
 
 interface NavItem {
   to: string
@@ -7,7 +7,7 @@ interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { to: '/budget', label: 'Budget', icon: PiggyBank },
+  { to: '/budget', label: 'Budget', icon: HandCoins },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
   { to: '/comptes', label: 'Comptes', icon: Landmark },
   { to: '/rapports', label: 'Rapports', icon: PieChart },

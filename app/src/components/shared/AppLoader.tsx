@@ -25,6 +25,24 @@ export function AppLoader({
     <div className="flex min-h-dvh flex-col items-center justify-center gap-7 bg-bg px-6">
       <div className="relative flex items-center justify-center">
         <span className="loader-glow absolute h-20 w-20 rounded-[1.4rem] bg-accent/30 blur-xl" />
+        {/* Pieces qui tombent dans le portefeuille : rendues AVANT le badge,
+            elles glissent derriere lui en fin de course (illusion d'y entrer).
+            Decalages horizontaux varies pour un flux naturel. */}
+        <span aria-hidden className="pointer-events-none absolute inset-x-0 -top-2 flex justify-center">
+          {[
+            { dx: -16, delay: 0 },
+            { dx: 4, delay: 600 },
+            { dx: 14, delay: 1200 },
+          ].map((coin, i) => (
+            <span
+              key={i}
+              className="loader-coin absolute flex h-4 w-4 items-center justify-center rounded-full bg-warning text-[9px] font-bold leading-none text-white shadow-sm"
+              style={{ marginLeft: coin.dx, animationDelay: `${coin.delay}ms` }}
+            >
+              €
+            </span>
+          ))}
+        </span>
         <span className="loader-badge relative flex h-20 w-20 items-center justify-center rounded-[1.4rem] bg-accent text-white shadow-lg">
           <Wallet className="h-9 w-9" />
         </span>

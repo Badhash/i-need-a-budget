@@ -11,10 +11,10 @@ import {
   ChevronUp,
   Home,
   Pencil,
-  PiggyBank,
   Plus,
   Repeat,
   Sparkles,
+  Sprout,
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
@@ -53,7 +53,8 @@ const GROUP_ICONS: { value: GroupIcon; Icon: LucideIcon }[] = [
   { value: 'car', Icon: Car },
   { value: 'sparkles', Icon: Sparkles },
   { value: 'repeat', Icon: Repeat },
-  { value: 'piggy', Icon: PiggyBank },
+  // Cle historique 'piggy' (payloads chiffres existants) : rendue en pousse.
+  { value: 'piggy', Icon: Sprout },
   { value: 'banknote', Icon: Banknote },
 ]
 const GROUP_COLORS: CatColor[] = ['blue', 'green', 'amber', 'pink', 'purple', 'teal']

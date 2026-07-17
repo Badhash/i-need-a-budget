@@ -11,7 +11,7 @@ import {
   Tooltip,
   XAxis,
 } from 'recharts'
-import { BarChart3, Moon, PiggyBank, Sparkles, TrendingUp } from 'lucide-react'
+import { BarChart3, Moon, Sparkles, Sprout, TrendingUp } from 'lucide-react'
 import { useReports, useTransactions } from '@/lib/queries'
 import { useBootstrap, type Bootstrap } from '@/lib/data'
 import { parseBankLabel } from '@/lib/bankLabel'
@@ -204,7 +204,7 @@ function SavingsCoach({ a }: { a: Analytics }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/10 text-accent">
-            <PiggyBank className="h-5 w-5" />
+            <Sprout className="h-5 w-5" />
           </span>
           <div>
             <p className="text-[16px] font-semibold">Coach d'épargne</p>
