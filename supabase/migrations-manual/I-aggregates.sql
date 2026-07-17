@@ -1,4 +1,6 @@
--- REF I — Agregats chiffres pre-calcules (optimisation egress Supabase free tier)
+-- =====================================================================
+-- REF I — Agregats chiffres pre-calcules (optimisation egress free tier)
+-- =====================================================================
 --
 -- Objectif : eviter que bootstrap et getBudgetMonth relisent TOUT l'historique
 -- des transactions/assignations a chaque appel. Les agregats materialisent
@@ -9,18 +11,31 @@
 -- CONFORMITE CHIFFREMENT (CLAUDE.md) : zero champ metier en clair. Chaque table
 -- est une enveloppe opaque (id, user_id, enc_payload bytea, created_at) + index
 -- aveugles HMAC (memes schemas que l'existant, domaines separes). Les montants,
--- soldes, categories, mois vivent UNIQUEMENT dans enc_payload chiffre AES-256-GCM.
+-- soldes, categories, mois vivent UNIQUEMENT dans enc_payload chiffre
+-- AES-256-GCM. La colonne `rev` est un compteur de version technique (CAS),
+-- PAS une donnee metier -> en clair, comme created_at. Fuite residuelle
+-- assumee : rev revele un volume d'ecritures par ligne d'agregat, built_at un
+-- horodatage de reconstruction (equivalents des horodatages deja en clair).
+--
+-- ORDRE DE DEPLOIEMENT : appliquer ce SQL PUIS deployer le code. Le code est
+-- tolerant dans les deux sens (marqueur absent / tables absentes = agregats
+-- inactifs, fallback calcul complet), mais l'ordre SQL-d'abord evite des
+-- tentatives de reconstruction vouees a l'echec a chaque ouverture de l'app.
+-- BACKFILL : AUCUNE action manuelle. A la premiere ouverture de l'app apres le
+-- deploiement, bootstrapFull detecte le marqueur absent et reconstruit les
+-- agregats en arriere-plan a partir des donnees deja chargees.
 --
 -- Script IDEMPOTENT : rejouable sans effet de bord dans le SQL Editor.
 -- Schema NON versionne : source de verite = base de production.
 
 -- Concurrence : les agregats sont maintenus par read-modify-write cote Edge
 -- Function (valeur chiffree -> pas d'increment atomique SQL possible). Pour
--- eviter les pertes de mises a jour silencieuses sous ecritures concurrentes
--- (UI optimiste, POST en arriere-plan), chaque table porte une colonne `rev`
--- (compteur de version, PAS une donnee metier -> en clair) : l'Edge Function
--- fait un UPDATE conditionnel `where id = ? and rev = ?` et re-essaie sur echec
--- (compare-and-swap). `rev` s'incremente a chaque ecriture.
+-- eviter les pertes de mises a jour silencieuses sous ecritures concurrentes,
+-- chaque table porte une colonne `rev` : l'Edge Function fait un UPDATE
+-- conditionnel `where id = ? and rev = ?` et re-essaie sur echec
+-- (compare-and-swap). Sur aggregate_state, `rev` sert aussi de FENCE : toute
+-- maintenance l'incremente, et un recompute ne marque l'etat "pret" que si rev
+-- n'a pas bouge pendant la reconstruction.
 
 -- ---------------------------------------------------------------------------
 -- 1. Soldes par compte
@@ -80,17 +95,45 @@ create unique index if not exists uncat_counts_user_month_idx
 
 -- ---------------------------------------------------------------------------
 -- 4. Marqueur d'etat des agregats (1 ligne / user)
---    PRESENCE de la ligne + version courante = agregats actifs et coherents.
---    Absence / version obsolete = les lectures /api retombent sur le calcul
---    complet (loadBudgetData). C'est le KILL-SWITCH : supprimer cette ligne
---    desactive les agregats sans rien casser (fallback = comportement actuel).
---    enc_payload = { version }
+--    enc_payload = { version, status: 'ready' | 'building' } (chiffre).
+--    Lectures rapides /api ACTIVES seulement si status = 'ready' a la bonne
+--    version. Absence / 'building' / version obsolete = fallback calcul
+--    complet. C'est le KILL-SWITCH : supprimer cette ligne desactive les
+--    agregats sans rien casser. `rev` = fence CAS (voir en-tete).
 -- ---------------------------------------------------------------------------
 create table if not exists public.aggregate_state (
   user_id     uuid        primary key references auth.users (id) on delete cascade,
   enc_payload bytea       not null,
+  rev         bigint      not null default 0,
   built_at    timestamptz not null default now()
 );
+alter table public.aggregate_state add column if not exists rev bigint not null default 0;
+
+-- ---------------------------------------------------------------------------
+-- 5. Transport base64 en LECTURE (composition REF D) : computed columns
+--    PostgREST enc_b64 par table, comme les tables existantes. Les lectures
+--    /api selectionnent `enc_payload:enc_b64` (-33% vs hex). Les ECRITURES de
+--    ces tables restent en litteral hex direct (les CAS conditionnels sur rev
+--    ne passent pas par les RPC enc_insert/enc_update ; l'ingress n'est pas
+--    facture).
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  t text;
+  tables constant text[] := array[
+    'account_balances','month_rollups','uncat_counts','aggregate_state'
+  ];
+begin
+  foreach t in array tables loop
+    execute format(
+      'create or replace function public.enc_b64(%I) returns text '
+      || 'language sql stable as $f$ '
+      || 'select translate(encode($1.enc_payload, %L), E''\n'', '''') $f$;',
+      t, 'base64'
+    );
+    execute format('grant execute on function public.enc_b64(public.%I) to service_role;', t);
+  end loop;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- RLS : filtre par user_id (defense en profondeur). L'acces reel se fait en
@@ -99,8 +142,8 @@ create table if not exists public.aggregate_state (
 -- ---------------------------------------------------------------------------
 alter table public.account_balances enable row level security;
 alter table public.month_rollups    enable row level security;
-alter table public.uncat_counts      enable row level security;
-alter table public.aggregate_state   enable row level security;
+alter table public.uncat_counts     enable row level security;
+alter table public.aggregate_state  enable row level security;
 
 drop policy if exists account_balances_owner on public.account_balances;
 create policy account_balances_owner on public.account_balances
@@ -124,36 +167,19 @@ create policy aggregate_state_owner on public.aggregate_state
 
 revoke all on public.account_balances from anon, authenticated;
 revoke all on public.month_rollups    from anon, authenticated;
-revoke all on public.uncat_counts      from anon, authenticated;
-revoke all on public.aggregate_state   from anon, authenticated;
+revoke all on public.uncat_counts     from anon, authenticated;
+revoke all on public.aggregate_state  from anon, authenticated;
+
+-- Recharge le cache de schema PostgREST (sinon tables / computed columns
+-- absentes pour l'Edge Function jusqu'au prochain reload).
+notify pgrst, 'reload schema';
 
 -- ---------------------------------------------------------------------------
--- Filet de securite : recompute periodique (borne toute derive residuelle)
+-- Filets de securite integres (aucune action requise ici) :
+--   * Toute erreur de maintenance invalide le marqueur -> fallback calcul
+--     complet, jamais de chiffre faux fige.
+--   * sync-bank remet les agregats a la verite (recompute complet) apres
+--     chaque import et chaque reconciliation de solde.
+--   * bootstrapFull reconstruit automatiquement des que le marqueur est
+--     absent / non-pret, a chaque ouverture de l'app.
 -- ---------------------------------------------------------------------------
--- Le compare-and-swap (colonne `rev`) elimine les pertes de mises a jour sous
--- concurrence. Restent des derives THEORIQUES non couvertes par une exception :
--- crash de l'Edge Function ENTRE l'ecriture metier et la maintenance de
--- l'agregat (non transactionnel a travers PostgREST). Pour les borner, planifier
--- un recompute complet hors des heures d'usage, sur le modele du cron de
--- sync-bank (pg_cron + pg_net appellent l'Edge Function /api, qui seule detient
--- la cle de dechiffrement -- un recompute en SQL pur est impossible). Exemple
--- (a adapter : URL du projet + secret d'appel, jamais de secret en dur ici) :
---
---   select cron.schedule(
---     'recompute-aggregates-nightly',
---     '17 3 * * *',                      -- 03:17 chaque nuit
---     $$
---       select net.http_post(
---         url     := 'https://<PROJECT-REF>.supabase.co/functions/v1/api',
---         headers := jsonb_build_object(
---           'Content-Type', 'application/json',
---           'Authorization', 'Bearer ' || current_setting('app.cron_jwt', true)
---         ),
---         body    := jsonb_build_object('action', 'recomputeAggregates')
---       );
---     $$
---   );
---
--- NB : l'action recomputeAggregates exige un JWT utilisateur valide (allowlist).
--- Pour un declenchement par cron, prevoir un jeton de service dedie ou etendre
--- /api a un secret x-cron-secret comme sync-bank. Non active par defaut.

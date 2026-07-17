@@ -38,6 +38,7 @@ import {
   txMonthIdx,
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
+import { aggMarkStale, aggRecompute } from '../api/aggregates.ts'
 
 // ---------------------------------------------------------------------------
 // Types des payloads chiffres (memes contrats que l'Edge Function /api)
@@ -1074,6 +1075,9 @@ async function syncUser(
   let importedTotal = 0
   let linkedCount = 0
   const errors: string[] = []
+  // Garde REF I : invalide les agregats avant la premiere ecriture reelle et
+  // compte les ecritures (independamment du succes global des connexions).
+  const aggWrites: AggWriteGuard = { count: 0, staled: false }
 
   for (const conn of connectionsToSync) {
     let importedForConn = 0
@@ -1129,6 +1133,10 @@ async function syncUser(
               transferGroupId: null,
               notes: null,
             }
+            // Invalidation des agregats AVANT le premier insert (voir
+            // aggStaleBeforeWrite) : un crash/echec partiel apres ce point
+            // laisse un etat non-pret, jamais un 'ready' faux.
+            await aggStaleBeforeWrite(userId, aggWrites)
             await insertImportedTransaction(
               userId,
               payload,
@@ -1178,7 +1186,83 @@ async function syncUser(
     }
   }
 
+  // Agregats (REF I) : si des transactions ont ete ecrites (l'invalidation a
+  // eu lieu AVANT la premiere ecriture, cf. aggStaleBeforeWrite), on remet les
+  // agregats a la verite par un recompute complet, qui re-pose 'ready'. En cas
+  // d'echec, le marqueur reste absent/non-pret : les lectures /api retombent
+  // sur le calcul complet (toujours juste) et bootstrapFull reconstruira a la
+  // prochaine ouverture de l'app. Un echec PARTIEL d'import (erreur EB en
+  // cours de pagination apres N inserts) passe aussi par ici : le compteur
+  // aggWrites reflete les ecritures REELLES, pas le succes des connexions.
+  if (aggWrites.count > 0) {
+    await refreshAggregatesSafe(userId)
+  }
+
   return { imported: importedTotal, linked: linkedCount, transfersLinked, errors }
+}
+
+// Compteur d'ecritures reelles + invalidation AVANT la premiere ecriture.
+// INVARIANT REF I : jamais d'ecriture de transaction sous un marqueur 'ready'
+// hors du chemin de maintenance de /api. On supprime donc le marqueur avant le
+// premier insert : pendant l'import les lectures retombent sur le calcul
+// complet (correct), et un crash au milieu laisse un etat non-pret que
+// bootstrapFull reconstruit — jamais un 'ready' faux. Si l'invalidation
+// echoue durablement (aggMarkStale retente, ignore seulement le cas table
+// absente), on LEVE : la sync echoue proprement et sera rejouee.
+interface AggWriteGuard {
+  count: number
+  staled: boolean
+}
+
+async function aggStaleBeforeWrite(userId: string, guard: AggWriteGuard): Promise<void> {
+  if (!guard.staled) {
+    await aggMarkStale(admin, userId)
+    guard.staled = true
+  }
+  guard.count += 1
+}
+
+// Recompute complet des agregats depuis les tables sources (transactions lues
+// en enc_core seulement : l'agregation n'a pas besoin des libelles). La fence
+// est posee par aggRecompute AVANT le chargement. En cas d'echec, invalidation
+// best-effort — jamais d'agregat partiel marque pret.
+async function refreshAggregatesSafe(userId: string): Promise<void> {
+  try {
+    const keys = await getKeys()
+    await aggRecompute(admin, keys, userId, async () => {
+      const [accounts, txRows, assignments] = await Promise.all([
+        loadAll<AccountPayload>('accounts', userId),
+        loadAllRows<TxRow>('transactions', userId, 'id, enc_core:enc_core_b64, enc_payload:enc_b64'),
+        loadAll<{ categoryId: string; month: string; amount: number }>('assignments', userId),
+      ])
+      const transactions = await Promise.all(
+        txRows.map(async (row) => {
+          if (row.enc_core) {
+            return decryptJson<TxCore>(keys, base64ToBytes(row.enc_core), txCoreCtx(userId))
+          }
+          if (!row.enc_payload) throw new ApiError(500, 'transaction sans payload dechiffrable')
+          return decryptJson<TxCore>(keys, base64ToBytes(row.enc_payload), ['transactions', userId])
+        }),
+      )
+      return {
+        accounts: accounts.map((a) => ({ id: a.id, onBudget: a.onBudget })),
+        transactions: transactions.map((t) => ({
+          accountId: t.accountId,
+          categoryId: t.categoryId,
+          bookingMonth: t.bookingMonth,
+          amount: t.amount,
+          transferGroupId: t.transferGroupId ?? null,
+        })),
+        assignments: assignments.map((a) => ({
+          categoryId: a.categoryId,
+          month: a.month,
+          amount: a.amount,
+        })),
+      }
+    })
+  } catch {
+    await aggMarkStale(admin, userId).catch(() => {})
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1421,6 +1505,8 @@ async function actionReconcile(userId: string) {
     newBalance: number
   }[] = []
   const processed = new Set<string>()
+  // Garde REF I (voir aggStaleBeforeWrite) : invalidation avant 1re ecriture.
+  const aggWrites: AggWriteGuard = { count: 0, staled: false }
 
   for (const conn of activeConnections) {
     for (const ebAccount of conn.accounts) {
@@ -1449,6 +1535,10 @@ async function actionReconcile(userId: string) {
         .filter((tx) => tx.txHash === null && tx.payload.label === OPENING_BALANCE_LABEL)
         .sort((a, b) => (a.payload.bookingDate < b.payload.bookingDate ? -1 : 1))[0]
 
+      // Invalidation des agregats AVANT la premiere ecriture (REF I) : un
+      // echec en milieu de boucle laisse un etat non-pret, jamais un 'ready'
+      // ignorant les ajustements deja commites.
+      await aggStaleBeforeWrite(userId, aggWrites)
       if (opening) {
         // Ajustement : l'ecart est absorbe dans le montant d'ouverture. Pas
         // d'extra : month_idx et tx_hash de la ligne restent intacts.
@@ -1490,6 +1580,12 @@ async function actionReconcile(userId: string) {
         newBalance: ebCents,
       })
     }
+  }
+
+  // Agregats (REF I) : remise a la verite apres les ajustements (le marqueur a
+  // ete invalide avant la premiere ecriture, cf. aggStaleBeforeWrite).
+  if (aggWrites.count > 0) {
+    await refreshAggregatesSafe(userId)
   }
 
   return { adjusted }

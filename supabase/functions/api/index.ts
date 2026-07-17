@@ -29,6 +29,20 @@ import {
   txMonthIdx,
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
+import {
+  aggBegin,
+  aggClear,
+  aggIsReady,
+  aggMarkStale,
+  aggPostCheck,
+  aggReadBalances,
+  aggReadRollups,
+  aggReadUncatCount,
+  aggRecompute,
+  type AggBatch,
+  type AggSourceData,
+  type AggTx,
+} from './aggregates.ts'
 
 // ---------------------------------------------------------------------------
 // Types des payloads chiffres (contrat du CLAUDE.md, section modele de donnees)
@@ -387,6 +401,33 @@ async function updateEncrypted(
     },
   })
   if (error) throw new ApiError(500, `mise a jour ${table} impossible`)
+}
+
+// ---------------------------------------------------------------------------
+// Maintenance des agregats (REF I) — voir aggregates.ts
+// ---------------------------------------------------------------------------
+
+// Applique une maintenance incrementale des agregats si ceux-ci sont actifs :
+// fence (bump rev) -> ajustements -> post-check (si rev a encore bouge, un
+// recompute s'est intercale et nos deltas ont pu etre comptes deux fois : on
+// invalide). TOUTE erreur invalide les agregats (aggMarkStale) : les lectures
+// suivantes retombent sur le calcul complet jusqu'a la prochaine
+// reconstruction (relancee automatiquement par bootstrapFull). La maintenance
+// intervient APRES les ecritures metier reussies : si l'action echoue avant,
+// elle n'est jamais atteinte et les agregats restent coherents.
+async function aggMaintain(
+  userId: string,
+  keys: CryptoKeys,
+  fn: (batch: AggBatch) => Promise<void>,
+): Promise<void> {
+  try {
+    const session = await aggBegin(admin, keys, userId)
+    if (!session) return
+    await fn(session.batch)
+    await aggPostCheck(admin, keys, userId, session.fenceRev)
+  } catch {
+    await aggMarkStale(admin, userId).catch(() => {})
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -783,8 +824,75 @@ function buildTransactionList(data: FullData) {
 }
 
 async function actionBootstrap(userId: string) {
+  const keys = await getKeys()
+
+  // Chemin agrege (REF I) : soldes et compteur "a categoriser" lus depuis les
+  // agregats (O(comptes) + O(mois)) au lieu de relire toutes les transactions.
+  // En cas d'erreur, fallback silencieux sur le calcul complet.
+  if (await aggIsReady(admin, keys, userId)) {
+    try {
+      const currentMonth = new Date().toISOString().slice(0, 7)
+      const [accounts, groups, categories, balances, uncategorizedCount] = await Promise.all([
+        loadAll<AccountPayload>('accounts', userId),
+        loadAll<GroupPayload>('category_groups', userId),
+        loadAll<CategoryPayload>('categories', userId),
+        aggReadBalances(admin, keys, userId),
+        aggReadUncatCount(admin, keys, userId, currentMonth),
+      ])
+      return {
+        accounts: accounts.map((a) => ({ ...a, balance: balances.get(a.id) ?? 0 })),
+        groups,
+        categories,
+        uncategorizedCount,
+      }
+    } catch {
+      // Lecture agregee impossible (ligne indechiffrable, erreur reseau) :
+      // invalider plutot que de retomber en silence a CHAQUE lecture, pour que
+      // bootstrapFull reconstruise un etat sain a la prochaine ouverture.
+      await aggMarkStale(admin, userId).catch(() => {})
+    }
+  }
+
   const data = await loadBudgetData(userId)
   return buildBootstrap(data)
+}
+
+// Reconstitue une entree moteur depuis les rollups agreges : chaque cellule
+// (categorie, mois) devient UNE transaction synthetique (montant = activity) et
+// UNE assignation (montant = assigned), sur un compte on-budget fictif. Le
+// moteur agrege lui-meme par (categorie, mois) et filtre deja transferts,
+// comptes hors budget et categoryId null — perimetre exact des rollups : le
+// resultat est identique au calcul depuis les transactions brutes (rollover,
+// overspending, RTA compris).
+function rollupsToEngineInput(
+  categories: WithId<CategoryPayload>[],
+  rollups: { categoryId: string; month: string; activity: number; assigned: number }[],
+  month: string,
+) {
+  const accounts: EngineAccount[] = [{ id: '__agg__', onBudget: true }]
+  const engineCategories: EngineCategory[] = categories.map((c) => ({
+    id: c.id,
+    isIncome: c.isIncome,
+  }))
+  const transactions: EngineTransaction[] = []
+  const assignments: EngineAssignment[] = []
+  let i = 0
+  for (const r of rollups) {
+    if (r.activity !== 0) {
+      transactions.push({
+        id: `__agg__${i++}`,
+        accountId: '__agg__',
+        categoryId: r.categoryId,
+        month: r.month,
+        amount: r.activity,
+        transferGroupId: null,
+      })
+    }
+    if (r.assigned !== 0) {
+      assignments.push({ categoryId: r.categoryId, month: r.month, amount: r.assigned })
+    }
+  }
+  return { month, accounts, categories: engineCategories, transactions, assignments }
 }
 
 // Action consolidee de demarrage : UN SEUL loadBudgetData (donc une seule
@@ -793,11 +901,71 @@ async function actionBootstrap(userId: string) {
 // rapports du mois. Evite le double/triple chargement de la table transactions
 // au lancement (bootstrap + getBudgetMonth + listTransactions). Le front hydrate
 // les caches TanStack correspondants a partir de la reponse.
+// Reconstructions d'agregats en cours dans CET isolate (anti-rafale locale ;
+// la protection reelle inter-instances est le CAS sur aggregate_state.rev).
+const rebuildInFlight = new Set<string>()
+
+// Source de verite pour un recompute : lecture FRAICHE et SANS cache (jamais
+// le cache K, qui pourrait etre a 3s de retard sur une ecriture d'un autre
+// processus comme sync-bank). Appelee par aggRecompute APRES la pose de la
+// fence : toute ecriture anterieure est dans le snapshot, toute ecriture
+// posterieure empoisonne la bascule 'ready'.
+async function loadAggSource(userId: string): Promise<AggSourceData> {
+  const data = await loadBudgetDataFromDb(userId)
+  return {
+    accounts: data.accounts.map((a) => ({ id: a.id, onBudget: a.onBudget })),
+    transactions: data.transactions.map((t) => ({
+      accountId: t.accountId,
+      categoryId: t.categoryId,
+      bookingMonth: t.bookingMonth,
+      amount: t.amount,
+      transferGroupId: t.transferGroupId ?? null,
+    })),
+    assignments: data.assignments.map((a) => ({
+      categoryId: a.categoryId,
+      month: a.month,
+      amount: a.amount,
+    })),
+  }
+}
+
+// Reconstruit les agregats (fence puis lecture fraiche core-only, cf.
+// loadAggSource). EdgeRuntime.waitUntil (runtime Supabase) prolonge
+// l'invocation apres l'envoi de la reponse : la reconstruction part en
+// ARRIERE-PLAN. A defaut de waitUntil, on attend inline (cout unique : la
+// premiere ouverture apres la migration). En cas d'erreur, on invalide (un
+// rebuild concurrent perdant peut laisser des residus) : l'etat reste
+// non-pret et la prochaine ouverture retentera.
+async function scheduleAggRebuild(userId: string, keys: CryptoKeys): Promise<void> {
+  if (rebuildInFlight.has(userId)) return
+  rebuildInFlight.add(userId)
+  const rebuild = aggRecompute(admin, keys, userId, () => loadAggSource(userId))
+    .then(() => {})
+    .catch(() => aggMarkStale(admin, userId).catch(() => {}))
+    .finally(() => rebuildInFlight.delete(userId))
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } })
+    .EdgeRuntime
+  if (runtime?.waitUntil) runtime.waitUntil(rebuild)
+  else await rebuild
+}
+
 async function actionBootstrapFull(userId: string, params: Params) {
   const month = requireMonth(params.month)
   // Transactions COMPLETES : la reponse porte la liste des transactions (libelle)
   // et les top-marchands des rapports. Un seul chargement sert les 4 blocs.
   const data = await loadFullBudgetData(userId)
+
+  // Auto-reconstruction des agregats (REF I) : si le marqueur est absent,
+  // obsolete ou reste en 'building' (recompute empoisonne / echoue), on
+  // reconstruit ici, en arriere-plan. Best-effort : le fallback calcul complet
+  // sert correctement tant que ce n'est pas pret.
+  const keys = await getKeys()
+  try {
+    if (!(await aggIsReady(admin, keys, userId))) await scheduleAggRebuild(userId, keys)
+  } catch {
+    // jamais bloquant pour le demarrage de l'app
+  }
+
   return {
     bootstrap: buildBootstrap(data),
     budget: computeBudget(toEngineInput(data, month)),
@@ -808,6 +976,24 @@ async function actionBootstrapFull(userId: string, params: Params) {
 
 async function actionGetBudgetMonth(userId: string, params: Params) {
   const month = requireMonth(params.month)
+  const keys = await getKeys()
+
+  // Chemin agrege (REF I) : lit O(categories x mois non vides) lignes de
+  // rollups au lieu de toutes les transactions/assignations. Fallback calcul
+  // complet sur erreur.
+  if (await aggIsReady(admin, keys, userId)) {
+    try {
+      const [categories, rollups] = await Promise.all([
+        loadAll<CategoryPayload>('categories', userId),
+        aggReadRollups(admin, keys, userId),
+      ])
+      return computeBudget(rollupsToEngineInput(categories, rollups, month))
+    } catch {
+      // Meme logique que actionBootstrap : invalider pour auto-reparation.
+      await aggMarkStale(admin, userId).catch(() => {})
+    }
+  }
+
   const data = await loadBudgetData(userId)
   return computeBudget(toEngineInput(data, month))
 }
@@ -874,6 +1060,7 @@ async function actionAddTransaction(userId: string, params: Params) {
   const id = await insertTx(userId, payload, {
     month_idx: await txMonthIdx(keys, userId, bookingMonth),
   })
+  await aggMaintain(userId, keys, (b) => b.applyTx(1, payload))
   return { id }
 }
 
@@ -899,6 +1086,7 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
   const payload = await decodeTx(keys, userId, data as TxRow)
   if (payload.transferGroupId) throw new ApiError(400, 'un transfert ne se categorise pas')
   await updateTx(userId, transactionId, { ...payload, categoryId })
+  await aggMaintain(userId, keys, (b) => b.replaceTx(payload, { ...payload, categoryId }))
   return { ok: true }
 }
 
@@ -955,6 +1143,7 @@ async function actionUpdateTransaction(userId: string, params: Params) {
   await updateTx(userId, transactionId, payload, {
     month_idx: await txMonthIdx(keys, userId, bookingMonth),
   })
+  await aggMaintain(userId, keys, (b) => b.replaceTx(existing, payload))
   return { ok: true }
 }
 
@@ -1021,9 +1210,17 @@ async function actionConvertToTransfer(userId: string, params: Params) {
     } catch {
       // Rollback impossible : l'origine reste liee a un groupe sans miroir,
       // etat reparable par convertTransferToNormal ou une nouvelle conversion.
+      // Les agregats ne refletent pas ce demi-etat : on les invalide.
+      await aggMarkStale(admin, userId).catch(() => {})
     }
     throw err
   }
+  // Ecritures reussies : origine devenue moitie de transfert (categorie
+  // retiree) + miroir ajoute. En cas d'echec plus haut, on ne passe jamais ici.
+  await aggMaintain(userId, keys, async (b) => {
+    await b.replaceTx(payload, { ...payload, categoryId: null, transferGroupId })
+    await b.applyTx(1, mirror)
+  })
   return { ok: true, transferGroupId }
 }
 
@@ -1076,9 +1273,26 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   }
   // La transaction conservee redevient normale ; categoryId reste null,
   // l'utilisateur la recategorise ensuite.
-  await updateTx(userId, transactionId, {
-    ...kept.payload,
-    transferGroupId: null,
+  try {
+    await updateTx(userId, transactionId, {
+      ...kept.payload,
+      transferGroupId: null,
+    })
+  } catch (err) {
+    // Le miroir a deja pu etre supprime/delie : demi-etat non reflete par les
+    // agregats, on les invalide (fallback calcul complet).
+    if (mirror) await aggMarkStale(admin, userId).catch(() => {})
+    throw err
+  }
+  await aggMaintain(userId, keys, async (b) => {
+    await b.replaceTx(kept.payload, { ...kept.payload, transferGroupId: null })
+    if (mirror) {
+      if (mirror.txHash === null) {
+        await b.applyTx(-1, mirror.payload)
+      } else {
+        await b.replaceTx(mirror.payload, { ...mirror.payload, transferGroupId: null })
+      }
+    }
   })
   return { ok: true }
 }
@@ -1101,6 +1315,9 @@ async function actionDeleteTransaction(userId: string, params: Params) {
   // Transfert : le miroir est traite comme dans convertTransferToNormal —
   // supprime s'il est synthetique (tx_hash NULL), simplement delie s'il s'agit
   // d'un vrai import bancaire (jamais de perte de donnees bancaires implicite).
+  // Contribution du miroir a repercuter sur les agregats (calculee au fil du
+  // traitement, appliquee seulement apres la suppression reussie).
+  let mirrorAgg: ((b: AggBatch) => Promise<void>) | null = null
   if (payload.transferGroupId) {
     const rows = await loadAllRows<TxRow>(
       'transactions',
@@ -1118,11 +1335,13 @@ async function actionDeleteTransaction(userId: string, params: Params) {
           .eq('user_id', userId)
           .eq('id', row.id)
         if (delErr) throw new ApiError(500, 'suppression transactions impossible')
+        mirrorAgg = (b) => b.applyTx(-1, other)
       } else {
         await updateTx(userId, row.id, {
           ...other,
           transferGroupId: null,
         })
+        mirrorAgg = (b) => b.replaceTx(other, { ...other, transferGroupId: null })
       }
       break
     }
@@ -1133,7 +1352,16 @@ async function actionDeleteTransaction(userId: string, params: Params) {
     .delete()
     .eq('user_id', userId)
     .eq('id', transactionId)
-  if (delErr) throw new ApiError(500, 'suppression transactions impossible')
+  if (delErr) {
+    // Le miroir a deja pu etre supprime/delie : les agregats ne refletent pas
+    // ce demi-etat, on les invalide (fallback calcul complet).
+    if (mirrorAgg) await aggMarkStale(admin, userId).catch(() => {})
+    throw new ApiError(500, 'suppression transactions impossible')
+  }
+  await aggMaintain(userId, keys, async (b) => {
+    await b.applyTx(-1, payload)
+    if (mirrorAgg) await mirrorAgg(b)
+  })
   return { ok: true }
 }
 
@@ -1167,6 +1395,10 @@ async function actionSetAssigned(userId: string, params: Params) {
     p_conflict: 'user_id,assign_idx',
   })
   if (error) throw new ApiError(500, 'ecriture assignments impossible')
+  // La valeur d'assigned est RELUE depuis la table par la maintenance (jamais
+  // passee en parametre) : deux assignations concurrentes de la meme cellule
+  // convergent vers la derniere valeur commitee.
+  await aggMaintain(userId, keys, (b) => b.setAssigned(categoryId, month))
   return { ok: true }
 }
 
@@ -1192,6 +1424,7 @@ async function actionCreateAccount(userId: string, params: Params) {
   }
   const accountId = await insertEncrypted('accounts', userId, payload)
 
+  let openingTx: TxPayload | null = null
   if (openingBalance !== 0) {
     const categories = await loadAll<CategoryPayload>('categories', userId)
     // solde d'ouverture : inflow vers le RTA via une categorie de revenus
@@ -1214,7 +1447,16 @@ async function actionCreateAccount(userId: string, params: Params) {
     await insertTx(userId, txPayload, {
       month_idx: await txMonthIdx(keys, userId, bookingMonth),
     })
+    openingTx = txPayload
   }
+
+  // Agregats : cree la ligne de solde (a 0) du nouveau compte + repercute
+  // l'eventuel solde d'ouverture.
+  const keys = await getKeys()
+  await aggMaintain(userId, keys, async (b) => {
+    await b.ensureAccount(accountId)
+    if (openingTx) await b.applyTx(1, openingTx)
+  })
   return { id: accountId }
 }
 
@@ -1415,18 +1657,36 @@ async function actionDeleteCategory(userId: string, params: Params) {
   ])
 
   // Decategorise chaque transaction referencant la categorie ; pas d'extra :
-  // month_idx et tx_hash des lignes restent intacts.
+  // month_idx et tx_hash des lignes restent intacts. Un echec au milieu du lot
+  // laisserait un etat partiel non reflete par les agregats : on les invalide
+  // avant de propager l'erreur (fallback calcul complet, jamais de chiffre faux).
+  const keys = await getKeys()
+  const aggTxOps: { old: AggTx; next: AggTx }[] = []
   let uncategorized = 0
-  for (const tx of transactions) {
-    if (tx.categoryId !== categoryId) continue
-    const { id, ...payload } = tx
-    await updateTx(userId, id, { ...payload, categoryId: null })
-    uncategorized += 1
+  try {
+    for (const tx of transactions) {
+      if (tx.categoryId !== categoryId) continue
+      const { id, ...payload } = tx
+      await updateTx(userId, id, { ...payload, categoryId: null })
+      aggTxOps.push({ old: payload, next: { ...payload, categoryId: null } })
+      uncategorized += 1
+    }
+  } catch (err) {
+    if (aggTxOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
+    throw err
+  }
+  // Maintenance immediate du lot decategorise : les etapes suivantes peuvent
+  // echouer sans laisser de derive (chaque etape est refletee des qu'elle reussit).
+  if (aggTxOps.length > 0) {
+    await aggMaintain(userId, keys, async (b) => {
+      for (const op of aggTxOps) await b.replaceTx(op.old, op.next)
+    })
   }
 
   // Purge les assignations et objectifs orphelins (reference dans le payload,
   // suppression par id apres dechiffrement).
-  const assignmentIds = assignments.filter((a) => a.categoryId === categoryId).map((a) => a.id)
+  const orphanAssignments = assignments.filter((a) => a.categoryId === categoryId)
+  const assignmentIds = orphanAssignments.map((a) => a.id)
   if (assignmentIds.length > 0) {
     const { error } = await admin
       .from('assignments')
@@ -1434,6 +1694,11 @@ async function actionDeleteCategory(userId: string, params: Params) {
       .eq('user_id', userId)
       .in('id', assignmentIds)
     if (error) throw new ApiError(500, 'suppression assignments impossible')
+    // Assignations purgees : la relecture (table videe) donne 0, les cellules
+    // vides disparaissent (sparse).
+    await aggMaintain(userId, keys, async (b) => {
+      for (const a of orphanAssignments) await b.setAssigned(categoryId, a.month)
+    })
   }
   const targetIds = targets.filter((t) => t.categoryId === categoryId).map((t) => t.id)
   if (targetIds.length > 0) {
@@ -1657,17 +1922,31 @@ async function actionApplyRulesToUncategorized(userId: string) {
   ])
   rules.sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
 
+  const keys = await getKeys()
+  const aggOps: { old: AggTx; next: AggTx }[] = []
   let categorized = 0
-  for (const tx of transactions) {
-    // On ne touche qu'aux transactions non categorisees et hors transfert.
-    if (tx.categoryId || tx.transferGroupId) continue
-    const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
-    if (!rule) continue
-    // On retire id du payload et on ne passe PAS d'extra : month_idx et
-    // tx_hash de la ligne restent intacts.
-    const { id, ...payload } = tx
-    await updateTx(userId, id, { ...payload, categoryId: rule.categoryId })
-    categorized += 1
+  try {
+    for (const tx of transactions) {
+      // On ne touche qu'aux transactions non categorisees et hors transfert.
+      if (tx.categoryId || tx.transferGroupId) continue
+      const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
+      if (!rule) continue
+      // On retire id du payload et on ne passe PAS d'extra : month_idx et
+      // tx_hash de la ligne restent intacts.
+      const { id, ...payload } = tx
+      await updateTx(userId, id, { ...payload, categoryId: rule.categoryId })
+      aggOps.push({ old: payload, next: { ...payload, categoryId: rule.categoryId } })
+      categorized += 1
+    }
+  } catch (err) {
+    // Lot partiellement applique : agregats invalides (fallback calcul complet).
+    if (aggOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
+    throw err
+  }
+  if (aggOps.length > 0) {
+    await aggMaintain(userId, keys, async (b) => {
+      for (const op of aggOps) await b.replaceTx(op.old, op.next)
+    })
   }
   return { categorized }
 }
@@ -1956,10 +2235,23 @@ const BUDGET_TABLES = [
 ] as const
 
 async function wipeUserBudget(userId: string): Promise<void> {
+  // Agregats invalides AVANT l'effacement, et l'echec N'EST PAS avale : un
+  // marqueur 'ready' qui survivrait au wipe servirait les soldes d'AVANT
+  // l'import. aggMarkStale retente et ignore uniquement le cas table absente
+  // (SQL REF I pas encore applique) ; un echec persistant fait echouer
+  // l'import, qui est rejouable.
+  try {
+    await aggMarkStale(admin, userId)
+  } catch {
+    throw new ApiError(500, 'invalidation des agregats impossible, reessayez')
+  }
   for (const table of BUDGET_TABLES) {
     const { error } = await admin.from(table).delete().eq('user_id', userId)
     if (error) throw new ApiError(500, `effacement ${table} impossible`)
   }
+  // Purge best-effort des tables de donnees d'agregats (residus inertes une
+  // fois le marqueur supprime ; le prochain recompute repart de zero).
+  await aggClear(admin, userId).catch(() => {})
 }
 
 async function actionImportReplaceBegin(userId: string, params: Params) {
@@ -2089,6 +2381,10 @@ async function actionImportReplaceBegin(userId: string, params: Params) {
 
 async function actionImportReplaceTransactions(userId: string, params: Params) {
   const raw = requireArray(params.transactions, 'transactions', 200)
+  // Defensif : la sequence normale (importReplaceBegin) a deja invalide les
+  // agregats, mais un appel hors sequence ne doit pas ecrire sous un marqueur
+  // 'ready' (inserts en masse sans maintenance).
+  await aggMarkStale(admin, userId).catch(() => {})
 
   // Chargement des ids valides UNE fois (integrite referentielle : pas de FK SQL).
   const [accounts, categories] = await Promise.all([
@@ -2147,6 +2443,8 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
 
 async function actionImportReplaceAssignments(userId: string, params: Params) {
   const raw = requireArray(params.assignments, 'assignments', 500)
+  // Defensif : voir actionImportReplaceTransactions.
+  await aggMarkStale(admin, userId).catch(() => {})
 
   const categories = await loadAll<CategoryPayload>('categories', userId)
   const byId = new Map(categories.map((c) => [c.id, c]))
@@ -2187,6 +2485,23 @@ async function actionImportReplaceAssignments(userId: string, params: Params) {
     if (error) throw new ApiError(500, 'ecriture assignments impossible')
   }
   return { upserted: rows.length }
+}
+
+// ---------------------------------------------------------------------------
+// Agregats : recompute manuel (secours en cas d'incoherence suspectee)
+// ---------------------------------------------------------------------------
+
+// Reconstruit integralement les agregats depuis les tables sources, puis pose
+// le marqueur. Normalement inutile (bootstrapFull reconstruit automatiquement
+// quand le marqueur est absent/non-pret) ; reste disponible pour forcer une
+// remise a la verite. IMPORTANT : lit via loadBudgetDataFromDb (JAMAIS le cache
+// K, qui pourrait etre a 3s de retard sur une ecriture d'un autre processus).
+async function actionRecomputeAggregates(userId: string) {
+  const keys = await getKeys()
+  // Fence posee par aggRecompute AVANT loadAggSource (lecture fraiche, jamais
+  // le cache K) : toute ecriture concurrente empoisonne la bascule 'ready'.
+  const ready = await aggRecompute(admin, keys, userId, () => loadAggSource(userId))
+  return { ok: true, ready }
 }
 
 // ---------------------------------------------------------------------------
@@ -2234,6 +2549,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   importReplaceBegin: actionImportReplaceBegin,
   importReplaceTransactions: actionImportReplaceTransactions,
   importReplaceAssignments: actionImportReplaceAssignments,
+  recomputeAggregates: (u) => actionRecomputeAggregates(u),
 }
 
 // Actions strictement en LECTURE : elles ne modifient aucune table, donc ne

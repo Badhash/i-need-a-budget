@@ -51,7 +51,7 @@ lignes/tables non encore migrées), donc l'ordre sûr est toujours :
 | **J** `account_idx` | `J-account-idx.sql` (colonne `text` + index partiel) | `backfillAccountIdx` | reconcile/soldes ciblés |
 | **D** base64 transport | `D-transport-base64.sql` (computed columns `enc_b64` sans `\n` + RPC `enc_insert`/`enc_update`) | aucun (transport pur) — **appliquer le SQL AVANT de déployer le code** | -35 à -45 % jambe lecture |
 | **H** split core/text | `H-split-payload.sql` (colonnes `enc_core`/`enc_text` + contrainte) | `migrateSplitPayload` (par lots) | budget/rapports ne lisent plus le texte lourd |
-| **I** agrégats | `I-aggregates.sql` (4 tables chiffrées + index aveugles + colonne `rev` anti-course) | `recomputeAggregates` | `getBudgetMonth`/`getReports` ne rescannent plus l'historique |
+| **I** agrégats | `I-aggregates.sql` (4 tables chiffrées + index aveugles + `rev` anti-course + computed columns `enc_b64`) | AUCUN (bootstrapFull reconstruit automatiquement à l'ouverture de l'app) | `bootstrap`/`getBudgetMonth` ne rescannent plus l'historique |
 
 Notes par ref :
 
@@ -62,8 +62,11 @@ Notes par ref :
   que `enc_core` est NULL. Bascule finale (drop `enc_payload`) seulement quand le
   compteur legacy est à 0 et qu'aucun code lisant `enc_payload` n'est déployé.
 - **I** : le marqueur `aggregate_state` est le kill-switch — tant qu'il est
-  absent, les lectures retombent sur le calcul complet. La colonne `rev` +
-  retry CAS borne la course d'écritures concurrentes ; planifier en plus un
-  `recomputeAggregates` périodique (pg_cron) comme filet anti-dérive.
+  absent ou non-prêt, les lectures retombent sur le calcul complet. La colonne
+  `rev` sert de fence CAS : toute écriture concurrente empoisonne un recompute
+  en cours (jamais d'état faux marqué prêt). Filets anti-dérive intégrés :
+  recompute complet après chaque import sync-bank / reconcile, et
+  reconstruction automatique par bootstrapFull à l'ouverture de l'app.
+  DÉPLOIEMENT : SQL d'abord, puis code ; aucun backfill manuel.
 - **J** : `account_idx` est `text` (cohérent avec `month_idx`/`tx_hash`). Le
   code retombe sur le chargement complet tant qu'il reste des lignes NULL.
