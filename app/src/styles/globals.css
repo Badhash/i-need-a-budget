@@ -149,28 +149,27 @@
   animation: inab-dot 1.2s ease-in-out infinite;
   will-change: transform, opacity;
 }
-/* Pieces qui tombent dans le portefeuille : chute depuis le haut, leger
-   rebond a l'approche, puis la piece glisse derriere le badge (z-index) en
-   retrecissant — illusion d'entrer dans le portefeuille. */
+/* Pieces qui tombent dans le portefeuille : chute depuis le haut puis la
+   piece PASSE DERRIERE le badge (rendu avant lui dans le DOM) qui l'occulte
+   entierement en fin de course — PAS de fondu en vol, c'est l'occlusion qui
+   cree l'illusion d'entrer dans le portefeuille. Le trajet finit a 30px sous
+   le bord haut du badge : la piece (16px) y est totalement recouverte avant
+   de reapparaitre en haut au cycle suivant. */
 @keyframes inab-coin {
   0% {
     opacity: 0;
     transform: translateY(-46px) scale(0.85);
   }
-  18% {
+  12% {
     opacity: 1;
   }
-  62% {
+  55% {
     opacity: 1;
-    transform: translateY(-6px) scale(1);
-  }
-  82% {
-    opacity: 0.9;
-    transform: translateY(2px) scale(0.7);
+    transform: translateY(-2px) scale(1);
   }
   100% {
-    opacity: 0;
-    transform: translateY(10px) scale(0.4);
+    opacity: 1;
+    transform: translateY(30px) scale(0.8);
   }
 }
 .loader-coin {
