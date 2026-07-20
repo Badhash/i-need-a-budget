@@ -1485,6 +1485,56 @@ async function actionUpdateAccount(userId: string, params: Params) {
   return { ok: true }
 }
 
+// Suppression definitive d'un compte : toutes ses transactions partent avec
+// lui. Les miroirs de transferts situes sur d'AUTRES comptes sont delies
+// (transferGroupId null, jamais supprimes : l'operation reelle reste et
+// redevient a categoriser). Operation massive : agregats invalides AVANT la
+// premiere ecriture (fallback calcul complet), reconstruction en arriere-plan.
+async function actionDeleteAccount(userId: string, params: Params) {
+  const accountId = requireUuid(params.accountId, 'accountId')
+
+  const accounts = await loadAll<AccountPayload>('accounts', userId)
+  const account = accounts.find((a) => a.id === accountId)
+  if (!account) throw new ApiError(404, 'compte inconnu')
+
+  const transactions = await loadTxFull(userId)
+  const own = transactions.filter((t) => t.accountId === accountId)
+  const ownIds = own.map((t) => t.id)
+  const ownIdSet = new Set(ownIds)
+  const ownGroups = new Set(
+    own.map((t) => t.transferGroupId).filter((g): g is string => g !== null),
+  )
+
+  await aggMarkStale(admin, userId)
+
+  for (const tx of transactions) {
+    if (ownIdSet.has(tx.id)) continue
+    if (!tx.transferGroupId || !ownGroups.has(tx.transferGroupId)) continue
+    const { id, ...payload } = tx
+    await updateTx(userId, id, { ...payload, transferGroupId: null })
+  }
+
+  for (let i = 0; i < ownIds.length; i += 100) {
+    const { error } = await admin
+      .from('transactions')
+      .delete()
+      .eq('user_id', userId)
+      .in('id', ownIds.slice(i, i + 100))
+    if (error) throw new ApiError(500, 'suppression transactions impossible')
+  }
+
+  const { error } = await admin
+    .from('accounts')
+    .delete()
+    .eq('user_id', userId)
+    .eq('id', accountId)
+  if (error) throw new ApiError(500, 'suppression comptes impossible')
+
+  const keys = await getKeys()
+  await scheduleAggRebuild(userId, keys)
+  return { ok: true, deleted: ownIds.length }
+}
+
 const DEFAULT_STRUCTURE: { group: Omit<GroupPayload, 'sortOrder' | 'hidden'>; categories: string[] }[] = [
   { group: { name: 'Essentiels', color: 'blue', icon: 'home' }, categories: ['Loyer', 'Courses', 'Électricité & gaz', 'Internet & mobile', 'Assurances'] },
   { group: { name: 'Transport', color: 'amber', icon: 'car' }, categories: ['Transports en commun', 'Essence', 'VTC & taxi'] },
@@ -2520,6 +2570,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   setAssigned: actionSetAssigned,
   createAccount: actionCreateAccount,
   updateAccount: actionUpdateAccount,
+  deleteAccount: actionDeleteAccount,
   seedDefaults: (u) => actionSeedDefaults(u),
   createCategory: actionCreateCategory,
   updateCategory: actionUpdateCategory,

@@ -418,6 +418,12 @@ export async function apiUpdateAccount(input: UpdateAccountInput): Promise<void>
   await apiCall('updateAccount', { ...input })
 }
 
+/** Supprime un compte et TOUTES ses transactions (les miroirs de transferts
+ * sur les autres comptes sont delies, pas supprimes). Irreversible. */
+export async function apiDeleteAccount(accountId: string): Promise<{ deleted: number }> {
+  return apiCall<{ deleted: number }>('deleteAccount', { accountId })
+}
+
 export async function apiSeedDefaults(): Promise<void> {
   await apiCall('seedDefaults')
 }

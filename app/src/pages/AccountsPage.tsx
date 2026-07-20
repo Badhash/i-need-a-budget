@@ -3,8 +3,15 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { CreditCard, Landmark, Pencil, Plus, Sprout, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
 import type { AccountKind } from '@/types/domain'
-import { apiCreateAccount, apiUpdateAccount, useAccounts, type AccountWithBalance } from '@/lib/data'
-import { TODAY } from '@/lib/format'
+import {
+  apiAddTransaction,
+  apiCreateAccount,
+  apiDeleteAccount,
+  apiUpdateAccount,
+  useAccounts,
+  type AccountWithBalance,
+} from '@/lib/data'
+import { TODAY, fmtEUR } from '@/lib/format'
 import { useBankConnections } from '@/lib/bank'
 import { SyncHealth } from '@/components/settings/SyncHealth'
 import { Amount } from '@/components/shared/Amount'
@@ -89,6 +96,8 @@ function EditAccountDialog({
   const [institution, setInstitution] = useState('')
   const [kind, setKind] = useState<AccountKind>('checking')
   const [error, setError] = useState<string | null>(null)
+  const [targetBalance, setTargetBalance] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   useEffect(() => {
     if (account) {
@@ -96,8 +105,52 @@ function EditAccountDialog({
       setInstitution(account.institution)
       setKind(account.kind)
       setError(null)
+      setTargetBalance('')
+      setConfirmDelete(false)
     }
   }, [account])
+
+  const invalidateAll = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
+      queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+      queryClient.invalidateQueries({ queryKey: ['reports'] }),
+      queryClient.invalidateQueries({ queryKey: ['budget'] }),
+    ])
+
+  const adjust = useMutation({
+    mutationFn: async () => {
+      if (!account) return
+      const cents = parseEuros(targetBalance)
+      if (cents === null) throw new Error('invalid')
+      const delta = cents - account.balance
+      if (delta === 0) return
+      await apiAddTransaction({
+        accountId: account.id,
+        date: TODAY,
+        label: 'Ajustement de solde',
+        categoryId: null,
+        amount: delta,
+      })
+    },
+    onSuccess: async () => {
+      await invalidateAll()
+      onOpenChange(false)
+    },
+    onError: () => setError('Saisissez un solde valide, par exemple -1234,56.'),
+  })
+
+  const remove = useMutation({
+    mutationFn: async () => {
+      if (!account) return
+      await apiDeleteAccount(account.id)
+    },
+    onSuccess: async () => {
+      await invalidateAll()
+      onOpenChange(false)
+    },
+    onError: () => setError('Suppression impossible pour le moment. Réessayez.'),
+  })
 
   const update = useMutation({
     mutationFn: apiUpdateAccount,
@@ -129,7 +182,7 @@ function EditAccountDialog({
             dans le budget ne se changent pas ici.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 p-5 pt-2">
+        <div className="space-y-4 overflow-y-auto p-5 pt-2">
           <div>
             <label className="label-caps mb-1.5 block">Nom du compte</label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Carte World Elite" />
@@ -157,6 +210,67 @@ function EditAccountDialog({
           <Button className="w-full" onClick={submit} disabled={update.isPending}>
             {update.isPending ? 'Enregistrement…' : 'Enregistrer'}
           </Button>
+
+          <div className="space-y-3 border-t border-line pt-4">
+            <div>
+              <p className="label-caps">Ajuster le solde</p>
+              <p className="mt-1 text-[13px] text-soft">
+                Solde actuel : {account ? fmtEUR(account.balance) : ''}. Saisissez le solde réel :
+                une transaction « Ajustement de solde » de la différence est créée (à catégoriser).
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <Input
+                value={targetBalance}
+                onChange={(e) => setTargetBalance(e.target.value)}
+                placeholder="-350,00"
+                inputMode="decimal"
+                className="flex-1 text-right tnum"
+              />
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  if (!targetBalance.trim() || parseEuros(targetBalance) === null) {
+                    setError('Saisissez un solde valide, par exemple -1234,56.')
+                    return
+                  }
+                  setError(null)
+                  adjust.mutate()
+                }}
+                disabled={adjust.isPending}
+              >
+                {adjust.isPending ? 'Ajustement…' : 'Ajuster'}
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-3 border-t border-line pt-4">
+            <div>
+              <p className="label-caps text-danger">Supprimer le compte</p>
+              <p className="mt-1 text-[13px] text-soft">
+                Supprime définitivement le compte et TOUTES ses transactions. Les virements liés
+                sur les autres comptes sont conservés (déliés, à recatégoriser).
+              </p>
+            </div>
+            {!confirmDelete ? (
+              <Button variant="secondary" className="w-full text-danger" onClick={() => setConfirmDelete(true)}>
+                Supprimer ce compte…
+              </Button>
+            ) : (
+              <div className="flex gap-3">
+                <Button variant="secondary" className="flex-1" onClick={() => setConfirmDelete(false)}>
+                  Annuler
+                </Button>
+                <Button
+                  className="flex-1 bg-danger text-white hover:bg-danger/90"
+                  onClick={() => remove.mutate()}
+                  disabled={remove.isPending}
+                >
+                  {remove.isPending ? 'Suppression…' : 'Confirmer la suppression'}
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>
