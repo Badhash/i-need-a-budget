@@ -684,6 +684,11 @@ function dayDiff(a: string, b: string): number {
 // peu de passe. La dedup (tx_hash) absorbe les doublons, donc etre large ne coute
 // que de la bande passante, jamais la justesse.
 const OVERLAP_DAYS = 7
+// Cartes a debit differe : la banque publie souvent les operations carte des
+// JOURS apres leur date de comptabilisation (parfois par paquet au moment du
+// prelevement). Une fenetre de 7 jours les raterait definitivement (EB filtre
+// par date) : les connexions ayant un compte carte lie remontent plus loin.
+const CARD_OVERLAP_DAYS = 35
 
 // Charge et dechiffre les derniers sync_logs du user (run_at en clair, status
 // chiffre). Retourne les entrees decodees, ordonnees du plus recent au plus
@@ -918,36 +923,33 @@ const DEDUP_WINDOW_MAX_MONTHS = 120
 // (EB ne renvoie rien avant date_from) et <= le mois courant. La fenetre couvre
 // donc l'integralite des collisions possibles. En repli (fenetre trop large ou
 // absente), on recharge tous les tx_hash du user : justesse preservee.
-async function loadSeenHashesWindow(
+// Index aveugles des mois de la fenetre de dedup, ou null si la fenetre est
+// absente/trop large (repli = scan complet, justesse preservee).
+async function dedupWindowMonthIdxs(
   userId: string,
   dateFromByConn: Map<string, string>,
-): Promise<Set<string>> {
+): Promise<string[] | null> {
   const keys = await getKeys()
-  const seenHashes = new Set<string>()
-
   let earliest: string | null = null
   for (const d of dateFromByConn.values()) {
     if (earliest === null || d < earliest) earliest = d
   }
+  if (earliest === null) return null
 
   const currentMonth = new Date().toISOString().slice(0, 7)
   const months: string[] = []
-  let truncated = false
-  if (earliest !== null) {
-    for (let m = earliest.slice(0, 7); m <= currentMonth; m = nextMonth(m)) {
-      if (months.length >= DEDUP_WINDOW_MAX_MONTHS) {
-        truncated = true
-        break
-      }
-      months.push(m)
-    }
+  for (let m = earliest.slice(0, 7); m <= currentMonth; m = nextMonth(m)) {
+    if (months.length >= DEDUP_WINDOW_MAX_MONTHS) return null
+    months.push(m)
   }
-  const windowed = earliest !== null && !truncated
+  return Promise.all(months.map((m) => txMonthIdx(keys, userId, m)))
+}
 
-  // Filtre month_idx uniquement quand la fenetre est fiable ; sinon scan complet.
-  const monthIdxs = windowed
-    ? await Promise.all(months.map((m) => txMonthIdx(keys, userId, m)))
-    : null
+async function loadSeenHashesWindow(
+  userId: string,
+  monthIdxs: string[] | null,
+): Promise<Set<string>> {
+  const seenHashes = new Set<string>()
 
   for (let from = 0; ; from += READ_PAGE) {
     let query = admin
@@ -966,6 +968,85 @@ async function loadSeenHashesWindow(
   }
 
   return seenHashes
+}
+
+// ---------------------------------------------------------------------------
+// Garde anti-doublon "jumeaux" : transactions SANS tx_hash (import YNAB,
+// saisies manuelles) deja presentes en base. La dedup par tx_hash ne peut pas
+// les reconnaitre (leurs libelles/dates viennent d'une autre source que EB) :
+// avant d'inserer un import bancaire, on verifie qu'aucune ligne sans hash du
+// MEME compte, MEME montant et date proche (± TWIN_DAY_TOLERANCE jours l'une
+// de l'autre) n'existe deja — sinon l'import est saute (la copie existante,
+// souvent categorisee, fait foi). Chaque jumeau n'absorbe qu'UN import (deux
+// depenses identiques legitimes restent possibles).
+// ---------------------------------------------------------------------------
+
+const TWIN_DAY_TOLERANCE = 2
+
+type TwinIndex = Map<string, string[]> // `${accountId}|${amount}` -> bookingDates
+
+function dayNumber(date: string): number {
+  const [y, m, d] = date.split('-').map(Number)
+  return Math.floor(Date.UTC(y, m - 1, d) / 86_400_000)
+}
+
+// Charge les transactions sans tx_hash de la fenetre (enc_core seul) et les
+// indexe par (compte, montant). Meme filtre month_idx que la dedup par hash.
+async function loadManualTwinsWindow(
+  userId: string,
+  monthIdxs: string[] | null,
+): Promise<TwinIndex> {
+  const keys = await getKeys()
+  const twins: TwinIndex = new Map()
+
+  for (let from = 0; ; from += READ_PAGE) {
+    let query = admin
+      .from('transactions')
+      .select('id, enc_core:enc_core_b64, enc_payload:enc_b64')
+      .eq('user_id', userId)
+      .is('tx_hash', null)
+    if (monthIdxs) query = query.in('month_idx', monthIdxs)
+    const { data, error } = await query
+      .order('id', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) throw new ApiError(500, 'lecture transactions impossible')
+    if (!data || data.length === 0) break
+    for (const row of data) {
+      const r = row as TxRow
+      const core = r.enc_core
+        ? await decryptJson<TxCore>(keys, base64ToBytes(r.enc_core), txCoreCtx(userId))
+        : r.enc_payload
+          ? await decryptJson<TxCore>(keys, base64ToBytes(r.enc_payload), ['transactions', userId])
+          : null
+      if (!core) continue
+      const key = `${core.accountId}|${core.amount}`
+      const dates = twins.get(key)
+      if (dates) dates.push(core.bookingDate)
+      else twins.set(key, [core.bookingDate])
+    }
+    if (data.length < READ_PAGE) break
+  }
+
+  return twins
+}
+
+// Consomme le jumeau le plus proche en date (± TWIN_DAY_TOLERANCE) s'il existe.
+function consumeTwin(twins: TwinIndex, accountId: string, amount: number, date: string): boolean {
+  const dates = twins.get(`${accountId}|${amount}`)
+  if (!dates || dates.length === 0) return false
+  const target = dayNumber(date)
+  let bestIdx = -1
+  let bestDiff = TWIN_DAY_TOLERANCE + 1
+  for (let i = 0; i < dates.length; i++) {
+    const diff = Math.abs(dayNumber(dates[i]) - target)
+    if (diff < bestDiff) {
+      bestDiff = diff
+      bestIdx = i
+    }
+  }
+  if (bestIdx === -1 || bestDiff > TWIN_DAY_TOLERANCE) return false
+  dates.splice(bestIdx, 1)
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,11 +1137,18 @@ async function syncUser(
   for (const conn of connectionsToSync) {
     const activationDate = conn.createdAt.slice(0, 10)
     const lastOkDate = lastSuccessfulRunDate(recentLogs, conn.id)
+    // Connexion avec carte a debit differe liee : fenetre elargie (les
+    // operations carte sont publiees en retard par la banque, une fenetre de
+    // 7 jours les raterait definitivement — EB filtre par date).
+    const hasDeferredCard = conn.payload.accounts.some(
+      (a) => accountByUid.get(a.uid)?.kind === 'card_deferred',
+    )
+    const overlapDays = hasDeferredCard ? CARD_OVERLAP_DAYS : OVERLAP_DAYS
     const dateFrom =
       sinceDays != null
         ? shiftDays(today, -sinceDays)
         : lastOkDate
-          ? maxDate(shiftDays(lastOkDate, -OVERLAP_DAYS), activationDate)
+          ? maxDate(shiftDays(lastOkDate, -overlapDays), activationDate)
           : activationDate
     dateFromByConn.set(conn.id, dateFrom)
   }
@@ -1070,7 +1158,12 @@ async function syncUser(
   // mois courant]. Un doublon partage FORCEMENT la meme booking_date que la
   // transaction importee (tx_hash en depend), donc le meme mois : filtrer par
   // month_idx sur cette fenetre contient a coup sur tout doublon potentiel.
-  const seenHashes = await loadSeenHashesWindow(userId, dateFromByConn)
+  const dedupMonthIdxs = await dedupWindowMonthIdxs(userId, dateFromByConn)
+  const seenHashes = await loadSeenHashesWindow(userId, dedupMonthIdxs)
+  // Jumeaux sans tx_hash (import YNAB, saisies manuelles) : empeche la
+  // re-insertion par la banque d'operations deja presentes via une autre
+  // source (cause des doublons de la sync profonde).
+  const manualTwins = await loadManualTwinsWindow(userId, dedupMonthIdxs)
 
   let importedTotal = 0
   let linkedCount = 0
@@ -1119,6 +1212,12 @@ async function syncUser(
             // Dedup : deja en base OU deja inseree dans ce run (seenHashes est
             // mis a jour au fur et a mesure).
             if (seenHashes.has(hash)) continue
+            // Jumeau sans hash (YNAB / manuel) au meme compte, meme montant,
+            // date proche : la copie existante fait foi, on n'insere pas.
+            if (consumeTwin(manualTwins, localAccount.id, mapped.amount, mapped.bookingDate)) {
+              seenHashes.add(hash)
+              continue
+            }
             seenHashes.add(hash)
 
             const categoryId = categorize(rules, mapped.label)
