@@ -16,6 +16,9 @@ interface UiState {
   // Masque les lignes d'enveloppes entierement vides (assigne, activite et
   // disponible tous a 0). Persiste pour survivre au refresh.
   hideEmptyRows: boolean
+  // Affiche le groupe special "Hidden categories". Volontairement NON persiste :
+  // le groupe redevient masque a chaque nouvelle session (comportement par defaut).
+  showHiddenGroup: boolean
   setTheme: (theme: ThemeId) => void
   setMode: (mode: Mode) => void
   setMonth: (month: string) => void
@@ -27,6 +30,7 @@ interface UiState {
   // Remplace l'ensemble des groupes replies (tout replier / tout deplier).
   setCollapsedGroups: (collapsed: Record<string, true>) => void
   setHideEmptyRows: (hide: boolean) => void
+  setShowHiddenGroup: (show: boolean) => void
 }
 
 export const useUiStore = create<UiState>()(
@@ -39,6 +43,7 @@ export const useUiStore = create<UiState>()(
       editTx: null,
       collapsedGroups: {},
       hideEmptyRows: false,
+      showHiddenGroup: false,
       setTheme: (theme) => set({ theme }),
       setMode: (mode) => set({ mode }),
       setMonth: (month) => {
@@ -60,6 +65,7 @@ export const useUiStore = create<UiState>()(
         }),
       setCollapsedGroups: (collapsed) => set({ collapsedGroups: collapsed }),
       setHideEmptyRows: (hideEmptyRows) => set({ hideEmptyRows }),
+      setShowHiddenGroup: (showHiddenGroup) => set({ showHiddenGroup }),
     }),
     {
       name: 'inab-ui',

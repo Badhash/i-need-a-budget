@@ -41,6 +41,7 @@ import { useReorderCategoriesMutation, useReorderGroupsMutation } from '@/lib/ta
 import { AvailablePill, AssignActivityPill } from '@/components/budget/AvailablePill'
 import { TargetBar } from '@/components/budget/TargetBar'
 import { TargetDialog } from '@/components/budget/TargetDialog'
+import { envelopeStatus, fundedRatio, pillTone, type EnvelopeStatus } from '@/lib/budgetStatus'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Amount } from '@/components/shared/Amount'
@@ -53,6 +54,22 @@ import { cn } from '@/lib/utils'
 // la ligne reste visible.
 function isEmptyRow(row: BudgetRow): boolean {
   return row.assigned === 0 && row.activity === 0 && row.available === 0
+}
+
+// Groupe special contenant les categories archivees : masque par defaut sur la
+// page Budget (toggle "Categories masquees"), comme les hidden categories YNAB.
+const HIDDEN_GROUP_NAME = 'hidden categories'
+
+function isHiddenGroup(block: BudgetGroupBlock): boolean {
+  return block.group.name.trim().toLowerCase() === HIDDEN_GROUP_NAME
+}
+
+// Couleur du libelle de statut facon YNAB, affiche a droite du nom d'enveloppe.
+const statusColor: Record<EnvelopeStatus['kind'], string> = {
+  onTrack: 'text-success',
+  underfunded: 'text-warning',
+  fullySpent: 'text-soft',
+  overspent: 'text-danger',
 }
 
 function useAssignMutation(month: string) {
@@ -516,6 +533,7 @@ function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivity, hid
               <GroupRows
                 key={block.group.id}
                 block={block}
+                month={month}
                 targets={targets}
                 onOpenTarget={onOpenTarget}
                 onViewActivity={onViewActivity}
@@ -532,6 +550,7 @@ function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivity, hid
 
 function GroupRows({
   block,
+  month,
   targets,
   onOpenTarget,
   onViewActivity,
@@ -540,6 +559,7 @@ function GroupRows({
   hideEmptyRows,
 }: {
   block: BudgetGroupBlock
+  month: string
   targets: Map<string, Target>
   onOpenTarget: (category: Category) => void
   onViewActivity: (categoryId: string) => void
@@ -598,6 +618,7 @@ function GroupRows({
           .filter((row) => !hideEmptyRows || !isEmptyRow(row))
           .map((row) => {
           const target = targets.get(row.category.id)
+          const status = envelopeStatus(target, month, row)
           return (
             <tr
               key={row.category.id}
@@ -622,6 +643,18 @@ function GroupRows({
                     onOpen={onOpenTarget}
                     variant="desktop"
                   />
+                  {/* Statut facon YNAB (En bonne voie / X manquants / Entierement
+                      depense), aligne a droite de la colonne Categorie. */}
+                  {status && (
+                    <span
+                      className={cn(
+                        'ml-auto shrink-0 pl-3 text-[11.5px] font-medium tnum',
+                        statusColor[status.kind],
+                      )}
+                    >
+                      {status.label}
+                    </span>
+                  )}
                 </div>
                 {target ? (
                   <TargetBar
@@ -666,7 +699,12 @@ function GroupRows({
                       Vider
                     </button>
                   )}
-                  <AvailablePill cents={row.available} />
+                  <AvailablePill
+                    cents={row.available}
+                    tone={pillTone(status, row.available)}
+                    ratio={row.available > 0 ? fundedRatio(target, row) : undefined}
+                    done={status?.kind === 'fullySpent'}
+                  />
                 </div>
               </td>
             </tr>
@@ -686,12 +724,14 @@ function MobileCategoryRow({
   row,
   block,
   target,
+  status,
   onTap,
   onLongPress,
 }: {
   row: BudgetRow
   block: BudgetGroupBlock
   target: Target | undefined
+  status: EnvelopeStatus | null
   onTap: () => void
   onLongPress: () => void
 }) {
@@ -709,6 +749,13 @@ function MobileCategoryRow({
     >
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">{row.category.name}</p>
+        {/* Statut YNAB en mobile : seulement quand il est actionnable (manque a
+            financer ou depassement), pour garder la liste aeree. */}
+        {status && (status.kind === 'underfunded' || status.kind === 'overspent') && (
+          <p className={cn('mt-0.5 text-[11.5px] font-medium tnum', statusColor[status.kind])}>
+            {status.label}
+          </p>
+        )}
         {target && (
           <TargetBar
             target={target}
@@ -791,6 +838,7 @@ function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity, hi
                       row={row}
                       block={block}
                       target={targets.get(row.category.id)}
+                      status={envelopeStatus(targets.get(row.category.id), month, row)}
                       onTap={() => setAssignRow(row)}
                       onLongPress={() => setActionCtx({ block, index })}
                     />
@@ -884,6 +932,8 @@ export function BudgetPage() {
   const setCollapsedGroups = useUiStore((s) => s.setCollapsedGroups)
   const hideEmptyRows = useUiStore((s) => s.hideEmptyRows)
   const setHideEmptyRows = useUiStore((s) => s.setHideEmptyRows)
+  const showHiddenGroup = useUiStore((s) => s.showHiddenGroup)
+  const setShowHiddenGroup = useUiStore((s) => s.setShowHiddenGroup)
   // Ne monter qu'une seule variante (desktop OU mobile) au lieu de monter les
   // deux et d'en masquer une en CSS : evite un arbre React entier inutile.
   const isDesktop = useIsDesktop()
@@ -926,13 +976,22 @@ export function BudgetPage() {
 
   const targetMap = targets ?? new Map<string, Target>()
 
+  // Le groupe "Hidden categories" est masque PAR DEFAUT sur la page Budget :
+  // toutes les listes derivees (grille, plan de financement, depassements,
+  // repli/depli) travaillent sur les groupes visibles uniquement.
+  const visibleGroups = useMemo(
+    () => (budget ? budget.groups.filter((b) => showHiddenGroup || !isHiddenGroup(b)) : []),
+    [budget, showHiddenGroup],
+  )
+  const hasHiddenGroup = budget?.groups.some(isHiddenGroup) ?? false
+
   // Plan de financement du mois courant : pour chaque categorie ayant un objectif,
   // le supplement a assigner (neededThisMonth). On ignore les objectifs deja
   // finances (add = 0). Recalcule a chaque changement de budget/objectifs.
   const fundPlan = useMemo<FundPlanItem[]>(() => {
     if (!budget) return []
     const items: FundPlanItem[] = []
-    for (const block of budget.groups) {
+    for (const block of visibleGroups) {
       for (const row of block.rows) {
         const target = targetMap.get(row.category.id)
         if (!target) continue
@@ -948,7 +1007,7 @@ export function BudgetPage() {
       }
     }
     return items
-  }, [budget, targetMap, month])
+  }, [budget, visibleGroups, targetMap, month])
 
   const fundTotal = fundPlan.reduce((sum, item) => sum + item.add, 0)
 
@@ -959,7 +1018,7 @@ export function BudgetPage() {
   const overspentRows = useMemo(() => {
     const rows: { categoryId: string; assigned: number; missing: number }[] = []
     if (!budget) return rows
-    for (const block of budget.groups) {
+    for (const block of visibleGroups) {
       for (const row of block.rows) {
         if (row.available < 0) {
           rows.push({ categoryId: row.category.id, assigned: row.assigned, missing: -row.available })
@@ -967,7 +1026,7 @@ export function BudgetPage() {
       }
     }
     return rows
-  }, [budget])
+  }, [budget, visibleGroups])
 
   const overspentTotal = overspentRows.reduce((sum, r) => sum + r.missing, 0)
 
@@ -1004,7 +1063,7 @@ export function BudgetPage() {
 
   if (!budget) return <BudgetSkeleton />
 
-  const groupIds = budget.groups.map((b) => b.group.id)
+  const groupIds = visibleGroups.map((b) => b.group.id)
   const allCollapsed = groupIds.length > 0 && groupIds.every((id) => collapsedGroups[id])
   const toggleAllGroups = () => {
     if (allCollapsed) setCollapsedGroups({})
@@ -1019,7 +1078,7 @@ export function BudgetPage() {
         <RtaBanner budget={budget} />
       </div>
       {/* Tout replier / tout deplier les groupes du budget. */}
-      {groupIds.length > 0 && (
+      {(groupIds.length > 0 || hasHiddenGroup) && (
         <div className="flex flex-wrap items-center justify-between gap-1.5">
           {/* Annuler / Refaire : LOCAL a la page Budget, uniquement les
               assignations d'enveloppe. Raccourcis Ctrl/Cmd+Z et Ctrl/Cmd+Maj+Z. */}
@@ -1079,6 +1138,18 @@ export function BudgetPage() {
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1.5">
+          {/* Bascule du groupe special "Hidden categories" (masque par defaut,
+              non persiste : redevient masque a la prochaine session). */}
+          {hasHiddenGroup && (
+            <button
+              type="button"
+              onClick={() => setShowHiddenGroup(!showHiddenGroup)}
+              className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-soft transition-colors hover:bg-surface2 hover:text-ink"
+            >
+              {showHiddenGroup ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {showHiddenGroup ? 'Masquer les catégories masquées' : 'Catégories masquées'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setHideEmptyRows(!hideEmptyRows)}
@@ -1121,7 +1192,7 @@ export function BudgetPage() {
       )}
       {isDesktop ? (
         <DesktopGrid
-          groups={budget.groups}
+          groups={visibleGroups}
           month={month}
           targets={targetMap}
           onOpenTarget={setTargetCat}
@@ -1130,7 +1201,7 @@ export function BudgetPage() {
         />
       ) : (
         <MobileGroups
-          groups={budget.groups}
+          groups={visibleGroups}
           month={month}
           targets={targetMap}
           onOpenTarget={setTargetCat}
