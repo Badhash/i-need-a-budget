@@ -766,6 +766,11 @@ function nextMonth(month: string): string {
   return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`
 }
 
+function prevMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number)
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`
+}
+
 async function linkDeferredCardSettlements(userId: string, sinceDays?: number): Promise<number> {
   const keys = await getKeys()
 
@@ -925,9 +930,13 @@ const DEDUP_WINDOW_MAX_MONTHS = 120
 // absente), on recharge tous les tx_hash du user : justesse preservee.
 // Index aveugles des mois de la fenetre de dedup, ou null si la fenetre est
 // absente/trop large (repli = scan complet, justesse preservee).
+// padMonthsBefore : mois supplementaires AVANT la fenetre (jumeaux carte dont
+// la date YNAB peut preceder de ± CARD_TWIN_DAY_TOLERANCE jours la premiere
+// date importee).
 async function dedupWindowMonthIdxs(
   userId: string,
   dateFromByConn: Map<string, string>,
+  padMonthsBefore = 0,
 ): Promise<string[] | null> {
   const keys = await getKeys()
   let earliest: string | null = null
@@ -936,10 +945,13 @@ async function dedupWindowMonthIdxs(
   }
   if (earliest === null) return null
 
+  let startMonth = earliest.slice(0, 7)
+  for (let i = 0; i < padMonthsBefore; i++) startMonth = prevMonth(startMonth)
+
   const currentMonth = new Date().toISOString().slice(0, 7)
   const months: string[] = []
-  for (let m = earliest.slice(0, 7); m <= currentMonth; m = nextMonth(m)) {
-    if (months.length >= DEDUP_WINDOW_MAX_MONTHS) return null
+  for (let m = startMonth; m <= currentMonth; m = nextMonth(m)) {
+    if (months.length >= DEDUP_WINDOW_MAX_MONTHS + padMonthsBefore) return null
     months.push(m)
   }
   return Promise.all(months.map((m) => txMonthIdx(keys, userId, m)))
@@ -982,6 +994,12 @@ async function loadSeenHashesWindow(
 // ---------------------------------------------------------------------------
 
 const TWIN_DAY_TOLERANCE = 2
+// Cartes a debit differe : la banque publie les operations avec des dates
+// d'arrete pouvant differer de SEMAINES des dates YNAB/manuelles (releve
+// mensuel). Tolerance large — le risque de faux positif (deux achats
+// identiques dans la fenetre) est limite car chaque jumeau n'absorbe qu'UN
+// import.
+const CARD_TWIN_DAY_TOLERANCE = 45
 
 type TwinIndex = Map<string, string[]> // `${accountId}|${amount}` -> bookingDates
 
@@ -1030,13 +1048,19 @@ async function loadManualTwinsWindow(
   return twins
 }
 
-// Consomme le jumeau le plus proche en date (± TWIN_DAY_TOLERANCE) s'il existe.
-function consumeTwin(twins: TwinIndex, accountId: string, amount: number, date: string): boolean {
+// Consomme le jumeau le plus proche en date (± toleranceDays) s'il existe.
+function consumeTwin(
+  twins: TwinIndex,
+  accountId: string,
+  amount: number,
+  date: string,
+  toleranceDays: number,
+): boolean {
   const dates = twins.get(`${accountId}|${amount}`)
   if (!dates || dates.length === 0) return false
   const target = dayNumber(date)
   let bestIdx = -1
-  let bestDiff = TWIN_DAY_TOLERANCE + 1
+  let bestDiff = toleranceDays + 1
   for (let i = 0; i < dates.length; i++) {
     const diff = Math.abs(dayNumber(dates[i]) - target)
     if (diff < bestDiff) {
@@ -1044,7 +1068,7 @@ function consumeTwin(twins: TwinIndex, accountId: string, amount: number, date: 
       bestIdx = i
     }
   }
-  if (bestIdx === -1 || bestDiff > TWIN_DAY_TOLERANCE) return false
+  if (bestIdx === -1 || bestDiff > toleranceDays) return false
   dates.splice(bestIdx, 1)
   return true
 }
@@ -1163,7 +1187,10 @@ async function syncUser(
   // Jumeaux sans tx_hash (import YNAB, saisies manuelles) : empeche la
   // re-insertion par la banque d'operations deja presentes via une autre
   // source (cause des doublons de la sync profonde).
-  const manualTwins = await loadManualTwinsWindow(userId, dedupMonthIdxs)
+  // Fenetre elargie de 2 mois en amont : un jumeau carte peut etre date
+  // jusqu'a CARD_TWIN_DAY_TOLERANCE jours avant la premiere date importee.
+  const twinMonthIdxs = await dedupWindowMonthIdxs(userId, dateFromByConn, 2)
+  const manualTwins = await loadManualTwinsWindow(userId, twinMonthIdxs)
 
   let importedTotal = 0
   let linkedCount = 0
@@ -1214,7 +1241,11 @@ async function syncUser(
             if (seenHashes.has(hash)) continue
             // Jumeau sans hash (YNAB / manuel) au meme compte, meme montant,
             // date proche : la copie existante fait foi, on n'insere pas.
-            if (consumeTwin(manualTwins, localAccount.id, mapped.amount, mapped.bookingDate)) {
+            const twinTolerance =
+              localAccount.kind === 'card_deferred' ? CARD_TWIN_DAY_TOLERANCE : TWIN_DAY_TOLERANCE
+            if (
+              consumeTwin(manualTwins, localAccount.id, mapped.amount, mapped.bookingDate, twinTolerance)
+            ) {
               seenHashes.add(hash)
               continue
             }
