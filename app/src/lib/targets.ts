@@ -43,16 +43,18 @@ export function useTargets(): UseQueryResult<Map<string, Target>> {
  *   regle du ticket : on complete l'assignation du mois jusqu'a la cible.
  *
  * - byDate : l'objectif est d'accumuler `montant` de disponible d'ici l'echeance.
- *   TargetBar mesure deja la progression via le disponible cumule ; on reutilise
- *   cette meme base. Reste a financer globalement = max(0, montant - disponible).
- *   Aucune notion de "part mensuelle sur la trajectoire" n'existe encore dans le
- *   code, donc on la DEFINIT ici de facon lineaire : on etale le reste sur le
- *   nombre de mois restants jusqu'a l'echeance (mois courant inclus), et on
- *   arrondit au centime SUPERIEUR (ceil) pour garantir d'atteindre la cible a
- *   temps malgre l'arrondi. Un objectif deja en retard (echeance <= mois courant)
- *   ou sans echeance demande la totalite du reste immediatement (1 seul mois).
- *   Le disponible inclut deja l'assigne du mois courant : le besoin renvoye est
- *   donc bien le SUPPLEMENT a ajouter a l'assignation de ce mois.
+ *   On repartit le reste a accumuler sur le nombre de mois restants (mois courant
+ *   inclus), arrondi au centime SUPERIEUR (ceil) pour atteindre la cible a temps.
+ *
+ *   POINT CLE (corrige un bug de reproposition en boucle) : la part du mois se
+ *   calcule depuis la position AVANT l'assignation de ce mois-ci
+ *   (`available - assigned` = report des mois precedents + activite), puis on
+ *   RETRANCHE ce qui est deja assigne ce mois. Sinon, financer la part augmentait
+ *   `available`, et au clic suivant une nouvelle fraction du reste etait
+ *   reproposee (montants degressifs a l'infini). Avec ce retrait, une fois la
+ *   part du mois posee, le besoin retombe a 0 et y reste. Un objectif en retard
+ *   (echeance <= mois courant) ou sans echeance demande a completer jusqu'a la
+ *   cible immediatement (1 seul mois).
  */
 export function neededThisMonth(
   target: Target,
@@ -64,11 +66,15 @@ export function neededThisMonth(
   if (target.type === 'monthly') {
     return Math.max(0, target.amount - assigned)
   }
-  const remaining = Math.max(0, target.amount - available)
+  // Position de depart du mois : disponible hors assignation de ce mois-ci.
+  const availableBeforeAssign = available - assigned
+  const remaining = Math.max(0, target.amount - availableBeforeAssign)
   if (remaining === 0) return 0
   // monthRange est inclusif des deux bornes -> nombre de mois restants, min 1.
   const monthsLeft = target.dueMonth && target.dueMonth > month ? monthRange(month, target.dueMonth).length : 1
-  return Math.min(remaining, Math.ceil(remaining / monthsLeft))
+  const monthlyPortion = Math.min(remaining, Math.ceil(remaining / monthsLeft))
+  // Supplement a ajouter a l'assignation de ce mois pour atteindre la part.
+  return Math.max(0, monthlyPortion - assigned)
 }
 
 export interface SetTargetInput {
