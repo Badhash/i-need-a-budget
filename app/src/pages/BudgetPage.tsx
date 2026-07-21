@@ -248,7 +248,7 @@ function SpentBar({ assigned, activity, color }: { assigned: number; activity: n
   const ratio = Math.min(spent / assigned, 1)
   const over = spent > assigned
   return (
-    <div className="mt-1.5 h-1 w-full max-w-[180px] overflow-hidden rounded-full bg-surface2">
+    <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-surface2">
       <div
         className="h-full rounded-full transition-[width] duration-300 ease-out"
         style={{
