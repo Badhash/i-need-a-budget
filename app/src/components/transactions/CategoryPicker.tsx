@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Search } from 'lucide-react'
 import { useCategoriesList, useGroupsList } from '@/lib/data'
+import { useIsDesktop } from '@/hooks/useIsDesktop'
+import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 
 interface CategoryPickerProps {
   children: ReactNode
@@ -27,13 +29,20 @@ const VIEWPORT_MARGIN = 12 // px
  *
  * Le panneau est rendu dans un PORTAIL (document.body) en position fixed : les
  * cartes de transaction ont overflow-hidden (coins arrondis), un popover en
- * position absolute a l'interieur serait clippe. Le portail l'en sort. La
- * position est calculee depuis le rect du declencheur, recalee au scroll/resize,
- * et la hauteur max suit le viewport visible (clavier iOS).
+ * position absolute a l'interieur serait clippe. Le portail l'en sort.
+ *
+ * DESKTOP : popover ancre sous le declencheur, recale au scroll/resize.
+ * MOBILE : feuille posee EN BAS, au-dessus du clavier (comme AssignSheet). On
+ * n'ancre PAS au declencheur : quand le champ de recherche prend le focus, iOS
+ * scrolle la page pour reveler l'input et la transaction remonte — un popover
+ * ancre suivrait ce scroll et se retrouverait detache tout en haut (bug). La
+ * feuille basse, calee sur le clavier via useKeyboardInset, reste stable.
  */
 export function CategoryPicker({ children, onSelect, includeIncome = false }: CategoryPickerProps) {
   const allCategories = useCategoriesList()
   const allGroups = useGroupsList()
+  const isDesktop = useIsDesktop()
+  const keyboardInset = useKeyboardInset()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null)
@@ -57,18 +66,19 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
     setPos({ top, left, maxHeight })
   }
 
-  // Ouverture : place le panneau, vide la recherche, focus le champ.
+  // Ouverture : place le panneau (desktop uniquement), vide la recherche, focus.
   useEffect(() => {
     if (!open) return
-    place()
+    if (isDesktop) place()
     setQuery('')
     const raf = requestAnimationFrame(() => inputRef.current?.focus())
     return () => cancelAnimationFrame(raf)
-  }, [open])
+  }, [open, isDesktop])
 
-  // Recalage au scroll (capture pour attraper les conteneurs internes) et resize.
+  // Recalage au scroll/resize : DESKTOP uniquement (le popover ancre suit le
+  // declencheur). Sur mobile la feuille est calee sur le clavier, pas au scroll.
   useEffect(() => {
-    if (!open) return
+    if (!open || !isDesktop) return
     const onMove = () => place()
     window.addEventListener('scroll', onMove, true)
     window.addEventListener('resize', onMove)
@@ -78,7 +88,7 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
       window.removeEventListener('resize', onMove)
       window.visualViewport?.removeEventListener('resize', onMove)
     }
-  }, [open])
+  }, [open, isDesktop])
 
   // Fermeture au clic hors du declencheur ET du panneau.
   useEffect(() => {
@@ -127,11 +137,27 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
         {children}
       </span>
       {open &&
-        pos &&
+        (isDesktop ? pos !== null : true) &&
         createPortal(
+          <>
+            {/* Mobile : fond transparent cliquable pour fermer (le mousedown ne
+                se declenche pas de facon fiable au toucher hors du panneau). */}
+            {!isDesktop && (
+              <div className="fixed inset-0 z-[59]" onClick={() => setOpen(false)} aria-hidden />
+            )}
           <div
             ref={panelRef}
-            style={{ position: 'fixed', top: pos.top, left: pos.left, width: PANEL_WIDTH, maxHeight: pos.maxHeight }}
+            style={
+              isDesktop
+                ? { position: 'fixed', top: pos!.top, left: pos!.left, width: PANEL_WIDTH, maxHeight: pos!.maxHeight }
+                : {
+                    position: 'fixed',
+                    left: VIEWPORT_MARGIN,
+                    right: VIEWPORT_MARGIN,
+                    bottom: keyboardInset + VIEWPORT_MARGIN,
+                    maxHeight: Math.max(200, window.innerHeight - keyboardInset - 2 * VIEWPORT_MARGIN),
+                  }
+            }
             className="z-[60] flex flex-col rounded-xl border border-line bg-surface p-1 shadow-card"
           >
             <div className="relative p-1">
@@ -188,7 +214,8 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
                 Sans catégorie
               </button>
             </div>
-          </div>,
+          </div>
+          </>,
           document.body,
         )}
     </span>
