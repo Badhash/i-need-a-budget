@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useKeyboardInset } from '@/hooks/useKeyboardInset'
-import { fmtEUR } from '@/lib/format'
+import { evalAmountCents, fmtEUR } from '@/lib/format'
 import type { BudgetRow } from '@/lib/budget'
 import type { Target } from '@/lib/targets'
 import { cn } from '@/lib/utils'
@@ -16,15 +16,11 @@ interface AssignSheetProps {
   onClose: () => void
 }
 
+// Champ vide ou signe seul -> 0 (etat transitoire de saisie). Une expression
+// arithmetique est acceptee ("200,00+152" -> 352 €), tout comme un montant
+// negatif (retrait de l'enveloppe vers le Pret a assigner, parite YNAB).
 function parseEuros(raw: string): number | null {
-  const trimmed = raw.trim()
-  // Champ vide ou signe seul -> 0 (etat transitoire de saisie).
-  if (!trimmed || trimmed === '-') return 0
-  // Un montant negatif est accepte : il retire de l'argent de l'enveloppe
-  // vers le Pret a assigner (parite YNAB).
-  const parsed = Number.parseFloat(trimmed.replace(/\s/g, '').replace(',', '.'))
-  if (Number.isNaN(parsed)) return null
-  return Math.round(parsed * 100)
+  return evalAmountCents(raw)
 }
 
 function toDraft(cents: number): string {

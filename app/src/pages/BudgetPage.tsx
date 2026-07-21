@@ -704,21 +704,22 @@ function MobileCategoryRow({
       onClick={() => {
         if (!firedRecently()) onTap()
       }}
-      className="flex min-h-[56px] w-full select-none items-center gap-3 px-4 py-3 text-left transition-colors [-webkit-touch-callout:none] active:bg-surface2/60"
+      className="flex min-h-[56px] w-full select-none flex-col justify-center gap-1.5 px-4 py-3 text-left transition-colors [-webkit-touch-callout:none] active:bg-surface2/60"
       aria-label={`${row.category.name} : assigner (appui long pour plus d'actions)`}
     >
-      <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">{row.category.name}</p>
-        {target && (
-          <TargetBar
-            target={target}
-            assigned={row.assigned}
-            available={row.available}
-            color={block.group.color}
-          />
-        )}
+      <div className="flex w-full items-center gap-3">
+        <p className="min-w-0 flex-1 truncate font-medium">{row.category.name}</p>
+        <AssignActivityPill assigned={row.assigned} activity={row.activity} available={row.available} />
       </div>
-      <AssignActivityPill assigned={row.assigned} activity={row.activity} available={row.available} />
+      {/* Barre d'objectif en PLEINE LARGEUR de la carte, sous le nom + le montant. */}
+      {target && (
+        <TargetBar
+          target={target}
+          assigned={row.assigned}
+          available={row.available}
+          color={block.group.color}
+        />
+      )}
     </button>
   )
 }

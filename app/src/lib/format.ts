@@ -39,6 +39,82 @@ export function fmtPercent(ratio: number, digits = 0): string {
   }).format(ratio)
 }
 
+/**
+ * Evalue un montant saisi qui peut contenir une expression arithmetique simple :
+ * "200,00+152" -> 352 (euros), "50*3" -> 150, "(20+5)*2" -> 50. Supporte + - * /
+ * et parentheses, virgule OU point comme separateur decimal, espaces ignores.
+ * Renvoie null si l'expression est invalide. Sert aux champs de montant du budget
+ * (saisie rapide type "loyer + courses"). Parser recursif maison : aucun eval(),
+ * seuls chiffres et operateurs sont acceptes.
+ */
+export function evalAmountExpr(raw: string): number | null {
+  const s = raw.replace(/\s/g, '').replace(/,/g, '.')
+  if (s === '' || s === '-') return 0
+  if (!/^[0-9.+\-*/()]+$/.test(s)) return null
+
+  let pos = 0
+  const peek = () => s[pos]
+
+  function parseExpr(): number {
+    let v = parseTerm()
+    while (peek() === '+' || peek() === '-') {
+      const op = s[pos++]
+      const r = parseTerm()
+      v = op === '+' ? v + r : v - r
+    }
+    return v
+  }
+  function parseTerm(): number {
+    let v = parseFactor()
+    while (peek() === '*' || peek() === '/') {
+      const op = s[pos++]
+      const r = parseFactor()
+      v = op === '*' ? v * r : v / r
+    }
+    return v
+  }
+  function parseFactor(): number {
+    if (peek() === '+') {
+      pos++
+      return parseFactor()
+    }
+    if (peek() === '-') {
+      pos++
+      return -parseFactor()
+    }
+    if (peek() === '(') {
+      pos++
+      const v = parseExpr()
+      if (peek() !== ')') throw new Error('parenthese non fermee')
+      pos++
+      return v
+    }
+    const start = pos
+    while (pos < s.length && /[0-9.]/.test(s[pos])) pos++
+    if (pos === start) throw new Error('nombre attendu')
+    const num = Number.parseFloat(s.slice(start, pos))
+    if (Number.isNaN(num)) throw new Error('nombre invalide')
+    return num
+  }
+
+  try {
+    const v = parseExpr()
+    if (pos !== s.length) return null
+    return Number.isFinite(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Comme evalAmountExpr mais renvoie des CENTIMES entiers (arrondi au centime).
+ * Renvoie null si l'expression est invalide.
+ */
+export function evalAmountCents(raw: string): number | null {
+  const euros = evalAmountExpr(raw)
+  return euros === null ? null : Math.round(euros * 100)
+}
+
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }

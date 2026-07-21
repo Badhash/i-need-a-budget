@@ -35,11 +35,11 @@ export function TargetBar({ target, assigned, available }: TargetBarProps) {
     : `${fmtEUR(safeFunded)} sur ${fmtEUR(target.amount)}${suffix}`
 
   return (
-    // Pleine largeur sur mobile (lisible d'un coup d'oeil), compacte en table
-    // desktop. Couleurs de l'accent du THEME (piste = accent attenue) pour
+    // Pleine largeur, toujours affichee, sur mobile ET desktop (pas de plafond
+    // de largeur). Couleurs de l'accent du THEME (piste = accent attenue) pour
     // rester coherent quel que soit le groupe ; vert quand l'objectif est
     // atteint.
-    <div className="mt-2 w-full lg:max-w-[220px]">
+    <div className="mt-2 w-full">
       <div
         className="h-2 w-full overflow-hidden rounded-full lg:h-1.5"
         style={{

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fmtEUR } from '@/lib/format'
+import { evalAmountCents, fmtEUR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 interface AssignedEditorProps {
@@ -44,12 +44,11 @@ export function AssignedEditor({ value, onCommit, className }: AssignedEditorPro
   const commit = () => {
     setEditing(false)
     if (cancelled.current) return
-    const raw = draft.trim()
-    // Un montant negatif est accepte : il retire de l'argent de l'enveloppe
-    // vers le Pret a assigner (parite YNAB).
-    const parsed = raw === '' || raw === '-' ? 0 : Number.parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
-    if (Number.isNaN(parsed)) return
-    const cents = Math.round(parsed * 100)
+    // Une expression arithmetique est acceptee ("200,00+152" -> 352 €), tout
+    // comme un montant negatif (retrait de l'enveloppe vers le Pret a assigner,
+    // parite YNAB). Expression invalide -> on ne commit rien.
+    const cents = evalAmountCents(draft)
+    if (cents === null) return
     if (cents !== value) onCommit(cents)
   }
 
