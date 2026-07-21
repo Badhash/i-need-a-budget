@@ -149,31 +149,35 @@
   animation: inab-dot 1.2s ease-in-out infinite;
   will-change: transform, opacity;
 }
-/* Pieces qui tombent dans le portefeuille : chute depuis le haut puis la
-   piece PASSE DERRIERE le badge (rendu avant lui dans le DOM) qui l'occulte
-   entierement en fin de course — PAS de fondu en vol, c'est l'occlusion qui
-   cree l'illusion d'entrer dans le portefeuille. Le trajet finit a 30px sous
-   le bord haut du badge : la piece (16px) y est totalement recouverte avant
-   de reapparaitre en haut au cycle suivant. */
+/* Pieces (groupes SVG, base cy=42 = fente de la poche) qui tombent dans le
+   portefeuille : chute depuis le haut, passage devant le dos (ghost), puis la
+   piece glisse DERRIERE la poche avant (dessinee apres dans le SVG) qui la
+   masque totalement en fin de course. C'est l'occlusion par la poche qui cree
+   l'illusion d'entrer dans le portefeuille (et non de s'arreter au bord haut).
+   viewBox 0 0 80 80 rendu a 80px -> 1 unite = 1px pour translateY.
+   Base opacity 0 : en 'prefers-reduced-motion' (animation coupee) les pieces
+   restent invisibles, seul le portefeuille statique s'affiche. */
 @keyframes inab-coin {
   0% {
     opacity: 0;
-    transform: translateY(-46px) scale(0.85);
+    transform: translateY(-34px);
   }
-  12% {
+  14% {
     opacity: 1;
   }
-  55% {
+  60% {
     opacity: 1;
-    transform: translateY(-2px) scale(1);
+    transform: translateY(2px);
   }
   100% {
     opacity: 1;
-    transform: translateY(30px) scale(0.8);
+    transform: translateY(10px);
   }
 }
 .loader-coin {
   opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
   animation: inab-coin 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   will-change: transform, opacity;
 }

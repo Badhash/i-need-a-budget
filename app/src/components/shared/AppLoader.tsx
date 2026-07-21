@@ -1,5 +1,3 @@
-import { Wallet } from 'lucide-react'
-
 /**
  * Ecran de chargement plein ecran affiche au lancement, le temps que les
  * donnees de fond (comptes, budgets de tous les mois, transactions, objectifs,
@@ -25,26 +23,30 @@ export function AppLoader({
     <div className="flex min-h-dvh flex-col items-center justify-center gap-7 bg-bg px-6">
       <div className="relative flex items-center justify-center">
         <span className="loader-glow absolute h-20 w-20 rounded-[1.4rem] bg-accent/30 blur-xl" />
-        {/* Pieces qui tombent dans le portefeuille : rendues AVANT le badge,
-            elles glissent derriere lui en fin de course (illusion d'y entrer).
-            Decalages horizontaux varies pour un flux naturel. */}
-        <span aria-hidden className="pointer-events-none absolute inset-x-0 -top-2 flex justify-center">
-          {[
-            { dx: -16, delay: 0 },
-            { dx: 4, delay: 600 },
-            { dx: 14, delay: 1200 },
-          ].map((coin, i) => (
-            <span
-              key={i}
-              className="loader-coin absolute flex h-4 w-4 items-center justify-center rounded-full bg-warning text-[9px] font-bold leading-none text-white shadow-sm"
-              style={{ marginLeft: coin.dx, animationDelay: `${coin.delay}ms` }}
-            >
-              €
-            </span>
-          ))}
-        </span>
+        {/* Portefeuille dessine en SVG, en deux couches : le DOS (ghost) tout au
+            fond, les PIECES au milieu, puis la POCHE AVANT par-dessus. Les pieces
+            tombent depuis le haut, passent devant le dos, puis glissent DERRIERE
+            la poche avant qui les masque : elles disparaissent dans la fente du
+            portefeuille (et non au bord haut de l'icone). */}
         <span className="loader-badge relative flex h-20 w-20 items-center justify-center rounded-[1.4rem] bg-accent text-white shadow-lg">
-          <Wallet className="h-9 w-9" />
+          <svg viewBox="0 0 80 80" className="h-20 w-20" fill="none" aria-hidden>
+            {/* Dos du portefeuille (ghost : laisse voir le corail, donne la profondeur) */}
+            <rect x="18" y="28" width="44" height="30" rx="7" fill="white" fillOpacity="0.32" />
+            {/* Pieces (or) : tombent dans la fente, masquees par la poche avant */}
+            {[
+              { cx: 34, delay: 0 },
+              { cx: 42, delay: 600 },
+              { cx: 38, delay: 1200 },
+            ].map((coin, i) => (
+              <g key={i} className="loader-coin" style={{ animationDelay: `${coin.delay}ms` }}>
+                <circle cx={coin.cx} cy="42" r="4.2" fill="#F5A623" />
+                <circle cx={coin.cx} cy="42" r="2.1" fill="#FFFFFF" fillOpacity="0.55" />
+              </g>
+            ))}
+            {/* Poche avant (opaque : masque les pieces qui y entrent) + fermoir */}
+            <rect x="18" y="42" width="44" height="16" rx="6" fill="white" />
+            <circle cx="52" cy="50" r="3" fill="currentColor" className="text-accent" />
+          </svg>
         </span>
       </div>
 
