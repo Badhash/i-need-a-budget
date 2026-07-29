@@ -979,6 +979,26 @@ async function loadSeenHashesWindow(
     if (data.length < READ_PAGE) break
   }
 
+  // Tombstones : hashes des imports SUPPRIMES par l'utilisateur (deleteTransaction
+  // / deleteAccount cote /api). Sans eux, la banque ressert la transaction dans la
+  // fenetre et la suppression serait silencieusement annulee. Table petite (hash
+  // seuls), lue en entier ; toleree absente (SQL pas encore applique).
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data, error } = await admin
+      .from('deleted_tx_hashes')
+      .select('tx_hash')
+      .eq('user_id', userId)
+      .order('tx_hash', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') break
+      throw new ApiError(500, 'lecture deleted_tx_hashes impossible')
+    }
+    if (!data || data.length === 0) break
+    for (const r of data) seenHashes.add(r.tx_hash as string)
+    if (data.length < READ_PAGE) break
+  }
+
   return seenHashes
 }
 

@@ -122,11 +122,16 @@ function useAssignMutation(month: string) {
       })
       return { previous }
     },
-    // Rollback discret si le reseau echoue : on restaure l'etat d'avant.
+    // Rollback discret si le reseau echoue : on restaure l'etat d'avant, PUIS
+    // on refetch la cle du mois : en rafale (Financer les objectifs, Couvrir les
+    // depassements), ce snapshot peut ecraser les patchs d'autres mutations deja
+    // commitees cote serveur — le refetch scope remet la verite sans attendre la
+    // reconciliation Realtime (jusqu'a 30 s).
     onError: (_err, _input, context) => {
       if (context?.previous) queryClient.setQueryData(key, context.previous)
+      void queryClient.invalidateQueries({ queryKey: key })
     },
-    // Pas d'invalidation ici : le signal Realtime (debounce) reconcilie en fond.
+    // Pas d'invalidation au succes : le signal Realtime (debounce) reconcilie en fond.
   })
 }
 

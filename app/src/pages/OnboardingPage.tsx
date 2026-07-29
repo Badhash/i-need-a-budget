@@ -15,7 +15,9 @@ function parseEuros(raw: string): number | null {
   const trimmed = raw.trim()
   if (!trimmed) return 0
   const parsed = Number.parseFloat(trimmed.replace(/\s/g, '').replace(',', '.'))
-  if (Number.isNaN(parsed) || parsed < 0) return null
+  // Negatif autorise : l'encours d'une carte a debit differe est souvent negatif
+  // (meme regle que AddAccountDialog dans AccountsPage).
+  if (Number.isNaN(parsed)) return null
   return Math.round(parsed * 100)
 }
 

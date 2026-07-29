@@ -30,6 +30,12 @@ const DialogContent = React.forwardRef<
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      // Les popovers maison (CategoryPicker) sont portalises dans body, donc
+      // "dehors" pour Radix : sans cette garde, le premier tap dessus fermait le
+      // dialog qui les contient.
+      onInteractOutside={(e) => {
+        if ((e.target as HTMLElement | null)?.closest?.('[data-inab-popover]')) e.preventDefault()
+      }}
       className={cn(
         // Mobile : plein ecran depuis le bas. Desktop : modal centree.
         'fixed inset-x-0 bottom-0 z-50 flex max-h-[92dvh] flex-col rounded-t-3xl border-t border-line bg-surface pb-safe will-change-transform transition-transform duration-150 ease-out',

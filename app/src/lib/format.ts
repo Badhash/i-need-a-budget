@@ -92,7 +92,12 @@ export function evalAmountExpr(raw: string): number | null {
     const start = pos
     while (pos < s.length && /[0-9.]/.test(s[pos])) pos++
     if (pos === start) throw new Error('nombre attendu')
-    const num = Number.parseFloat(s.slice(start, pos))
+    const token = s.slice(start, pos)
+    // Un seul separateur decimal autorise : "1.234.56" (saisie "1.234,56" avec
+    // point de milliers) doit etre REJETE, pas silencieusement tronque a 1.234
+    // par parseFloat (montant faux persiste sinon).
+    if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(token)) throw new Error('nombre invalide')
+    const num = Number.parseFloat(token)
     if (Number.isNaN(num)) throw new Error('nombre invalide')
     return num
   }

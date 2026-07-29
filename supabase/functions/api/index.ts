@@ -1297,6 +1297,28 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   return { ok: true }
 }
 
+// Tombstone de dedup : quand on supprime une ligne IMPORTEE (tx_hash non NULL),
+// on conserve son hash dans deleted_tx_hashes, sinon sync-bank la reimporte au
+// prochain run (le hash disparaissant avec la ligne, la dedup ne la voit plus
+// et la suppression est silencieusement annulee sous 12 h). Best-effort si la
+// table n'existe pas encore (SQL pas applique) : comportement d'avant conserve.
+function isMissingTableErr(err: { code?: string } | null): boolean {
+  return err?.code === 'PGRST205' || err?.code === '42P01'
+}
+
+async function recordDeletedHashes(userId: string, hashes: string[]): Promise<void> {
+  if (hashes.length === 0) return
+  const { error } = await admin
+    .from('deleted_tx_hashes')
+    .upsert(
+      hashes.map((h) => ({ user_id: userId, tx_hash: h })),
+      { onConflict: 'user_id,tx_hash', ignoreDuplicates: true },
+    )
+  if (error && !isMissingTableErr(error)) {
+    throw new ApiError(500, 'enregistrement de la suppression impossible, reessayez')
+  }
+}
+
 async function actionDeleteTransaction(userId: string, params: Params) {
   const transactionId = requireUuid(params.transactionId, 'transactionId')
 
@@ -1346,6 +1368,11 @@ async function actionDeleteTransaction(userId: string, params: Params) {
       break
     }
   }
+
+  // Tombstone AVANT le delete : si l'enregistrement echoue, on ne supprime pas
+  // (sinon la ligne reviendrait par la sync).
+  const ownHash = data.tx_hash as string | null
+  if (ownHash !== null) await recordDeletedHashes(userId, [ownHash])
 
   const { error: delErr } = await admin
     .from('transactions')
@@ -1507,28 +1534,48 @@ async function actionDeleteAccount(userId: string, params: Params) {
 
   await aggMarkStale(admin, userId)
 
-  for (const tx of transactions) {
-    if (ownIdSet.has(tx.id)) continue
-    if (!tx.transferGroupId || !ownGroups.has(tx.transferGroupId)) continue
-    const { id, ...payload } = tx
-    await updateTx(userId, id, { ...payload, transferGroupId: null })
-  }
-
-  for (let i = 0; i < ownIds.length; i += 100) {
-    const { error } = await admin
+  try {
+    // Tombstones de dedup pour les imports bancaires du compte : sans eux, si
+    // le compte etait re-lie plus tard, sync-bank re-importerait les lignes.
+    const { data: hashRows, error: hashErr } = await admin
       .from('transactions')
+      .select('id, tx_hash')
+      .eq('user_id', userId)
+      .in('id', ownIds.length > 0 ? ownIds : ['00000000-0000-0000-0000-000000000000'])
+      .not('tx_hash', 'is', null)
+    if (hashErr) throw new ApiError(500, 'lecture transactions impossible')
+    await recordDeletedHashes(userId, (hashRows ?? []).map((r) => r.tx_hash as string))
+
+    for (const tx of transactions) {
+      if (ownIdSet.has(tx.id)) continue
+      if (!tx.transferGroupId || !ownGroups.has(tx.transferGroupId)) continue
+      const { id, ...payload } = tx
+      await updateTx(userId, id, { ...payload, transferGroupId: null })
+    }
+
+    for (let i = 0; i < ownIds.length; i += 100) {
+      const { error } = await admin
+        .from('transactions')
+        .delete()
+        .eq('user_id', userId)
+        .in('id', ownIds.slice(i, i + 100))
+      if (error) throw new ApiError(500, 'suppression transactions impossible')
+    }
+
+    const { error } = await admin
+      .from('accounts')
       .delete()
       .eq('user_id', userId)
-      .in('id', ownIds.slice(i, i + 100))
-    if (error) throw new ApiError(500, 'suppression transactions impossible')
+      .eq('id', accountId)
+    if (error) throw new ApiError(500, 'suppression comptes impossible')
+  } finally {
+    // Re-invalide APRES les ecritures brutes (qui ne bumpent pas la fence rev) :
+    // un recompute lance en concurrence pendant la suppression aurait charge un
+    // snapshot a moitie supprime et bascule 'ready' dessus — supprimer le
+    // marqueur ici empoisonne son CAS final (ligne disparue -> bascule echoue).
+    // Couvre aussi les chemins d'erreur (etat partiel jamais laisse sous ready).
+    await aggMarkStale(admin, userId).catch(() => {})
   }
-
-  const { error } = await admin
-    .from('accounts')
-    .delete()
-    .eq('user_id', userId)
-    .eq('id', accountId)
-  if (error) throw new ApiError(500, 'suppression comptes impossible')
 
   const keys = await getKeys()
   await scheduleAggRebuild(userId, keys)

@@ -85,6 +85,11 @@ export function TransactionForm({
   const categories = useCategoriesList()
   const groups = useGroupsList()
 
+  // Edition d'une transaction ANTERIEURE a MIN_DATE (historique YNAB, import
+  // bancaire profond) : sa propre date elargit la borne basse, sinon toute
+  // sauvegarde serait impossible ("date invalide" sans issue).
+  const minDate = initial.date && initial.date < MIN_DATE ? initial.date : MIN_DATE
+
   const [kind, setKind] = useState<TxKind>(initial.kind)
   const [amount, setAmount] = useState(initial.amount)
   const [label, setLabel] = useState(initial.label)
@@ -110,8 +115,8 @@ export function TransactionForm({
       setError('Le libellé est obligatoire.')
       return
     }
-    if (!date || date < MIN_DATE || date > TODAY) {
-      setError("La date doit être comprise entre février 2026 et aujourd'hui.")
+    if (!date || date < minDate || date > TODAY) {
+      setError("La date doit être antérieure ou égale à aujourd'hui.")
       return
     }
     setError(null)
@@ -212,7 +217,7 @@ export function TransactionForm({
             <Input
               type="date"
               value={date}
-              min={MIN_DATE}
+              min={minDate}
               max={TODAY}
               onChange={(e) => setDate(e.target.value)}
             />

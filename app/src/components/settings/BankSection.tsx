@@ -228,7 +228,13 @@ export function BankSection() {
             </p>
             <Button
               variant="outline"
-              onClick={() => void handleConnect(list[0]?.institution ?? '')}
+              // Reconnecte la connexion QUI EXPIRE (pas la premiere de la liste :
+              // avec deux banques, le flow partait vers la mauvaise).
+              onClick={() => {
+                const stale = list.find((c) => c.status === 'expired')
+                  ?? list.find((c) => c.status === 'expiring')
+                void handleConnect(stale?.institution ?? list[0]?.institution ?? '')
+              }}
               disabled={connecting}
             >
               {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Reconnecter'}

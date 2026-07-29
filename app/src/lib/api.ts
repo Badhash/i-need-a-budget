@@ -11,7 +11,9 @@ const ANON_KEY = SUPABASE_ANON_KEY
 // Actions de LECTURE (aucune ecriture DB, donc aucun signal Realtime provoque).
 // Tout le reste est une ecriture : on horodate l'ecriture locale pour que la
 // reconciliation Realtime la reconnaisse comme redondante (cf. realtimeGate).
-const READ_ACTION = /^(get|list|export)|^bootstrap$/
+// ^bootstrap couvre bootstrap ET bootstrapFull (le demarrage de l'app n'est pas
+// une ecriture : sans ca, chaque ouverture ouvrait la fenetre de silence 30 s).
+const READ_ACTION = /^(get|list|export|bootstrap)/
 
 class ApiError extends Error {
   constructor(

@@ -143,21 +143,31 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
             {/* Mobile : fond transparent cliquable pour fermer (le mousedown ne
                 se declenche pas de facon fiable au toucher hors du panneau). */}
             {!isDesktop && (
-              <div className="fixed inset-0 z-[59]" onClick={() => setOpen(false)} aria-hidden />
+              <div
+                data-inab-popover=""
+                className="fixed inset-0 z-[59]"
+                style={{ pointerEvents: 'auto' }}
+                onClick={() => setOpen(false)}
+                aria-hidden
+              />
             )}
           <div
             ref={panelRef}
-            style={
-              isDesktop
-                ? { position: 'fixed', top: pos!.top, left: pos!.left, width: PANEL_WIDTH, maxHeight: pos!.maxHeight }
+            data-inab-popover=""
+            style={{
+              // pointerEvents force : dans un Dialog Radix modal, body passe en
+              // pointer-events:none et un panneau portalise serait inerte.
+              pointerEvents: 'auto',
+              ...(isDesktop
+                ? { position: 'fixed' as const, top: pos!.top, left: pos!.left, width: PANEL_WIDTH, maxHeight: pos!.maxHeight }
                 : {
-                    position: 'fixed',
+                    position: 'fixed' as const,
                     left: VIEWPORT_MARGIN,
                     right: VIEWPORT_MARGIN,
                     bottom: keyboardInset + VIEWPORT_MARGIN,
                     maxHeight: Math.max(200, window.innerHeight - keyboardInset - 2 * VIEWPORT_MARGIN),
-                  }
-            }
+                  }),
+            }}
             className="z-[60] flex flex-col rounded-xl border border-line bg-surface p-1 shadow-card"
           >
             <div className="relative p-1">

@@ -157,7 +157,15 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
     },
     // Suppression deja refletee de facon optimiste : reconciliation en fond via
     // le signal Realtime coalesce (pas d'invalidation directe qui rechargerait
-    // toute la table chiffree).
+    // toute la table chiffree). EXCEPTION virement : le serveur supprime ou
+    // delie aussi le MIROIR (autre compte) que le patch optimiste ne connait
+    // pas — sans refetch il resterait affiche comme un virement orphelin.
+    onSuccess: () => {
+      if (isTransfer) {
+        void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+        void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+      }
+    },
   })
   // Confirmation en deux temps dans le menu : premier clic arme, second supprime.
   const [confirmDelete, setConfirmDelete] = useState(false)
