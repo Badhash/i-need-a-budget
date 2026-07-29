@@ -137,7 +137,9 @@ function EditAccountDialog({
       await invalidateAll()
       onOpenChange(false)
     },
-    onError: () => setError('Saisissez un solde valide, par exemple -1234,56.'),
+    // La validation de saisie se fait AVANT mutate : ici c'est forcement le
+    // reseau/serveur, ne pas accuser la saisie.
+    onError: () => setError("Ajustement impossible pour le moment. Réessayez."),
   })
 
   const remove = useMutation({

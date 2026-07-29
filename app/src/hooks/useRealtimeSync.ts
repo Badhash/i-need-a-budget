@@ -64,12 +64,22 @@ export function useRealtimeSync() {
       // de realtime.messages (sinon le join est refuse silencieusement).
       await supabase.realtime.setAuth(session.access_token)
 
+      // Un broadcast emis PENDANT une coupure websocket est perdu (pas de
+      // rejeu cote Realtime) : au re-abonnement apres la premiere connexion,
+      // on force une reconciliation de rattrapage, sinon un changement externe
+      // (sync bancaire pendant la coupure) resterait invisible indefiniment.
+      let joinedOnce = false
       channel = supabase
         .channel(`changes:${session.user.id}`, { config: { private: true } })
         .on('broadcast', { event: 'db-change' }, () => {
           scheduleInvalidate()
         })
-        .subscribe()
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            if (joinedOnce) scheduleInvalidate()
+            joinedOnce = true
+          }
+        })
     })()
 
     return () => {
