@@ -9,13 +9,14 @@ import {
   useReactTable,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, Plus, Search, Sprout, TrendingUp, Wallet, X } from 'lucide-react'
+import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, Plus, Search, Sprout, TrendingUp, Wallet, Wand2, X } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
 import { apiCategorize, countsAsUncategorized, patchUncategorizedCount, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
+import { useApplyRules, useRules } from '@/lib/rules'
 import { fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
@@ -639,6 +640,35 @@ export function TransactionsPage() {
     [txs],
   )
 
+  // Categorisation automatique : meme action que la page Regles, proposee ici
+  // parce que c'est ici qu'on constate le retard. Sans regle definie, l'action
+  // ne peut rien faire : on n'affiche alors pas la banniere du tout.
+  const { data: rules } = useRules()
+  const applyRules = useApplyRules()
+  const applied = applyRules.data
+  const ruleCount = rules?.length ?? 0
+  const showApplyBanner = ruleCount > 0 && (uncatCount > 0 || applyRules.isSuccess)
+  const applyTitle = applyRules.isError
+    ? 'La catégorisation automatique a échoué.'
+    : applyRules.isSuccess
+      ? applied === 0
+        ? 'Aucune transaction ne correspond à tes règles.'
+        : `${applied} transaction${applied === 1 ? '' : 's'} catégorisée${applied === 1 ? '' : 's'}.`
+      : `${uncatCount} transaction${uncatCount === 1 ? '' : 's'} à catégoriser`
+  const applySub = applyRules.isError
+    ? (applyRules.error?.message ?? 'Réessaie dans un instant.')
+    : applyRules.isSuccess && applied === 0
+      ? 'Ajuste tes règles dans Réglages, onglet Règles.'
+      : `${ruleCount} règle${ruleCount === 1 ? '' : 's'} de catégorisation active${ruleCount === 1 ? '' : 's'}, évaluées par ordre de priorité.`
+  // La banniere prend la couleur de son message : ambre tant qu'il reste du
+  // travail, vert quand des transactions viennent d'etre traitees, rouge en cas
+  // d'echec.
+  const applyTone = applyRules.isError
+    ? 'danger'
+    : applyRules.isSuccess && (applied ?? 0) > 0
+      ? 'success'
+      : 'warning'
+
   // Pagination : remise a la premiere page a chaque changement de filtre.
   const [page, setPage] = useState(0)
   useEffect(() => {
@@ -719,6 +749,40 @@ export function TransactionsPage() {
           Ajouter
         </Button>
       </div>
+
+      {showApplyBanner && (
+        <Card
+          className={cn(
+            'flex flex-wrap items-center gap-x-3.5 gap-y-3 px-4 py-3.5',
+            applyTone === 'danger' && 'border-danger/30 bg-danger/[0.06]',
+            applyTone === 'success' && 'border-success/30 bg-success/[0.06]',
+            applyTone === 'warning' && 'border-warning/30 bg-warning/[0.06]',
+          )}
+        >
+          <span
+            className={cn(
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
+              applyTone === 'danger' && 'bg-danger/15 text-danger',
+              applyTone === 'success' && 'bg-success/15 text-success',
+              applyTone === 'warning' && 'bg-warning/15 text-warning',
+            )}
+          >
+            <Wand2 className="h-[18px] w-[18px]" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[14px] font-medium text-ink">{applyTitle}</p>
+            <p className="text-[13px] leading-snug text-soft">{applySub}</p>
+          </div>
+          <Button
+            onClick={() => applyRules.mutate()}
+            disabled={applyRules.isPending || uncatCount === 0}
+            className="w-full shrink-0 sm:w-auto"
+          >
+            <Wand2 className="h-4 w-4" />
+            {applyRules.isPending ? 'Catégorisation…' : 'Catégoriser automatiquement'}
+          </Button>
+        </Card>
+      )}
 
       {rows.length === 0 ? (
         <Card>

@@ -2,7 +2,13 @@
 // createRule / updateRule / deleteRule / applyRulesToUncategorized). Aucune
 // lecture directe des tables : tout passe par apiCall.
 
-import { useQuery, type UseQueryResult } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from '@tanstack/react-query'
 import { apiCall } from '@/lib/api'
 
 export interface RuleMatcher {
@@ -80,4 +86,28 @@ export async function apiDeleteRule(id: string): Promise<void> {
 export async function apiApplyRules(): Promise<number> {
   const { categorized } = await apiCall<{ categorized: number }>('applyRulesToUncategorized')
   return categorized
+}
+
+/**
+ * Mutation partagee par la page Regles et la page Transactions : une seule
+ * definition, donc un seul comportement.
+ *
+ * Categoriser en lot change des transactions dont on ne connait pas la liste
+ * cote client : impossible de patcher le cache en optimiste comme pour une
+ * categorisation ligne a ligne. On invalide donc les 4 clefs reellement
+ * touchees (liste, activite des enveloppes, rapports, compteur « A
+ * categoriser »). Refetch assume : l'action est rare et explicitement
+ * declenchee, contrairement aux micro-actions qui restent optimistes.
+ */
+export function useApplyRules(): UseMutationResult<number, Error, void> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiApplyRules(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      void queryClient.invalidateQueries({ queryKey: ['budget'] })
+      void queryClient.invalidateQueries({ queryKey: ['reports'] })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
+  })
 }

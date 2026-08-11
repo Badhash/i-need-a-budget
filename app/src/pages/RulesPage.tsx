@@ -3,11 +3,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ArrowRight, ChevronDown, ChevronUp, Pencil, Trash2, Wand2 } from 'lucide-react'
 import { useCategoriesMap, useGroupsMap } from '@/lib/data'
 import {
-  apiApplyRules,
   apiCreateRule,
   apiDeleteRule,
   apiUpdateRule,
   opLabel,
+  useApplyRules,
   useRules,
   type Rule,
   type RuleMatcher,
@@ -131,7 +131,6 @@ export function RulesPage() {
   const queryClient = useQueryClient()
   const { data: rules, isError: rulesError, refetch: refetchRules } = useRules()
   const [editing, setEditing] = useState<Rule | null>(null)
-  const [applyResult, setApplyResult] = useState<number | null>(null)
   const [formKey, setFormKey] = useState(0)
   const [reorderError, setReorderError] = useState(false)
 
@@ -145,12 +144,16 @@ export function RulesPage() {
   const nextPriority =
     rules && rules.length > 0 ? Math.max(...rules.map((r) => r.priority)) + 1 : 1
 
+  // Meme mutation que le bouton de la page Transactions (cf. lib/rules).
+  const applyMut = useApplyRules()
+  const applyResult = applyMut.data ?? null
+
   const createMut = useMutation({
     mutationFn: (input: { matcher: RuleMatcher; categoryId: string }) =>
       apiCreateRule({ matcher: input.matcher, categoryId: input.categoryId, priority: nextPriority }),
     onSuccess: () => {
       setFormKey((k) => k + 1)
-      setApplyResult(null)
+      applyMut.reset()
       invalidateRules()
     },
   })
@@ -187,19 +190,6 @@ export function RulesPage() {
     onError: () => {
       setReorderError(true)
       queryClient.invalidateQueries({ queryKey: ['rules'] })
-    },
-  })
-
-  const applyMut = useMutation({
-    mutationFn: () => apiApplyRules(),
-    onSuccess: (categorized) => {
-      setApplyResult(categorized)
-      // Appliquer les regles categorise des transactions : la liste, l'activite
-      // des enveloppes, les rapports et le compteur "a categoriser" changent.
-      queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      queryClient.invalidateQueries({ queryKey: ['budget'] })
-      queryClient.invalidateQueries({ queryKey: ['reports'] })
-      queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     },
   })
 
