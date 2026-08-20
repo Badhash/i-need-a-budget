@@ -21,7 +21,7 @@ export interface TaxonomyLite {
   groupColor: Map<string, CatColor>
 }
 
-interface MonthPoint {
+export interface MonthPoint {
   month: string
   income: number
   spending: number

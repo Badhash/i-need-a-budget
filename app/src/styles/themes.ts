@@ -77,6 +77,15 @@ export interface ChartPalette {
   danger: string
   soft: string
   grid: string
+  /**
+   * Paire dediee au widget Entrees vs Depenses (barres appariees). Distincte de
+   * success/danger : la separation daltonisme (deutan/protan) exige un ecart de
+   * luminosite que la paire semantique n'a pas. Validee via le validateur
+   * dataviz : light #217C4E/#FF8A7A (dE deutan 14.2), dark #33A96D/#B8433A
+   * (dE 10.6) — memes valeurs pour les trois themes (semantique, pas accent).
+   */
+  flowIn: string
+  flowOut: string
   cats: Record<CatColor, string>
 }
 
@@ -88,6 +97,8 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
       danger: '#e5484d',
       soft: '#8a847b',
       grid: '#ebe8e2',
+      flowIn: '#217C4E',
+      flowOut: '#FF8A7A',
       cats: {
         blue: '#3b6fb5',
         green: '#1f9d5b',
@@ -103,6 +114,8 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
       danger: '#f2555a',
       soft: '#9e9890',
       grid: '#302e2b',
+      flowIn: '#33A96D',
+      flowOut: '#B8433A',
       cats: {
         blue: '#8fb8e8',
         green: '#7cd9a5',
@@ -120,6 +133,8 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
       danger: '#e0424c',
       soft: '#687d75',
       grid: '#deebe5',
+      flowIn: '#217C4E',
+      flowOut: '#FF8A7A',
       cats: {
         blue: '#33689c',
         green: '#178a50',
@@ -135,6 +150,8 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
       danger: '#f05c61',
       soft: '#8da199',
       grid: '#283732',
+      flowIn: '#33A96D',
+      flowOut: '#B8433A',
       cats: {
         blue: '#8cb6e6',
         green: '#7bdba4',
@@ -152,6 +169,8 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
       danger: '#e5484d',
       soft: '#746f84',
       grid: '#e7e4f0',
+      flowIn: '#217C4E',
+      flowOut: '#FF8A7A',
       cats: {
         blue: '#3d6bc0',
         green: '#1e9a58',
@@ -167,6 +186,8 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
       danger: '#f25a64',
       soft: '#9691a8',
       grid: '#2d2a3c',
+      flowIn: '#33A96D',
+      flowOut: '#B8433A',
       cats: {
         blue: '#93b4f2',
         green: '#7adfac',

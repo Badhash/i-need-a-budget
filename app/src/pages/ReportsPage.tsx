@@ -22,6 +22,7 @@ import { computeAnalytics, type Analytics, type TaxonomyLite } from '@/lib/analy
 import { fmtEUR, fmtMonthLong, fmtMonthShort, fmtPercent, CURRENT_MONTH, TODAY } from '@/lib/format'
 import type { ReportsData } from '@/lib/reports'
 import { TrendBadge, WidgetCard } from '@/components/reports/WidgetCard'
+import { IncomeExpenseWidget } from '@/components/reports/IncomeExpenseWidget'
 import { Amount } from '@/components/shared/Amount'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Card } from '@/components/ui/card'
@@ -254,56 +255,6 @@ function SavingsCoach({ a }: { a: Analytics }) {
 }
 
 // Depense mois par mois sur 12 mois glissants (revenus vs depenses).
-function MonthlyTrend({ a }: { a: Analytics }) {
-  const palette = useChartPalette()
-  const chartData = a.monthly.map((m) => ({
-    name: fmtMonthShort(m.month),
-    Revenus: m.income,
-    Dépenses: m.spending,
-  }))
-  return (
-    <WidgetCard question="Revenus contre dépenses, sur 12 mois" className="lg:col-span-2">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <div>
-          <p className="text-[12.5px] text-soft">Dépense moyenne (mois complets)</p>
-          <Amount cents={a.avgSpending} className="text-[22px] font-semibold" />
-        </div>
-        <div className="text-right">
-          <p className="text-[12.5px] text-soft">Ce mois-ci</p>
-          <Amount cents={a.currentSpending} className="text-[22px] font-semibold" />
-        </div>
-      </div>
-      <div className="h-44">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chartData} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
-            <defs>
-              <linearGradient id="trend-income" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={palette.success} stopOpacity={0.3} />
-                <stop offset="100%" stopColor={palette.success} stopOpacity={0.02} />
-              </linearGradient>
-              <linearGradient id="trend-spend" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={palette.accent} stopOpacity={0.28} />
-                <stop offset="100%" stopColor={palette.accent} stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
-            <XAxis
-              dataKey="name"
-              axisLine={false}
-              tickLine={false}
-              tick={{ fill: palette.soft, fontSize: 11 }}
-              dy={6}
-              interval="preserveStartEnd"
-            />
-            <Tooltip content={<ChartTooltip />} />
-            <Area type="monotone" dataKey="Revenus" stroke={palette.success} strokeWidth={2} fill="url(#trend-income)" />
-            <Area type="monotone" dataKey="Dépenses" stroke={palette.accent} strokeWidth={2} fill="url(#trend-spend)" />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-    </WidgetCard>
-  )
-}
-
 // Patrimoine (valeur nette) mois par mois + ventilation par compte.
 function NetWorthWidget({ a }: { a: Analytics }) {
   const palette = useChartPalette()
@@ -642,7 +593,8 @@ function ReportsSkeleton() {
   )
 }
 
-// MOBILE : volontairement minimal. L'essentiel en un coup d'oeil, aucun graphe.
+// MOBILE : volontairement minimal. L'essentiel en un coup d'oeil, un seul
+// graphe (Entrees vs Depenses, demande explicitement sur mobile).
 function MobileReports({ a, report }: { a: Analytics | null; report: ReportsData | undefined }) {
   const palette = useChartPalette()
   if (!a) return <ReportsSkeleton />
@@ -689,6 +641,8 @@ function MobileReports({ a, report }: { a: Analytics | null; report: ReportsData
         </div>
         {nwPrev !== 0 && <TrendBadge delta={nwDelta} label="vs mois dernier" />}
       </Card>
+
+      <IncomeExpenseWidget monthly={a.monthly} months={6} />
 
       {top3.length > 0 && (
         <Card className="flex flex-col gap-3 p-5">
@@ -772,7 +726,7 @@ function DesktopReports({ a, report }: { a: Analytics | null; report: ReportsDat
 
       <div className="grid items-start gap-5 lg:grid-cols-2">
         <NetWorthWidget a={a} />
-        <MonthlyTrend a={a} />
+        <IncomeExpenseWidget monthly={a.monthly} months={12} className="lg:col-span-2" />
         {report && <SpendingDonut data={report} />}
         <WeekdaySpend a={a} />
         <CategoryTable a={a} />
