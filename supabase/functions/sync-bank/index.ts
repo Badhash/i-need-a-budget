@@ -1221,6 +1221,10 @@ async function syncUser(
 
   for (const conn of connectionsToSync) {
     let importedForConn = 0
+    // Contexte de diagnostic : compte EB en cours de poll, pour que le journal
+    // d'erreur identifie la banque, le compte et la fenetre interrogee (une
+    // erreur ASPSP nue ne permet pas de savoir laquelle des connexions echoue).
+    let currentAccountLabel: string | null = null
     try {
       const dateFrom = dateFromByConn.get(conn.id)!
 
@@ -1230,6 +1234,7 @@ async function syncUser(
         // liaison (providerAccountUid) se fait cote /api.
         if (!localAccount) continue
         linkedCount += 1
+        currentAccountLabel = ebAccount.product ?? ebAccount.name ?? localAccount.name
 
         // Pagination EB via continuation_key. Bornee pour eviter toute boucle
         // infinie : nombre de pages plafonne et arret si la cle se repete.
@@ -1312,8 +1317,18 @@ async function syncUser(
       })
     } catch (err) {
       // Echec d'une connexion : on journalise et on passe a la suivante, sans
-      // interrompre les autres connexions/utilisateurs. Message statique.
-      const message = err instanceof ApiError ? err.message : 'synchronisation echouee'
+      // interrompre les autres connexions/utilisateurs. Le message est prefixe
+      // par la banque, le compte et la borne date_from : sans ce contexte, deux
+      // connexions produisent des erreurs indistinguables dans le journal.
+      const base = err instanceof ApiError ? err.message : 'synchronisation echouee'
+      const context = [
+        conn.payload.institution,
+        currentAccountLabel,
+        `depuis ${dateFromByConn.get(conn.id) ?? '?'}`,
+      ]
+        .filter(Boolean)
+        .join(', ')
+      const message = `[${context}] ${base}`
       errors.push(message)
       await logSyncSafe(userId, {
         connectionId: conn.id,
