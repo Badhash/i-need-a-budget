@@ -702,11 +702,15 @@ async function loadRecentSyncLogs(
     .select('id, enc_payload:enc_b64, run_at')
     .eq('user_id', userId)
     .order('run_at', { ascending: false })
-    // 50 suffit largement : on ne cherche que la derniere sync `ok` par
-    // connexion et le tri run_at desc garantit que la premiere correspondance
-    // gagne. Une purge pg_cron borne par ailleurs la croissance de la table
-    // (voir supabase/migrations-manual/F-purge-sync-logs.sql).
-    .limit(50)
+    // On ne cherche que la derniere sync `ok` par connexion et le tri run_at
+    // desc garantit que la premiere correspondance gagne. La borne doit couvrir
+    // toute la retention (purge pg_cron > 90 j, voir
+    // supabase/migrations-manual/F-purge-sync-logs.sql) : 2 runs/jour x N
+    // connexions x 90 j. Avec 50 lignes, une connexion en panne depuis ~12 jours
+    // perdait son dernier succes et retombait sur la date d'activation, ce qui
+    // elargissait la fenetre date_from a chaque run (et aggravait le refus
+    // ASPSP). Les lignes sont minuscules : l'egress reste negligeable.
+    .limit(800)
   if (error) throw new ApiError(500, 'lecture sync_logs impossible')
   const out: { runAt: string; payload: SyncLogPayload }[] = []
   for (const row of data ?? []) {
