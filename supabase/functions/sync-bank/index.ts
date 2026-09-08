@@ -508,6 +508,25 @@ async function ebFetch(
   return res.json()
 }
 
+// Etat d'une session EB (GET /sessions/{id}) resume en une phrase pour les
+// messages d'erreur : statut et fin de validite de l'acces. Ne leve jamais.
+async function describeEbSession(sessionId: string | undefined): Promise<string | null> {
+  if (!sessionId) return null
+  try {
+    const session = (await ebFetch(`/sessions/${encodeURIComponent(sessionId)}`)) as {
+      status?: string
+      access?: { valid_until?: string }
+    }
+    const parts = [
+      `session EB ${session.status ?? 'statut inconnu'}`,
+      session.access?.valid_until ? `valide jusqu'au ${session.access.valid_until.slice(0, 10)}` : null,
+    ].filter(Boolean)
+    return parts.join(', ')
+  } catch (err) {
+    return `session EB illisible : ${err instanceof ApiError ? err.message.slice(0, 120) : 'erreur'}`
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Regles de categorisation
 // ---------------------------------------------------------------------------
@@ -1332,7 +1351,12 @@ async function syncUser(
       ]
         .filter(Boolean)
         .join(', ')
-      const message = `[${context}] ${base}`
+      // Diagnostic supplementaire sur un refus EB/ASPSP : l'etat reel de la
+      // session cote Enable Banking (AUTHORIZED, REVOKED, EXPIRED...) permet de
+      // distinguer un consentement mort d'un incident banque. Metadonnee d'API
+      // uniquement, aucune donnee de compte. Best-effort.
+      const diag = err instanceof ApiError ? await describeEbSession(conn.payload.sessionId) : null
+      const message = `[${context}] ${base}${diag ? ` (${diag})` : ''}`
       errors.push(message)
       await logSyncSafe(userId, {
         connectionId: conn.id,
