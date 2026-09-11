@@ -6,7 +6,7 @@ import { resolveDark, useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { supabase } from '@/lib/supabase'
 import { addMonths, fmtEUR, fmtMonthTitle, MAX_MONTH, MIN_MONTH } from '@/lib/format'
-import { useBudgetMonth } from '@/lib/data'
+import { useBootstrap, useBudgetMonth } from '@/lib/data'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -21,6 +21,9 @@ function MonthSelector() {
   const month = useUiStore((s) => s.month)
   const shiftMonth = useUiStore((s) => s.shiftMonth)
   const resetMonth = useUiStore((s) => s.resetMonth)
+  // Rien n'existe avant le mois de depart du budget (« Nouveau budget »).
+  const startMonth = useBootstrap().data?.budgetStartMonth ?? null
+  const minMonth = startMonth && startMonth > MIN_MONTH ? startMonth : MIN_MONTH
 
   return (
     <div className="flex items-center gap-0.5 rounded-xl border border-line bg-surface p-0.5">
@@ -28,7 +31,7 @@ function MonthSelector() {
         variant="ghost"
         size="iconSm"
         onClick={() => shiftMonth(-1)}
-        disabled={addMonths(month, -1) < MIN_MONTH}
+        disabled={addMonths(month, -1) < minMonth}
         aria-label="Mois précédent"
       >
         <ChevronLeft className="h-4 w-4" />

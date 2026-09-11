@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearch } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -81,8 +81,8 @@ function useCategorize() {
       const prev = snapshot?.find((t) => t.id === txId)
       let countDelta = 0
       if (prev) {
-        const before = countsAsUncategorized(prev.categoryId, prev.transferGroupId, prev.date)
-        const after = countsAsUncategorized(categoryId, prev.transferGroupId, prev.date)
+        const before = countsAsUncategorized(queryClient, prev)
+        const after = countsAsUncategorized(queryClient, { ...prev, categoryId })
         countDelta = (after ? 1 : 0) - (before ? 1 : 0)
         patchUncategorizedCount(queryClient, countDelta)
       }
@@ -142,9 +142,7 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
       const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
       // Si la ligne supprimee comptait dans le badge, on decremente en optimiste.
-      const countDelta = countsAsUncategorized(row.tx.categoryId, row.tx.transferGroupId, row.tx.date)
-        ? -1
-        : 0
+      const countDelta = countsAsUncategorized(queryClient, row.tx) ? -1 : 0
       patchUncategorizedCount(queryClient, countDelta)
       queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
         old?.filter((t) => t.id !== row.tx.id),
@@ -248,6 +246,12 @@ function CategoryBadge({ row }: { row: TxRow }) {
         Transfert
       </Badge>
     )
+  }
+
+  // Compte de suivi (hors budget) : ses mouvements ne se categorisent pas, ils
+  // n'entrent ni dans les enveloppes ni dans le Pret a assigner.
+  if (row.account && !row.account.onBudget) {
+    return <Badge variant="neutral">Hors budget</Badge>
   }
 
   // after:-inset-2 : etend la zone tactile sans grossir la pastille
@@ -599,6 +603,14 @@ export function TransactionsPage() {
     setOnlyUncat(false)
   }
 
+  // Non categorisee au sens du badge : compte budget, hors transfert. Les
+  // comptes de suivi ne se categorisent pas.
+  const isUncat = useCallback(
+    (t: Transaction) =>
+      !t.categoryId && !t.transferGroupId && (accountById.get(t.accountId)?.onBudget ?? true),
+    [accountById],
+  )
+
   // Filtres appliques a TOUTES les transactions (tous mois confondus), tri
   // anti-chronologique, puis pagination. Le filtre mois se base sur le mois
   // comptable de la transaction (date -> YYYY-MM), coherent avec l'activite du
@@ -611,7 +623,7 @@ export function TransactionsPage() {
       .filter((t) => accountFilter === 'all' || t.accountId === accountFilter)
       .filter((t) => categoryFilter === 'all' || t.categoryId === categoryFilter)
       .filter((t) => monthFilter === 'all' || monthOf(t.date) === monthFilter)
-      .filter((t) => !onlyUncat || (!t.categoryId && !t.transferGroupId))
+      .filter((t) => !onlyUncat || isUncat(t))
       .map((t) => toRow(t, maps))
       .filter((r): r is TxRow => r !== null)
       .filter(
@@ -633,12 +645,10 @@ export function TransactionsPage() {
     categoryFilter,
     monthFilter,
     onlyUncat,
+    isUncat,
   ])
 
-  const uncatCount = useMemo(
-    () => (txs ?? []).filter((t) => !t.categoryId && !t.transferGroupId).length,
-    [txs],
-  )
+  const uncatCount = useMemo(() => (txs ?? []).filter(isUncat).length, [txs, isUncat])
 
   // Categorisation automatique : meme action que la page Regles, proposee ici
   // parce que c'est ici qu'on constate le retard. Sans regle definie, l'action

@@ -12,7 +12,14 @@
 //     (packages/engine filtre lui-meme : hors-budget, transferts et categoryId
 //     null n'impactent ni activity ni RTA).
 //   - uncat_counts       : nombre de transactions "a categoriser" par mois
-//     (categoryId null, hors transfert), tous comptes — pour le badge de la nav.
+//     (categoryId null, hors transfert, compte on-budget) — pour le badge de
+//     la nav. Les comptes de suivi ne se categorisent pas.
+//
+// Nouveau budget (REF M, user_settings.budgetStartMonth) : les transactions
+// on-budget ANTERIEURES au mois de depart ne produisent ni activity ni uncat ;
+// leur somme brute (transferts compris) est portee par UNE ligne de rollup
+// speciale (categoryId OPENING_CATEGORY, mois = mois de depart, activity =
+// solde de depart) que /api retraduit en solde de depart pour le moteur.
 //
 // Un marqueur aggregate_state (1 ligne / user) porte l'etat : payload chiffre
 // { version, status: 'ready' | 'building' } + colonne rev en clair (compteur de
@@ -56,10 +63,14 @@ import {
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
+import { loadUserSettings } from './settings.ts'
 
 // Version de la LOGIQUE d'agregation. La bumper force un recompute : un
 // marqueur d'une version anterieure est traite comme "non pret" (fallback).
-const AGG_VERSION = 1
+const AGG_VERSION = 2
+
+/** Pseudo-categorie du rollup « solde de depart » (jamais un UUID de categorie). */
+export const OPENING_CATEGORY = '__opening__'
 const READ_PAGE = 1000
 const INSERT_CHUNK = 500
 const MAX_CAS_ATTEMPTS = 5
@@ -455,30 +466,42 @@ async function readAssignedAmount(
 }
 
 // Contribution d'une transaction aux agregats (sign = +1 ajout, -1 retrait).
+interface AggContext {
+  onBudget: Set<string>
+  startMonth: string | null
+}
+
 async function applyContribution(
   admin: Db,
   keys: CryptoKeys,
   userId: string,
-  onBudget: Set<string>,
+  ctx: AggContext,
   sign: number,
   tx: AggTx,
 ): Promise<void> {
   // Solde : TOUTES les transactions (transferts, hors-budget, a categoriser).
   await adjustBalance(admin, keys, userId, tx.accountId, sign * tx.amount)
 
+  // Comptes de suivi : solde uniquement (ni enveloppes, ni badge).
+  if (!ctx.onBudget.has(tx.accountId)) return
+
+  // Avant le depart du budget : tout est gele dans le solde de depart
+  // (transferts compris : ils ont fait le solde des comptes budget).
+  if (ctx.startMonth !== null && tx.bookingMonth < ctx.startMonth) {
+    await adjustRollup(admin, keys, userId, OPENING_CATEGORY, ctx.startMonth, sign * tx.amount)
+    return
+  }
+
   if (tx.transferGroupId) return // transfert : neutre pour activity et uncat
 
   if (tx.categoryId == null) {
-    // A categoriser : compte pour le badge (tous comptes, cf. bootstrap).
+    // A categoriser : compte pour le badge (comptes budget, cf. bootstrap).
     await adjustUncat(admin, keys, userId, tx.bookingMonth, sign)
     return
   }
-  // Categorisee et hors transfert : activity uniquement si compte on-budget
-  // (le moteur ignore les comptes de suivi). Vaut pour categorie de revenus
+  // Categorisee et hors transfert : activity. Vaut pour categorie de revenus
   // (inflow) comme pour categorie d'enveloppe (depense).
-  if (onBudget.has(tx.accountId)) {
-    await adjustRollup(admin, keys, userId, tx.categoryId, tx.bookingMonth, sign * tx.amount)
-  }
+  await adjustRollup(admin, keys, userId, tx.categoryId, tx.bookingMonth, sign * tx.amount)
 }
 
 // ---------------------------------------------------------------------------
@@ -523,14 +546,18 @@ export async function aggBegin(
   const fenceRev = await bumpStateRev(admin, userId)
   if (fenceRev === null) return null // marqueur disparu : agregats invalides
   if (state.payload.version !== AGG_VERSION || state.payload.status !== 'ready') return null
-  const onBudget = await loadOnBudget(admin, keys, userId)
+  const [onBudget, settings] = await Promise.all([
+    loadOnBudget(admin, keys, userId),
+    loadUserSettings(admin, keys, userId),
+  ])
+  const ctx: AggContext = { onBudget, startMonth: settings.budgetStartMonth }
   return {
     fenceRev,
     batch: {
-      applyTx: (sign, tx) => applyContribution(admin, keys, userId, onBudget, sign, tx),
+      applyTx: (sign, tx) => applyContribution(admin, keys, userId, ctx, sign, tx),
       replaceTx: async (oldTx, newTx) => {
-        await applyContribution(admin, keys, userId, onBudget, -1, oldTx)
-        await applyContribution(admin, keys, userId, onBudget, +1, newTx)
+        await applyContribution(admin, keys, userId, ctx, -1, oldTx)
+        await applyContribution(admin, keys, userId, ctx, +1, newTx)
       },
       setAssigned: (categoryId, month) =>
         adjustRollup(admin, keys, userId, categoryId, month, 0, () =>
@@ -653,6 +680,8 @@ export interface AggSourceData {
   accounts: { id: string; onBudget: boolean }[]
   transactions: AggTx[]
   assignments: { categoryId: string; month: string; amount: number }[]
+  /** Mois de depart du budget (REF M), null = depuis l'origine. */
+  startMonth: string | null
 }
 
 // Pose (ou bascule) le marqueur en 'building' et renvoie le rev de garde qui
@@ -744,19 +773,29 @@ export async function aggRecompute(
     }
     return r
   }
+  const start = data.startMonth
+  const frozen = (t: AggTx) => start !== null && t.bookingMonth < start
   for (const t of data.transactions) {
+    if (!onBudget.has(t.accountId)) continue
+    if (frozen(t)) {
+      // Solde de depart : somme brute, transferts et non categorisees compris.
+      bump(OPENING_CATEGORY, start as string).activity += t.amount
+      continue
+    }
     if (t.transferGroupId) continue
     if (t.categoryId == null) continue
-    if (!onBudget.has(t.accountId)) continue
     bump(t.categoryId, t.bookingMonth).activity += t.amount
   }
   for (const a of data.assignments) {
     bump(a.categoryId, a.month).assigned += a.amount
   }
 
-  // Compteur "a categoriser" par mois (tous comptes, hors transfert).
+  // Compteur "a categoriser" par mois : comptes budget, hors transfert, a
+  // partir du depart du budget (l'anterieur est gele).
   const uncat = new Map<string, number>()
   for (const t of data.transactions) {
+    if (!onBudget.has(t.accountId)) continue
+    if (frozen(t)) continue
     if (t.transferGroupId) continue
     if (t.categoryId != null) continue
     uncat.set(t.bookingMonth, (uncat.get(t.bookingMonth) ?? 0) + 1)

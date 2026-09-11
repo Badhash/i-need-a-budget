@@ -361,3 +361,71 @@ describe('transferts et comptes hors budget', () => {
     expect(result.readyToAssign).toBe(200_000)
   })
 })
+
+describe('nouveau budget (startMonth)', () => {
+  const history = [
+    salary('2026-01', 300_000),
+    { id: 'tx-food-01', accountId: CHECKING.id, categoryId: FOOD.id, month: '2026-01', amount: -50_000 },
+    // non categorisee : hors moteur normalement, mais elle a fait le solde du compte
+    { id: 'tx-uncat-01', accountId: CHECKING.id, categoryId: null, month: '2026-01', amount: -20_000 },
+    // transfert vers le PEA (hors budget) : l'argent a quitte les comptes budget
+    { id: 'tx-tr-a', accountId: CHECKING.id, categoryId: null, month: '2026-02', amount: -30_000, transferGroupId: 'g1' },
+    { id: 'tx-tr-b', accountId: PEA.id, categoryId: null, month: '2026-02', amount: 30_000, transferGroupId: 'g1' },
+    // le PEA lui-meme ne compte jamais
+    { id: 'tx-pea', accountId: PEA.id, categoryId: null, month: '2026-02', amount: 1_000_000 },
+  ]
+  const oldAssignments = [
+    { categoryId: FOOD.id, month: '2026-01', amount: 40_000 },
+    { categoryId: RENT.id, month: '2026-02', amount: 90_000 },
+  ]
+
+  it('le RTA du mois de depart vaut le solde brut des comptes budget au 1er du mois', () => {
+    const r = computeBudget(
+      base({ month: '2026-03', startMonth: '2026-03', transactions: history, assignments: oldAssignments }),
+    )
+    // 300 000 - 50 000 - 20 000 - 30 000 = 200 000 ; assignations passees ignorees
+    expect(r.readyToAssign).toBe(200_000)
+    expect(cat(r, FOOD.id)).toMatchObject({ rollover: 0, assigned: 0, activity: 0, available: 0 })
+    expect(cat(r, RENT.id).available).toBe(0)
+  })
+
+  it('l identite comptes budget = RTA + disponibles tient apres le depart', () => {
+    const txs = [
+      ...history,
+      salary('2026-03', 200_000),
+      { id: 'tx-food-03', accountId: CHECKING.id, categoryId: FOOD.id, month: '2026-03', amount: -30_000 },
+    ]
+    const r = computeBudget(
+      base({
+        month: '2026-03',
+        startMonth: '2026-03',
+        transactions: txs,
+        assignments: [...oldAssignments, { categoryId: FOOD.id, month: '2026-03', amount: 50_000 }],
+      }),
+    )
+    // solde des comptes budget : 200 000 + 200 000 - 30 000 = 370 000
+    expect(r.readyToAssign).toBe(200_000 + 200_000 - 50_000)
+    expect(cat(r, FOOD.id).available).toBe(20_000)
+    expect(r.readyToAssign + r.totals.available).toBe(370_000)
+  })
+
+  it('un mois anterieur au depart est vide', () => {
+    const r = computeBudget(
+      base({ month: '2026-02', startMonth: '2026-03', transactions: history, assignments: oldAssignments }),
+    )
+    expect(r.readyToAssign).toBe(0)
+    expect(r.categories.every((c) => c.available === 0 && c.assigned === 0)).toBe(true)
+  })
+
+  it('sans startMonth le comportement historique est inchange', () => {
+    const a = computeBudget(base({ month: '2026-03', transactions: history, assignments: oldAssignments }))
+    const b = computeBudget(
+      base({ month: '2026-03', startMonth: null, transactions: history, assignments: oldAssignments }),
+    )
+    expect(b).toEqual(a)
+  })
+
+  it('rejette un mois de depart mal forme', () => {
+    expect(() => computeBudget(base({ month: '2026-03', startMonth: '2026-3' }))).toThrow()
+  })
+})

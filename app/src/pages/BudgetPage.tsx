@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
   AlertTriangle,
+  CalendarRange,
   ChevronDown,
   ChevronRight,
   ChevronsDownUp,
@@ -24,7 +25,7 @@ import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { useTargets, neededThisMonth, type Target } from '@/lib/targets'
 import { FundTargetsSheet, type FundPlanItem } from '@/components/budget/FundTargetsSheet'
 import { Button } from '@/components/ui/button'
-import { fmtEUR } from '@/lib/format'
+import { fmtEUR, fmtMonthLong } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
@@ -872,6 +873,7 @@ function BudgetSkeleton() {
 
 export function BudgetPage() {
   const month = useUiStore((s) => s.month)
+  const setMonth = useUiStore((s) => s.setMonth)
   const navigate = useNavigate()
   // Ouvre la liste des transactions filtree sur la categorie cliquee et le mois
   // affiche (mois comptable = date.slice(0,7) cote Transactions).
@@ -1009,6 +1011,22 @@ export function BudgetPage() {
   }
 
   if (!budget) return <BudgetSkeleton />
+
+  // Mois anterieur au depart du budget (« Nouveau budget ») : rien a montrer.
+  const startMonth = boot.data?.budgetStartMonth ?? null
+  if (startMonth && month < startMonth) {
+    return (
+      <Card>
+        <EmptyState
+          icon={CalendarRange}
+          title={`Le budget commence en ${fmtMonthLong(startMonth)}`}
+          description="Les mois précédents sont gelés : leurs mouvements forment le solde de départ versé au Prêt à assigner."
+          actionLabel={`Aller à ${fmtMonthLong(startMonth)}`}
+          onAction={() => setMonth(startMonth)}
+        />
+      </Card>
+    )
+  }
 
   const groupIds = budget.groups.map((b) => b.group.id)
   const allCollapsed = groupIds.length > 0 && groupIds.every((id) => collapsedGroups[id])

@@ -72,6 +72,7 @@ interface BootstrapResponse {
   groups: BootstrapGroup[]
   categories: BootstrapCategory[]
   uncategorizedCount: number
+  budgetStartMonth?: string | null
 }
 
 /** Taxonomie hydratee (objets du domaine, prets pour l'UI). */
@@ -80,6 +81,8 @@ export interface Bootstrap {
   groups: CategoryGroup[]
   categories: Category[]
   uncategorizedCount: number
+  /** Mois de depart du budget (« Nouveau budget »), null = depuis l'origine. */
+  budgetStartMonth: string | null
 }
 
 // Forme plate renvoyee par getBudgetMonth (sortie du moteur).
@@ -141,6 +144,7 @@ function hydrateBootstrap(raw: BootstrapResponse): Bootstrap {
       sortOrder: c.sortOrder,
     })),
     uncategorizedCount: raw.uncategorizedCount,
+    budgetStartMonth: raw.budgetStartMonth ?? null,
   }
 }
 
@@ -428,24 +432,33 @@ export async function apiSeedDefaults(): Promise<void> {
   await apiCall('seedDefaults')
 }
 
-/** Nombre de transactions non categorisees (hors transferts) jusqu'a aujourd'hui. */
-export function uncategorizedCount(list: Transaction[]): number {
-  return list.filter(
-    (t) => !t.categoryId && !t.transferGroupId && monthOf(t.date) <= monthOf(TODAY),
-  ).length
+/** Champs d'une transaction necessaires a la regle du badge « À catégoriser ». */
+export interface UncatCandidate {
+  accountId: string
+  categoryId: string | null
+  transferGroupId?: string | null
+  date: string
 }
 
 /**
- * True si une transaction compte dans le badge « À catégoriser » : sans
- * categorie, hors transfert, et pas dans le futur (meme regle que le serveur,
- * cf. buildBootstrap dans l'Edge Function /api).
+ * True si une transaction compte dans le badge « À catégoriser » : compte
+ * budget (les comptes de suivi ne se categorisent pas), sans categorie, hors
+ * transfert, pas dans le futur, et pas anterieure au mois de depart du budget
+ * (meme regle que le serveur, cf. countsAsUncategorized dans l'Edge Function
+ * /api). La taxonomie est lue dans le cache bootstrap.
  */
-export function countsAsUncategorized(
-  categoryId: string | null,
-  transferGroupId: string | null | undefined,
-  date: string,
-): boolean {
-  return !categoryId && !transferGroupId && monthOf(date) <= monthOf(TODAY)
+export function countsAsUncategorized(queryClient: QueryClient, t: UncatCandidate): boolean {
+  const boot = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)
+  const account = boot?.accounts.find((a) => a.id === t.accountId)
+  if (account && !account.onBudget) return false
+  const month = monthOf(t.date)
+  const start = boot?.budgetStartMonth ?? null
+  return !t.categoryId && !t.transferGroupId && month <= monthOf(TODAY) && (start === null || month >= start)
+}
+
+/** Lance « Nouveau budget » : efface toutes les assignations et fixe le mois de depart. */
+export async function apiNewBudget(month: string): Promise<{ budgetStartMonth: string }> {
+  return apiCall<{ budgetStartMonth: string }>('newBudget', { month })
 }
 
 /**

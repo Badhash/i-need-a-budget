@@ -31,7 +31,7 @@ export function AddTransactionDialog() {
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
       // Une saisie manuelle sans categorie (jusqu'a aujourd'hui) alimente le
       // badge « À catégoriser » : on incremente le compteur porte par bootstrap.
-      if (countsAsUncategorized(vars.categoryId, null, vars.date)) {
+      if (countsAsUncategorized(queryClient, { ...vars, transferGroupId: null })) {
         patchUncategorizedCount(queryClient, 1)
       }
       setOpen(false)

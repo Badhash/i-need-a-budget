@@ -31,8 +31,13 @@ function useUpdateTransaction() {
       const prev = snapshot?.find((t) => t.id === input.transactionId)
       let countDelta = 0
       if (prev) {
-        const before = countsAsUncategorized(prev.categoryId, prev.transferGroupId, prev.date)
-        const after = countsAsUncategorized(input.categoryId, prev.transferGroupId, input.date)
+        const before = countsAsUncategorized(queryClient, prev)
+        const after = countsAsUncategorized(queryClient, {
+          accountId: input.accountId,
+          categoryId: input.categoryId,
+          transferGroupId: prev.transferGroupId,
+          date: input.date,
+        })
         countDelta = (after ? 1 : 0) - (before ? 1 : 0)
         patchUncategorizedCount(queryClient, countDelta)
       }

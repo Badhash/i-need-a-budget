@@ -131,6 +131,12 @@ export function TransactionForm({
   }
 
   const wantIncome = kind === 'income'
+  // Compte de suivi (hors budget) : pas de categorie, ses mouvements n'entrent
+  // ni dans les enveloppes ni dans le Pret a assigner.
+  const isTracking = accounts.find((a) => a.id === accountId)?.onBudget === false
+  useEffect(() => {
+    if (isTracking && categoryId) setCategoryId('')
+  }, [isTracking, categoryId])
   const visibleGroups = groups
     .filter((g) => categories.some((c) => c.groupId === g.id && c.isIncome === wantIncome))
     .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -235,17 +241,24 @@ export function TransactionForm({
           </div>
         </div>
 
-        <div>
-          <label className="label-caps mb-1.5 block">Catégorie</label>
-          <Combobox
-            options={categoryOptions}
-            value={categoryId}
-            onChange={setCategoryId}
-            placeholder="À catégoriser"
-            searchPlaceholder="Rechercher une catégorie…"
-            aria-label="Catégorie"
-          />
-        </div>
+        {isTracking ? (
+          <p className="rounded-xl bg-surface2 px-3.5 py-2.5 text-[13px] text-soft">
+            Compte hors budget : ce mouvement n'a pas de catégorie, il ne touche ni les
+            enveloppes ni le Prêt à assigner.
+          </p>
+        ) : (
+          <div>
+            <label className="label-caps mb-1.5 block">Catégorie</label>
+            <Combobox
+              options={categoryOptions}
+              value={categoryId}
+              onChange={setCategoryId}
+              placeholder="À catégoriser"
+              searchPlaceholder="Rechercher une catégorie…"
+              aria-label="Catégorie"
+            />
+          </div>
+        )}
 
         <div>
           <label className="label-caps mb-1.5 block">Note</label>

@@ -11,6 +11,7 @@ import { ExportSection } from '@/components/settings/ExportSection'
 import { ImportSection } from '@/components/settings/ImportSection'
 import { AccountSection } from '@/components/settings/AccountSection'
 import { CategoriesSection } from '@/components/settings/CategoriesSection'
+import { NewBudgetSection } from '@/components/settings/NewBudgetSection'
 
 function ThemePreview({ meta }: { meta: ThemeMeta }) {
   return (
@@ -157,6 +158,7 @@ export function SettingsPage() {
       <RulesCard />
       <CategoriesSection />
       <ExportSection />
+      <NewBudgetSection />
       <ImportSection />
       <AccountSection />
       <p className="px-1 text-center text-[12px] text-soft">

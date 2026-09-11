@@ -51,6 +51,7 @@ lignes/tables non encore migrées), donc l'ordre sûr est toujours :
 | **J** `account_idx` | `J-account-idx.sql` (colonne `text` + index partiel) | `backfillAccountIdx` | reconcile/soldes ciblés |
 | **D** base64 transport | `D-transport-base64.sql` (computed columns `enc_b64` sans `\n` + RPC `enc_insert`/`enc_update`) | aucun (transport pur) — **appliquer le SQL AVANT de déployer le code** | -35 à -45 % jambe lecture |
 | **H** split core/text | `H-split-payload.sql` (colonnes `enc_core`/`enc_text` + contrainte) | `migrateSplitPayload` (par lots) | budget/rapports ne lisent plus le texte lourd |
+| **M** réglages utilisateur | `M-user-settings.sql` (table `user_settings` chiffrée + computed column `enc_b64`) | aucun — le code tolère l'absence ; la fonction « Nouveau budget » (Réglages) renvoie une erreur explicite tant que le SQL n'est pas appliqué | active « Nouveau budget » (mois de départ gelé) |
 | **I** agrégats | `I-aggregates.sql` (4 tables chiffrées + index aveugles + `rev` anti-course + computed columns `enc_b64`) | AUCUN (bootstrapFull reconstruit automatiquement à l'ouverture de l'app) | `bootstrap`/`getBudgetMonth` ne rescannent plus l'historique |
 
 Notes par ref :

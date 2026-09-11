@@ -39,6 +39,7 @@ import {
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
 import { aggMarkStale, aggRecompute } from '../api/aggregates.ts'
+import { loadUserSettings } from '../api/settings.ts'
 
 // ---------------------------------------------------------------------------
 // Types des payloads chiffres (memes contrats que l'Edge Function /api)
@@ -1299,7 +1300,8 @@ async function syncUser(
             }
             seenHashes.add(hash)
 
-            const categoryId = categorize(rules, mapped.label)
+            // Les comptes de suivi ne se categorisent pas (hors budget).
+            const categoryId = localAccount.onBudget ? categorize(rules, mapped.label) : null
             const payload: TxPayload = {
               accountId: localAccount.id,
               categoryId,
@@ -1423,10 +1425,11 @@ async function refreshAggregatesSafe(userId: string): Promise<void> {
   try {
     const keys = await getKeys()
     await aggRecompute(admin, keys, userId, async () => {
-      const [accounts, txRows, assignments] = await Promise.all([
+      const [accounts, txRows, assignments, settings] = await Promise.all([
         loadAll<AccountPayload>('accounts', userId),
         loadAllRows<TxRow>('transactions', userId, 'id, enc_core:enc_core_b64, enc_payload:enc_b64'),
         loadAll<{ categoryId: string; month: string; amount: number }>('assignments', userId),
+        loadUserSettings(admin, keys, userId),
       ])
       const transactions = await Promise.all(
         txRows.map(async (row) => {
@@ -1451,6 +1454,7 @@ async function refreshAggregatesSafe(userId: string): Promise<void> {
           month: a.month,
           amount: a.amount,
         })),
+        startMonth: settings.budgetStartMonth,
       }
     })
   } catch {

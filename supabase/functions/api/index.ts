@@ -10,6 +10,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import {
+  addMonths,
   computeBudget,
   type Account as EngineAccount,
   type Assignment as EngineAssignment,
@@ -39,10 +40,12 @@ import {
   aggReadRollups,
   aggReadUncatCount,
   aggRecompute,
+  OPENING_CATEGORY,
   type AggBatch,
   type AggSourceData,
   type AggTx,
 } from './aggregates.ts'
+import { clearUserSettings, loadUserSettings, saveUserSettings } from './settings.ts'
 
 // ---------------------------------------------------------------------------
 // Types des payloads chiffres (contrat du CLAUDE.md, section modele de donnees)
@@ -575,6 +578,8 @@ interface DecryptedData {
   categories: WithId<CategoryPayload>[]
   transactions: WithId<TxCore>[]
   assignments: WithId<AssignmentPayload>[]
+  /** Mois de depart du budget (REF M « Nouveau budget »), null = origine. */
+  startMonth: string | null
 }
 
 // Variante transactions COMPLETES (enc_core + enc_text) : liste des transactions
@@ -586,31 +591,39 @@ interface FullData {
   categories: WithId<CategoryPayload>[]
   transactions: WithId<TxPayload>[]
   assignments: WithId<AssignmentPayload>[]
+  startMonth: string | null
+}
+
+async function loadStartMonth(userId: string): Promise<string | null> {
+  const keys = await getKeys()
+  return (await loadUserSettings(admin, keys, userId)).budgetStartMonth
 }
 
 async function loadBudgetDataFromDb(userId: string): Promise<DecryptedData> {
-  const [accounts, groups, categories, transactions, assignments] = await Promise.all([
+  const [accounts, groups, categories, transactions, assignments, startMonth] = await Promise.all([
     loadAll<AccountPayload>('accounts', userId),
     loadAll<GroupPayload>('category_groups', userId),
     loadAll<CategoryPayload>('categories', userId),
     loadTxCore(userId),
     loadAll<AssignmentPayload>('assignments', userId),
+    loadStartMonth(userId),
   ])
-  return { accounts, groups, categories, transactions, assignments }
+  return { accounts, groups, categories, transactions, assignments, startMonth }
 }
 
 // Chargeur complet (taxonomie + assignments + transactions completes) : sert
 // l'action consolidee bootstrapFull, qui a besoin du libelle pour la liste et
 // les rapports.
 async function loadFullBudgetData(userId: string): Promise<FullData> {
-  const [accounts, groups, categories, transactions, assignments] = await Promise.all([
+  const [accounts, groups, categories, transactions, assignments, startMonth] = await Promise.all([
     loadAll<AccountPayload>('accounts', userId),
     loadAll<GroupPayload>('category_groups', userId),
     loadAll<CategoryPayload>('categories', userId),
     loadTxFull(userId),
     loadAll<AssignmentPayload>('assignments', userId),
+    loadStartMonth(userId),
   ])
-  return { accounts, groups, categories, transactions, assignments }
+  return { accounts, groups, categories, transactions, assignments, startMonth }
 }
 
 // Chargeur allege pour les rapports : computeReports n'utilise jamais les
@@ -623,7 +636,7 @@ async function loadReportsData(userId: string): Promise<FullData> {
     loadAll<CategoryPayload>('categories', userId),
     loadTxFull(userId),
   ])
-  return { accounts, groups, categories, transactions, assignments: [] }
+  return { accounts, groups, categories, transactions, assignments: [], startMonth: null }
 }
 
 // ---------------------------------------------------------------------------
@@ -683,7 +696,25 @@ function toEngineInput(data: DecryptedData, month: string) {
     month: a.month,
     amount: a.amount,
   }))
-  return { month, accounts, categories, transactions, assignments }
+  return { month, accounts, categories, transactions, assignments, startMonth: data.startMonth }
+}
+
+// Une transaction compte dans le badge « A categoriser » : compte budget, sans
+// categorie, hors transfert, pas dans le futur, et pas gelee avant le depart
+// du budget. Meme regle cote front (countsAsUncategorized) et agregats.
+function countsAsUncategorized(
+  t: { accountId: string; categoryId: string | null; transferGroupId?: string | null; bookingMonth: string },
+  onBudget: Set<string>,
+  startMonth: string | null,
+  currentMonth: string,
+): boolean {
+  return (
+    onBudget.has(t.accountId) &&
+    !t.categoryId &&
+    !t.transferGroupId &&
+    t.bookingMonth <= currentMonth &&
+    (startMonth === null || t.bookingMonth >= startMonth)
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -805,13 +836,15 @@ function buildBootstrap(data: DecryptedData) {
     balances.set(t.accountId, (balances.get(t.accountId) ?? 0) + t.amount)
   }
   const currentMonth = new Date().toISOString().slice(0, 7)
+  const onBudget = new Set(data.accounts.filter((a) => a.onBudget).map((a) => a.id))
   return {
     accounts: data.accounts.map((a) => ({ ...a, balance: balances.get(a.id) ?? 0 })),
     groups: data.groups,
     categories: data.categories,
-    uncategorizedCount: data.transactions.filter(
-      (t) => !t.categoryId && !t.transferGroupId && t.bookingMonth <= currentMonth,
+    uncategorizedCount: data.transactions.filter((t) =>
+      countsAsUncategorized(t, onBudget, data.startMonth, currentMonth),
     ).length,
+    budgetStartMonth: data.startMonth,
   }
 }
 
@@ -832,18 +865,21 @@ async function actionBootstrap(userId: string) {
   if (await aggIsReady(admin, keys, userId)) {
     try {
       const currentMonth = new Date().toISOString().slice(0, 7)
-      const [accounts, groups, categories, balances, uncategorizedCount] = await Promise.all([
-        loadAll<AccountPayload>('accounts', userId),
-        loadAll<GroupPayload>('category_groups', userId),
-        loadAll<CategoryPayload>('categories', userId),
-        aggReadBalances(admin, keys, userId),
-        aggReadUncatCount(admin, keys, userId, currentMonth),
-      ])
+      const [accounts, groups, categories, balances, uncategorizedCount, settings] =
+        await Promise.all([
+          loadAll<AccountPayload>('accounts', userId),
+          loadAll<GroupPayload>('category_groups', userId),
+          loadAll<CategoryPayload>('categories', userId),
+          aggReadBalances(admin, keys, userId),
+          aggReadUncatCount(admin, keys, userId, currentMonth),
+          loadUserSettings(admin, keys, userId),
+        ])
       return {
         accounts: accounts.map((a) => ({ ...a, balance: balances.get(a.id) ?? 0 })),
         groups,
         categories,
         uncategorizedCount,
+        budgetStartMonth: settings.budgetStartMonth,
       }
     } catch {
       // Lecture agregee impossible (ligne indechiffrable, erreur reseau) :
@@ -863,11 +899,14 @@ async function actionBootstrap(userId: string) {
 // moteur agrege lui-meme par (categorie, mois) et filtre deja transferts,
 // comptes hors budget et categoryId null — perimetre exact des rollups : le
 // resultat est identique au calcul depuis les transactions brutes (rollover,
-// overspending, RTA compris).
+// overspending, RTA compris). La ligne OPENING_CATEGORY (solde de depart du
+// « Nouveau budget ») redevient UNE transaction sans categorie datee du mois
+// precedant le depart : le moteur la verse au solde de depart.
 function rollupsToEngineInput(
   categories: WithId<CategoryPayload>[],
   rollups: { categoryId: string; month: string; activity: number; assigned: number }[],
   month: string,
+  startMonth: string | null,
 ) {
   const accounts: EngineAccount[] = [{ id: '__agg__', onBudget: true }]
   const engineCategories: EngineCategory[] = categories.map((c) => ({
@@ -878,6 +917,19 @@ function rollupsToEngineInput(
   const assignments: EngineAssignment[] = []
   let i = 0
   for (const r of rollups) {
+    if (r.categoryId === OPENING_CATEGORY) {
+      if (startMonth !== null && r.activity !== 0) {
+        transactions.push({
+          id: '__opening__',
+          accountId: '__agg__',
+          categoryId: null,
+          month: addMonths(startMonth, -1),
+          amount: r.activity,
+          transferGroupId: null,
+        })
+      }
+      continue
+    }
     if (r.activity !== 0) {
       transactions.push({
         id: `__agg__${i++}`,
@@ -892,7 +944,7 @@ function rollupsToEngineInput(
       assignments.push({ categoryId: r.categoryId, month: r.month, amount: r.assigned })
     }
   }
-  return { month, accounts, categories: engineCategories, transactions, assignments }
+  return { month, accounts, categories: engineCategories, transactions, assignments, startMonth }
 }
 
 // Action consolidee de demarrage : UN SEUL loadBudgetData (donc une seule
@@ -926,6 +978,7 @@ async function loadAggSource(userId: string): Promise<AggSourceData> {
       month: a.month,
       amount: a.amount,
     })),
+    startMonth: data.startMonth,
   }
 }
 
@@ -983,11 +1036,14 @@ async function actionGetBudgetMonth(userId: string, params: Params) {
   // complet sur erreur.
   if (await aggIsReady(admin, keys, userId)) {
     try {
-      const [categories, rollups] = await Promise.all([
+      const [categories, rollups, settings] = await Promise.all([
         loadAll<CategoryPayload>('categories', userId),
         aggReadRollups(admin, keys, userId),
+        loadUserSettings(admin, keys, userId),
       ])
-      return computeBudget(rollupsToEngineInput(categories, rollups, month))
+      return computeBudget(
+        rollupsToEngineInput(categories, rollups, month, settings.budgetStartMonth),
+      )
     } catch {
       // Meme logique que actionBootstrap : invalider pour auto-reparation.
       await aggMarkStale(admin, userId).catch(() => {})
@@ -2013,19 +2069,24 @@ async function actionDeleteRule(userId: string, params: Params) {
 }
 
 async function actionApplyRulesToUncategorized(userId: string) {
-  const [rules, transactions] = await Promise.all([
+  const [rules, transactions, accounts] = await Promise.all([
     loadAll<RulePayload>('rules', userId),
     loadTxFull(userId),
+    loadAll<AccountPayload>('accounts', userId),
   ])
   rules.sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
+  // Les comptes de suivi ne se categorisent pas : leurs transactions sont
+  // hors budget, une categorie n'y aurait aucun effet.
+  const onBudget = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
 
   const keys = await getKeys()
   const aggOps: { old: AggTx; next: AggTx }[] = []
   let categorized = 0
   try {
     for (const tx of transactions) {
-      // On ne touche qu'aux transactions non categorisees et hors transfert.
-      if (tx.categoryId || tx.transferGroupId) continue
+      // On ne touche qu'aux transactions non categorisees et hors transfert,
+      // sur les comptes budget.
+      if (tx.categoryId || tx.transferGroupId || !onBudget.has(tx.accountId)) continue
       const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
       if (!rule) continue
       // On retire id du payload et on ne passe PAS d'extra : month_idx et
@@ -2239,6 +2300,7 @@ async function actionExportData(userId: string) {
     ])
   return {
     exportedAt: new Date().toISOString(),
+    budgetStartMonth: await loadStartMonth(userId),
     accounts,
     groups,
     categories,
@@ -2345,6 +2407,12 @@ async function wipeUserBudget(userId: string): Promise<void> {
   for (const table of BUDGET_TABLES) {
     const { error } = await admin.from(table).delete().eq('user_id', userId)
     if (error) throw new ApiError(500, `effacement ${table} impossible`)
+  }
+  // Un import repart de l'origine : plus de mois de depart gele.
+  try {
+    await clearUserSettings(admin, userId)
+  } catch {
+    throw new ApiError(500, 'effacement user_settings impossible')
   }
   // Purge best-effort des tables de donnees d'agregats (residus inertes une
   // fois le marqueur supprime ; le prochain recompute repart de zero).
@@ -2602,6 +2670,58 @@ async function actionRecomputeAggregates(userId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Nouveau budget (REF M) : le budget repart de zero a partir d'un mois donne.
+// ---------------------------------------------------------------------------
+//
+// Conserve : comptes, transactions (historique et soldes intacts), categories,
+// regles, objectifs, connexions bancaires. Efface : TOUTES les assignations.
+// Pose : user_settings.budgetStartMonth. Le moteur reduit alors l'historique
+// anterieur a un solde de depart verse au Pret a assigner du mois de depart,
+// qui vaut donc exactement le solde des comptes budget au 1er de ce mois.
+// Le mois de depart doit etre au plus le mois suivant le mois courant (pas de
+// budget demarre dans un futur lointain) et pas anterieur a 2000.
+async function actionNewBudget(userId: string, params: Params) {
+  const month = requireMonth(params.month)
+  const currentMonth = new Date().toISOString().slice(0, 7)
+  if (month > addMonths(currentMonth, 1)) {
+    throw new ApiError(400, 'le mois de depart ne peut pas depasser le mois prochain')
+  }
+  if (month < '2000-01') throw new ApiError(400, 'mois de depart trop ancien')
+
+  // Agregats invalides AVANT toute ecriture (echec non avale : un marqueur
+  // 'ready' survivant servirait les anciennes assignations).
+  try {
+    await aggMarkStale(admin, userId)
+  } catch {
+    throw new ApiError(500, 'invalidation des agregats impossible, reessayez')
+  }
+
+  const { error } = await admin.from('assignments').delete().eq('user_id', userId)
+  if (error) throw new ApiError(500, 'effacement assignments impossible')
+
+  const keys = await getKeys()
+  try {
+    await saveUserSettings(admin, keys, userId, { budgetStartMonth: month })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : ''
+    if (msg.includes('user_settings absente')) {
+      throw new ApiError(503, 'table user_settings absente : appliquer M-user-settings.sql')
+    }
+    throw new ApiError(500, 'ecriture user_settings impossible')
+  }
+  invalidateBudgetCache(userId)
+
+  // Reconstruction des agregats en arriere-plan (best-effort : le fallback
+  // calcul complet sert juste en attendant).
+  try {
+    await scheduleAggRebuild(userId, keys)
+  } catch {
+    // jamais bloquant
+  }
+  return { ok: true, budgetStartMonth: month }
+}
+
+// ---------------------------------------------------------------------------
 // Routeur
 // ---------------------------------------------------------------------------
 
@@ -2648,6 +2768,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   importReplaceTransactions: actionImportReplaceTransactions,
   importReplaceAssignments: actionImportReplaceAssignments,
   recomputeAggregates: (u) => actionRecomputeAggregates(u),
+  newBudget: actionNewBudget,
 }
 
 // Actions strictement en LECTURE : elles ne modifient aucune table, donc ne

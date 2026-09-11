@@ -104,6 +104,10 @@ Comptes hors budget (tracking, ex. PEA) : soldes suivis, transactions sans caté
 
 Futur : assigner sur les mois futurs est possible, décompte du RTA courant.
 
+Nouveau budget (`startMonth` optionnel du moteur, stocké dans `user_settings.budgetStartMonth`) : tout l'historique antérieur au mois de départ est gelé. Les transactions des comptes budget antérieures (transferts et non catégorisées compris) ne forment qu'un solde de départ versé au RTA du mois de départ ; assignations et activité antérieures sont ignorées. L'action `/api newBudget` efface TOUTES les assignations et pose ce mois : RTA(départ) = solde des comptes budget au 1er du mois. Côté agrégats, ce solde est porté par une ligne de rollup spéciale (`OPENING_CATEGORY`).
+
+Badge « À catégoriser » (serveur `countsAsUncategorized`, agrégats `uncat_counts`, front) : comptes budget uniquement (les comptes de suivi ne se catégorisent pas : pas de sélecteur, règles non appliquées), sans catégorie, hors transfert, pas dans le futur, pas antérieur au mois de départ.
+
 Tous ces calculs vivent dans un module TypeScript pur `packages/engine` (zéro dépendance), utilisé par l'Edge Function `/api`, couvert par Vitest (cas : rollover positif, overspending, mois vide, transfert, futur).
 
 ## Modèle de données (tables principales — enveloppes opaques)
@@ -119,6 +123,7 @@ Toutes les tables : (id, user_id, enc_payload bytea, created_at) + index aveugle
 * `rules` — payload : matcher, category_id, priority
 * `bank_connections` — payload : institution, session_state, valid_until
 * `sync_logs` (run_at en clair pour la rétention, purge pg_cron > 90 j, lecture bornée à 50) — payload : connection_id, status, imported_count, error
+* `user_settings` (REF M, 1 ligne par user, PK user_id, écriture hex directe hors RPC) — payload : budgetStartMonth null ; table tolérée absente (= budget depuis l'origine)
 
 Tables d'agrégats (REF I, dérivées — jamais source de vérité, reconstruites à volonté) :
 

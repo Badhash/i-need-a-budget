@@ -9,6 +9,14 @@
 //                  - assigned des mois futurs (> M)
 //                  - somme des overspending des mois < M
 //
+// Nouveau budget (startMonth optionnel) : tout ce qui precede startMonth est
+// gele. Les transactions des comptes on-budget anterieures a startMonth ne
+// forment plus qu'un SOLDE DE DEPART (somme brute, transferts et non
+// categorisees compris) verse au RTA de startMonth ; les assignations et
+// l'activite anterieures sont ignorees. Ainsi RTA(startMonth) = solde des
+// comptes budget au 1er du mois, et l'identite YNAB tient a partir de la :
+// comptes budget = RTA + somme des disponibles + non categorisees.
+//
 // Tous les montants sont en centimes (entiers), depenses negatives.
 // Les mois sont des chaines au format YYYY-MM, comparables lexicalement.
 
@@ -47,6 +55,11 @@ export interface Assignment {
 export interface BudgetInput {
   /** mois cible YYYY-MM */
   month: string
+  /**
+   * Mois de depart du budget (YYYY-MM), optionnel. Voir l'en-tete : l'historique
+   * anterieur est reduit a un solde de depart verse au RTA de ce mois.
+   */
+  startMonth?: string | null
   accounts: Account[]
   categories: Category[]
   transactions: Transaction[]
@@ -108,29 +121,68 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
   if (!isValidMonth(month)) {
     throw new Error(`Mois cible invalide : "${month}" (attendu YYYY-MM)`)
   }
+  const startMonth = input.startMonth ?? null
+  if (startMonth !== null && !isValidMonth(startMonth)) {
+    throw new Error(`Mois de depart invalide : "${startMonth}" (attendu YYYY-MM)`)
+  }
 
   const onBudgetAccounts = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
   const incomeCategories = new Set(categories.filter((c) => c.isIncome).map((c) => c.id))
   const envelopeCategories = categories.filter((c) => !c.isIncome)
   const envelopeIds = new Set(envelopeCategories.map((c) => c.id))
 
-  // Transactions comptabilisables : compte on budget, pas un transfert lie.
-  const counted = transactions.filter(
-    (t) => onBudgetAccounts.has(t.accountId) && !t.transferGroupId,
-  )
-
-  // Bornes de la fenetre de calcul : du premier mois observe au mois cible.
-  let firstMonth = month
-  for (const t of counted) {
-    if (t.month < firstMonth) firstMonth = t.month
+  // Mois cible anterieur au depart du budget : rien n'existe encore.
+  if (startMonth !== null && month < startMonth) {
+    return {
+      month,
+      readyToAssign: 0,
+      categories: envelopeCategories.map((c) => ({
+        categoryId: c.id,
+        rollover: 0,
+        assigned: 0,
+        activity: 0,
+        available: 0,
+      })),
+      totals: { assigned: 0, activity: 0, available: 0 },
+    }
   }
-  for (const a of assignments) {
-    if (a.month < firstMonth) firstMonth = a.month
+
+  // Solde de depart : somme BRUTE des transactions on-budget anterieures a
+  // startMonth (transferts, revenus, depenses, non categorisees : tout ce qui a
+  // fait le solde des comptes budget au 1er du mois de depart).
+  let openingBalance = 0
+  if (startMonth !== null) {
+    for (const t of transactions) {
+      if (t.month < startMonth && onBudgetAccounts.has(t.accountId)) openingBalance += t.amount
+    }
+  }
+
+  // Transactions comptabilisables : compte on budget, pas un transfert lie,
+  // et pas anterieures au depart du budget (deja dans le solde de depart).
+  const counted = transactions.filter(
+    (t) =>
+      onBudgetAccounts.has(t.accountId) &&
+      !t.transferGroupId &&
+      (startMonth === null || t.month >= startMonth),
+  )
+  const countedAssignments =
+    startMonth === null ? assignments : assignments.filter((a) => a.month >= startMonth)
+
+  // Bornes de la fenetre de calcul : du premier mois observe (ou du depart du
+  // budget) au mois cible.
+  let firstMonth = startMonth ?? month
+  if (startMonth === null) {
+    for (const t of counted) {
+      if (t.month < firstMonth) firstMonth = t.month
+    }
+    for (const a of assignments) {
+      if (a.month < firstMonth) firstMonth = a.month
+    }
   }
 
   // Agregats par mois.
   const activityByMonth = new Map<string, Map<string, number>>()
-  let inflows = 0
+  let inflows = openingBalance
   for (const t of counted) {
     if (t.month > month) continue
     if (t.categoryId !== null && incomeCategories.has(t.categoryId)) {
@@ -149,7 +201,7 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
   const assignedByMonth = new Map<string, Map<string, number>>()
   let assignedCumulative = 0
   let assignedFuture = 0
-  for (const a of assignments) {
+  for (const a of countedAssignments) {
     if (!envelopeIds.has(a.categoryId)) continue
     if (a.month > month) {
       assignedFuture += a.amount
