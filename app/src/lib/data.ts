@@ -73,6 +73,7 @@ interface BootstrapResponse {
   categories: BootstrapCategory[]
   uncategorizedCount: number
   budgetStartMonth?: string | null
+  payees?: { key: string; categoryId: string }[]
 }
 
 /** Taxonomie hydratee (objets du domaine, prets pour l'UI). */
@@ -83,6 +84,13 @@ export interface Bootstrap {
   uncategorizedCount: number
   /** Mois de depart du budget (« Nouveau budget »), null = depuis l'origine. */
   budgetStartMonth: string | null
+  /** Memoire de tiers (cle payeeKey -> categorie par defaut), calculee serveur. */
+  payees: PayeeDefault[]
+}
+
+export interface PayeeDefault {
+  key: string
+  categoryId: string
 }
 
 // Forme plate renvoyee par getBudgetMonth (sortie du moteur).
@@ -145,6 +153,7 @@ function hydrateBootstrap(raw: BootstrapResponse): Bootstrap {
     })),
     uncategorizedCount: raw.uncategorizedCount,
     budgetStartMonth: raw.budgetStartMonth ?? null,
+    payees: raw.payees ?? [],
   }
 }
 

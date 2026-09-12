@@ -11,9 +11,9 @@ import {
 } from '@tanstack/react-table'
 import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, Plus, Search, Sprout, TrendingUp, Wallet, Wand2, X } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
-import { apiCategorize, countsAsUncategorized, patchUncategorizedCount, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
+import { countsAsUncategorized, patchUncategorizedCount, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
-import { enqueue, resolveId } from '@/lib/mutationQueue'
+import { useCategorize } from '@/lib/categorize'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
 import { useApplyRules, useRules } from '@/lib/rules'
@@ -60,47 +60,6 @@ function toRow(tx: Transaction, maps: Maps): TxRow | null {
   const category = tx.categoryId ? (maps.categoryById.get(tx.categoryId) ?? null) : null
   const group = category ? (maps.groupById.get(category.groupId) ?? null) : null
   return { tx, account, category, group, parsed: parseBankLabel(tx.label) }
-}
-
-// Categorisation optimiste : le cache TanStack est mis a jour immediatement,
-// l'appel reseau part en arriere-plan, rollback discret en cas d'echec.
-function useCategorize() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    // Serialise derriere une eventuelle creation de categorie en vol : le
-    // categoryId cible est resolu temp -> real avant l'envoi.
-    mutationFn: ({ txId, categoryId }: { txId: string; categoryId: string | null }) =>
-      enqueue(() => apiCategorize(txId, categoryId === null ? null : resolveId(categoryId)), {
-        deps: categoryId === null ? [] : [categoryId],
-      }),
-    onMutate: async ({ txId, categoryId }) => {
-      await queryClient.cancelQueries({ queryKey: ['transactions'] })
-      const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
-      // Compteur « À catégoriser » du badge nav : maintenu en optimiste car la
-      // nav ne charge plus la liste complete pour le calculer.
-      const prev = snapshot?.find((t) => t.id === txId)
-      let countDelta = 0
-      if (prev) {
-        const before = countsAsUncategorized(queryClient, prev)
-        const after = countsAsUncategorized(queryClient, { ...prev, categoryId })
-        countDelta = (after ? 1 : 0) - (before ? 1 : 0)
-        patchUncategorizedCount(queryClient, countDelta)
-      }
-      queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
-        old?.map((t) => (t.id === txId ? { ...t, categoryId } : t)),
-      )
-      return { snapshot, countDelta }
-    },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
-      if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
-    },
-    // Pas d'invalidation directe ici : le cache est deja exact (mise a jour
-    // optimiste), et le signal Realtime declenche une reconciliation UNIQUE et
-    // coalescee en fond (cf. useRealtimeSync + realtimeGate). Invalider les 4
-    // clefs a chaque clic rechargeait toute la table chiffree 2x par
-    // categorisation (poste d'egress dominant sur le free tier).
-  })
 }
 
 // Menu discret par ligne : conversion transaction <-> virement entre comptes.
