@@ -263,3 +263,8 @@ export function assignIdx(
 export function targetIdx(keys: CryptoKeys, userId: string, categoryId: string): Promise<string> {
   return blindIndex(keys, ['target', userId, categoryId])
 }
+
+/** Memoire de tiers : HMAC(cle de tiers derivee du libelle, cf. payee.ts). */
+export function payeeIdx(keys: CryptoKeys, userId: string, key: string): Promise<string> {
+  return blindIndex(keys, ['payee', userId, key])
+}

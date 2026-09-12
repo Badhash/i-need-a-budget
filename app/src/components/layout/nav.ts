@@ -25,4 +25,5 @@ export const PAGE_TITLES: Record<string, string> = {
   '/rapports': 'Rapports',
   '/regles': 'Règles',
   '/reglages': 'Réglages',
+  '/trier': 'À trier',
 }

@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { fmtEUR, fmtMonthLong } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
+import { TriageCard } from '@/components/budget/TriageCard'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
 import { AssignSheet } from '@/components/budget/AssignSheet'
 import {
@@ -1042,6 +1043,8 @@ export function BudgetPage() {
       <div className="lg:hidden">
         <RtaBanner budget={budget} />
       </div>
+      {/* Mobile uniquement : raccourci vers le tri des transactions a categoriser. */}
+      <TriageCard />
       {/* Tout replier / tout deplier les groupes du budget. */}
       {groupIds.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-1.5">

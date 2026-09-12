@@ -46,6 +46,8 @@ import {
   type AggTx,
 } from './aggregates.ts'
 import { clearUserSettings, loadUserSettings, saveUserSettings } from './settings.ts'
+import { clearPayees, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
+import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
 // Types des payloads chiffres (contrat du CLAUDE.md, section modele de donnees)
@@ -827,10 +829,50 @@ function computeReports(data: FullData, month: string) {
 
 type Params = Record<string, unknown>
 
+// ---------------------------------------------------------------------------
+// Memoire de tiers (REF N) — voir payees.ts
+// ---------------------------------------------------------------------------
+
+// Apprentissage best-effort d'une categorisation manuelle : ne concerne que
+// les comptes budget et les categories hors revenus ; toute erreur (table
+// absente, reseau) est avalee, l'apprentissage ne fait JAMAIS echouer l'action.
+async function learnPayeeSafe(
+  userId: string,
+  keys: CryptoKeys,
+  tx: { accountId: string; label: string },
+  categoryId: string | null,
+  accounts: { id: string; onBudget: boolean }[],
+  categories: { id: string; isIncome: boolean }[],
+): Promise<void> {
+  if (!categoryId) return
+  const account = accounts.find((a) => a.id === tx.accountId)
+  const category = categories.find((c) => c.id === categoryId)
+  if (!account?.onBudget || !category || category.isIncome) return
+  try {
+    await learnPayee(admin, keys, userId, tx.label, categoryId)
+  } catch {
+    // best-effort
+  }
+}
+
+// Liste des tiers connus pour le front (suggestions) : une seule lecture,
+// O(tiers). Table absente = liste vide.
+async function loadPayeeList(
+  keys: CryptoKeys,
+  userId: string,
+): Promise<{ key: string; categoryId: string }[]> {
+  try {
+    const defaults = await loadPayeeDefaults(admin, keys, userId)
+    return [...defaults].map(([key, categoryId]) => ({ key, categoryId }))
+  } catch {
+    return []
+  }
+}
+
 // Construit la reponse `bootstrap` (taxonomie + soldes) a partir de donnees deja
 // dechiffrees : partage entre l'action bootstrap et l'action consolidee
 // bootstrapFull (un seul loadBudgetData pour les deux).
-function buildBootstrap(data: DecryptedData) {
+function buildBootstrap(data: DecryptedData, payees: { key: string; categoryId: string }[]) {
   const balances = new Map<string, number>()
   for (const t of data.transactions) {
     balances.set(t.accountId, (balances.get(t.accountId) ?? 0) + t.amount)
@@ -845,6 +887,7 @@ function buildBootstrap(data: DecryptedData) {
       countsAsUncategorized(t, onBudget, data.startMonth, currentMonth),
     ).length,
     budgetStartMonth: data.startMonth,
+    payees,
   }
 }
 
@@ -865,7 +908,7 @@ async function actionBootstrap(userId: string) {
   if (await aggIsReady(admin, keys, userId)) {
     try {
       const currentMonth = new Date().toISOString().slice(0, 7)
-      const [accounts, groups, categories, balances, uncategorizedCount, settings] =
+      const [accounts, groups, categories, balances, uncategorizedCount, settings, payees] =
         await Promise.all([
           loadAll<AccountPayload>('accounts', userId),
           loadAll<GroupPayload>('category_groups', userId),
@@ -873,6 +916,7 @@ async function actionBootstrap(userId: string) {
           aggReadBalances(admin, keys, userId),
           aggReadUncatCount(admin, keys, userId, currentMonth),
           loadUserSettings(admin, keys, userId),
+          loadPayeeList(keys, userId),
         ])
       return {
         accounts: accounts.map((a) => ({ ...a, balance: balances.get(a.id) ?? 0 })),
@@ -880,6 +924,7 @@ async function actionBootstrap(userId: string) {
         categories,
         uncategorizedCount,
         budgetStartMonth: settings.budgetStartMonth,
+        payees,
       }
     } catch {
       // Lecture agregee impossible (ligne indechiffrable, erreur reseau) :
@@ -889,8 +934,8 @@ async function actionBootstrap(userId: string) {
     }
   }
 
-  const data = await loadBudgetData(userId)
-  return buildBootstrap(data)
+  const [data, payees] = await Promise.all([loadBudgetData(userId), loadPayeeList(keys, userId)])
+  return buildBootstrap(data, payees)
 }
 
 // Reconstitue une entree moteur depuis les rollups agreges : chaque cellule
@@ -1006,13 +1051,16 @@ async function actionBootstrapFull(userId: string, params: Params) {
   const month = requireMonth(params.month)
   // Transactions COMPLETES : la reponse porte la liste des transactions (libelle)
   // et les top-marchands des rapports. Un seul chargement sert les 4 blocs.
-  const data = await loadFullBudgetData(userId)
+  const keys = await getKeys()
+  const [data, payees] = await Promise.all([
+    loadFullBudgetData(userId),
+    loadPayeeList(keys, userId),
+  ])
 
   // Auto-reconstruction des agregats (REF I) : si le marqueur est absent,
   // obsolete ou reste en 'building' (recompute empoisonne / echoue), on
   // reconstruit ici, en arriere-plan. Best-effort : le fallback calcul complet
   // sert correctement tant que ce n'est pas pret.
-  const keys = await getKeys()
   try {
     if (!(await aggIsReady(admin, keys, userId))) await scheduleAggRebuild(userId, keys)
   } catch {
@@ -1020,7 +1068,7 @@ async function actionBootstrapFull(userId: string, params: Params) {
   }
 
   return {
-    bootstrap: buildBootstrap(data),
+    bootstrap: buildBootstrap(data, payees),
     budget: computeBudget(toEngineInput(data, month)),
     transactions: buildTransactionList(data).transactions,
     reports: computeReports(data, month),
@@ -1133,8 +1181,9 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
   if (error) throw new ApiError(500, 'lecture transactions impossible')
   if (!data) throw new ApiError(404, 'transaction inconnue')
 
+  let categories: WithId<CategoryPayload>[] = []
   if (categoryId) {
-    const categories = await loadAll<CategoryPayload>('categories', userId)
+    categories = await loadAll<CategoryPayload>('categories', userId)
     if (!categories.some((c) => c.id === categoryId)) throw new ApiError(404, 'categorie inconnue')
   }
 
@@ -1143,7 +1192,77 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
   if (payload.transferGroupId) throw new ApiError(400, 'un transfert ne se categorise pas')
   await updateTx(userId, transactionId, { ...payload, categoryId })
   await aggMaintain(userId, keys, (b) => b.replaceTx(payload, { ...payload, categoryId }))
+  // Memoire de tiers (REF N) : apprend le choix, best-effort.
+  if (categoryId) {
+    const accounts = await loadAll<AccountPayload>('accounts', userId)
+    await learnPayeeSafe(userId, keys, payload, categoryId, accounts, categories)
+  }
   return { ok: true }
+}
+
+// Categorisation en lot (max 200 ids) : UNE lecture des lignes, une mise a
+// jour par ligne, UNE maintenance d'agregats. Transferts et ids inconnus
+// ignores silencieusement. Apprentissage de tiers best-effort par ligne.
+async function actionCategorizeMany(userId: string, params: Params) {
+  const ids = requireUuidArray(params.transactionIds, 'transactionIds')
+  if (ids.length > 200) throw new ApiError(400, 'au plus 200 transactions par lot')
+  const categoryId = params.categoryId == null ? null : requireUuid(params.categoryId, 'categoryId')
+
+  const [accounts, categories] = await Promise.all([
+    loadAll<AccountPayload>('accounts', userId),
+    loadAll<CategoryPayload>('categories', userId),
+  ])
+  if (categoryId && !categories.some((c) => c.id === categoryId)) {
+    throw new ApiError(404, 'categorie inconnue')
+  }
+
+  const { data, error } = await admin
+    .from('transactions')
+    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
+    .eq('user_id', userId)
+    .in('id', ids)
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+
+  const keys = await getKeys()
+  const aggOps: { old: AggTx; next: AggTx }[] = []
+  const learned: TxPayload[] = []
+  try {
+    for (const row of (data ?? []) as TxRow[]) {
+      const payload = await decodeTx(keys, userId, row)
+      if (payload.transferGroupId) continue
+      if (payload.categoryId === categoryId) continue
+      const next = { ...payload, categoryId }
+      await updateTx(userId, row.id, next)
+      aggOps.push({ old: payload, next })
+      learned.push(payload)
+    }
+  } catch (err) {
+    if (aggOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
+    throw err
+  }
+  if (aggOps.length > 0) {
+    await aggMaintain(userId, keys, async (b) => {
+      for (const op of aggOps) await b.replaceTx(op.old, op.next)
+    })
+  }
+  for (const tx of learned) {
+    await learnPayeeSafe(userId, keys, tx, categoryId, accounts, categories)
+  }
+  return { ok: true, updated: aggOps.length }
+}
+
+// Force (ou efface, categoryId null) la categorie par defaut d'un tiers.
+async function actionSetPayeeCategory(userId: string, params: Params) {
+  const label = requireText(params.label, 'label')
+  const categoryId = params.categoryId == null ? null : requireUuid(params.categoryId, 'categoryId')
+  if (categoryId) await requireNonIncomeCategory(userId, categoryId)
+  const keys = await getKeys()
+  try {
+    const key = await setPayeeDefault(admin, keys, userId, label, categoryId)
+    return { ok: true, key }
+  } catch (err) {
+    throw new ApiError(500, err instanceof Error ? err.message : 'ecriture payee_memory impossible')
+  }
 }
 
 async function actionUpdateTransaction(userId: string, params: Params) {
@@ -1200,6 +1319,10 @@ async function actionUpdateTransaction(userId: string, params: Params) {
     month_idx: await txMonthIdx(keys, userId, bookingMonth),
   })
   await aggMaintain(userId, keys, (b) => b.replaceTx(existing, payload))
+  // Memoire de tiers (REF N) : apprend si la categorie est posee ou changee.
+  if (categoryId && categoryId !== existing.categoryId) {
+    await learnPayeeSafe(userId, keys, payload, categoryId, accounts, categories)
+  }
   return { ok: true }
 }
 
@@ -2069,17 +2192,18 @@ async function actionDeleteRule(userId: string, params: Params) {
 }
 
 async function actionApplyRulesToUncategorized(userId: string) {
-  const [rules, transactions, accounts] = await Promise.all([
+  const keys = await getKeys()
+  const [rules, transactions, accounts, payeeDefaults] = await Promise.all([
     loadAll<RulePayload>('rules', userId),
     loadTxFull(userId),
     loadAll<AccountPayload>('accounts', userId),
+    loadPayeeDefaults(admin, keys, userId).catch(() => new Map<string, string>()),
   ])
   rules.sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
   // Les comptes de suivi ne se categorisent pas : leurs transactions sont
   // hors budget, une categorie n'y aurait aucun effet.
   const onBudget = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
 
-  const keys = await getKeys()
   const aggOps: { old: AggTx; next: AggTx }[] = []
   let categorized = 0
   try {
@@ -2087,13 +2211,15 @@ async function actionApplyRulesToUncategorized(userId: string) {
       // On ne touche qu'aux transactions non categorisees et hors transfert,
       // sur les comptes budget.
       if (tx.categoryId || tx.transferGroupId || !onBudget.has(tx.accountId)) continue
+      // Regles d'abord, puis repli sur la memoire de tiers (REF N).
       const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
-      if (!rule) continue
+      const categoryId = rule?.categoryId ?? payeeDefaults.get(payeeKey(tx.label)) ?? null
+      if (!categoryId) continue
       // On retire id du payload et on ne passe PAS d'extra : month_idx et
       // tx_hash de la ligne restent intacts.
       const { id, ...payload } = tx
-      await updateTx(userId, id, { ...payload, categoryId: rule.categoryId })
-      aggOps.push({ old: payload, next: { ...payload, categoryId: rule.categoryId } })
+      await updateTx(userId, id, { ...payload, categoryId })
+      aggOps.push({ old: payload, next: { ...payload, categoryId } })
       categorized += 1
     }
   } catch (err) {
@@ -2308,6 +2434,7 @@ async function actionExportData(userId: string) {
     assignments,
     targets,
     rules,
+    payees: await loadPayeeList(await getKeys(), userId),
   }
 }
 
@@ -2413,6 +2540,12 @@ async function wipeUserBudget(userId: string): Promise<void> {
     await clearUserSettings(admin, userId)
   } catch {
     throw new ApiError(500, 'effacement user_settings impossible')
+  }
+  // La memoire de tiers reference des categories qui n'existent plus.
+  try {
+    await clearPayees(admin, userId)
+  } catch {
+    throw new ApiError(500, 'effacement payee_memory impossible')
   }
   // Purge best-effort des tables de donnees d'agregats (residus inertes une
   // fois le marqueur supprime ; le prochain recompute repart de zero).
@@ -2734,6 +2867,8 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   getReports: actionGetReports,
   addTransaction: actionAddTransaction,
   categorizeTransaction: actionCategorizeTransaction,
+  categorizeMany: actionCategorizeMany,
+  setPayeeCategory: actionSetPayeeCategory,
   setAssigned: actionSetAssigned,
   createAccount: actionCreateAccount,
   updateAccount: actionUpdateAccount,

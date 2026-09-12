@@ -373,6 +373,23 @@ export async function apiCategorize(txId: string, categoryId: string | null): Pr
   await apiCall('categorizeTransaction', { transactionId: txId, categoryId })
 }
 
+/** Categorise plusieurs transactions d'un coup (max 200 ids cote serveur). */
+export async function apiCategorizeMany(
+  transactionIds: string[],
+  categoryId: string | null,
+): Promise<{ ok: true; updated: number }> {
+  return apiCall<{ ok: true; updated: number }>('categorizeMany', { transactionIds, categoryId })
+}
+
+/** Fixe explicitement la categorie memorisee pour le tiers d'un libelle
+ * (la memoire s'apprend deja automatiquement a chaque categorisation manuelle). */
+export async function apiSetPayeeCategory(
+  label: string,
+  categoryId: string | null,
+): Promise<{ ok: true; key: string }> {
+  return apiCall<{ ok: true; key: string }>('setPayeeCategory', { label, categoryId })
+}
+
 export async function apiAddTransaction(input: NewTransactionInput): Promise<{ id: string }> {
   return apiCall<{ id: string }>('addTransaction', {
     accountId: input.accountId,

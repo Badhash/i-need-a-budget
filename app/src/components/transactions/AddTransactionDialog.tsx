@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiAddTransaction, countsAsUncategorized, patchUncategorizedCount, useAccountsList } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
+import { haptic } from '@/lib/haptics'
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,8 @@ export function AddTransactionDialog() {
     onError: () => setError("Ajout impossible pour le moment. Vérifie ta connexion et réessaye."),
     onSuccess: (_data, vars) => {
       setError(null)
+      // Retour haptique discret : la saisie est bien enregistree.
+      haptic(10)
       // On rafraichit la seule liste (pour afficher la nouvelle ligne) ; le
       // budget/les rapports/les soldes sont reconcilies en fond par le signal
       // Realtime coalesce, sans recharger toute la table chiffree.

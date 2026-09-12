@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assignIdx,
+  payeeIdx,
   base64Encode,
   base64ToBytes,
   blindIndex,
@@ -109,6 +110,14 @@ describe('index aveugles', () => {
     const keys = await deriveKeys(KEY_A)
     const idx = await assignIdx(keys, USER, 'cat-1', '2026-07')
     expect(idx).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  })
+
+  it('payeeIdx est stable et distinct par utilisateur', async () => {
+    const keys = await deriveKeys(KEY_A)
+    const a = await payeeIdx(keys, USER, 'amazon eu sarl')
+    expect(a).toBe(await payeeIdx(keys, USER, 'amazon eu sarl'))
+    expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(await payeeIdx(keys, 'other-user', 'amazon eu sarl')).not.toBe(a)
   })
 
   it('txHashIdx normalise le libelle (dedup stable)', async () => {

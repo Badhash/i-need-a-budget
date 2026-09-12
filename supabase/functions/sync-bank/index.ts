@@ -40,6 +40,8 @@ import {
 } from '../../../packages/crypto/src/index.ts'
 import { aggMarkStale, aggRecompute } from '../api/aggregates.ts'
 import { loadUserSettings } from '../api/settings.ts'
+import { loadPayeeDefaults } from '../api/payees.ts'
+import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
 // Types des payloads chiffres (memes contrats que l'Edge Function /api)
@@ -1174,10 +1176,12 @@ async function syncUser(
     return { imported: 0, linked: 0, transfersLinked: 0, errors: [] }
   }
 
-  // Comptes (pour lier uid EB -> id compte interne) et regles de categorisation.
-  const [accounts, rules] = await Promise.all([
+  // Comptes (pour lier uid EB -> id compte interne), regles de categorisation
+  // et memoire de tiers (REF N, repli des regles ; table absente = vide).
+  const [accounts, rules, payeeDefaults] = await Promise.all([
     loadAll<AccountPayload>('accounts', userId),
     loadAll<RulePayload>('rules', userId),
+    loadPayeeDefaults(admin, keys, userId).catch(() => new Map<string, string>()),
   ])
   rules.sort((a, b) => a.priority - b.priority)
 
@@ -1301,7 +1305,10 @@ async function syncUser(
             seenHashes.add(hash)
 
             // Les comptes de suivi ne se categorisent pas (hors budget).
-            const categoryId = localAccount.onBudget ? categorize(rules, mapped.label) : null
+            // Regles d'abord, puis memoire de tiers apprise des choix manuels.
+            const categoryId = localAccount.onBudget
+              ? (categorize(rules, mapped.label) ?? payeeDefaults.get(payeeKey(mapped.label)) ?? null)
+              : null
             const payload: TxPayload = {
               accountId: localAccount.id,
               categoryId,

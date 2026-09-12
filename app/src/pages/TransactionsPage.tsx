@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearch } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -9,18 +9,25 @@ import {
   useReactTable,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDownUp, ArrowLeftRight, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, Plus, Search, Sprout, TrendingUp, Wallet, Wand2, X } from 'lucide-react'
+import { ArrowDownUp, ArrowLeftRight, Check, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, Plus, Search, SlidersHorizontal, Sprout, TrendingUp, Wallet, Wand2, X } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
 import { countsAsUncategorized, patchUncategorizedCount, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
-import { useCategorize } from '@/lib/categorize'
+import { payeeKey, useCategorize } from '@/lib/categorize'
+import { haptic } from '@/lib/haptics'
+import { useLongPress } from '@/hooks/useLongPress'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
 import { useApplyRules, useRules } from '@/lib/rules'
-import { fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
+import { CURRENT_MONTH, fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
 import { TxKindChip } from '@/components/transactions/TxKindChip'
+import { CategorizeToast, type CategorizeToastData } from '@/components/transactions/CategorizeToast'
+import { CreateRuleDialog } from '@/components/transactions/CreateRuleDialog'
+import { SelectionBar } from '@/components/transactions/SelectionBar'
+import { MobileFiltersSheet } from '@/components/transactions/MobileFiltersSheet'
+import { useCategorizeMany } from '@/components/transactions/useCategorizeMany'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -195,8 +202,23 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
   )
 }
 
+// Notifie la page qu'une categorie vient d'etre choisie a la main sur une
+// ligne (toast « Appliquer aux N autres »). Contexte plutot que prop : la
+// colonne du tableau desktop est definie au niveau module.
+type OnCategorized = (row: TxRow, categoryId: string | null) => void
+const CategorizedContext = createContext<OnCategorized>(() => {})
+
 function CategoryBadge({ row }: { row: TxRow }) {
   const categorize = useCategorize()
+  const onCategorized = useContext(CategorizedContext)
+  // Micro-interaction (mobile) : la pastille s'anime quand la ligne passe de
+  // « A categoriser » a une categorie. Jamais au montage initial.
+  const prevCategoryId = useRef(row.tx.categoryId)
+  const [justCategorized, setJustCategorized] = useState(false)
+  useEffect(() => {
+    if (prevCategoryId.current === null && row.tx.categoryId) setJustCategorized(true)
+    prevCategoryId.current = row.tx.categoryId
+  }, [row.tx.categoryId])
 
   if (row.tx.transferGroupId) {
     return (
@@ -218,9 +240,12 @@ function CategoryBadge({ row }: { row: TxRow }) {
 
   const trigger = row.category ? (
     <button
+      key={row.tx.categoryId}
       className={cn(
         'inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-opacity hover:opacity-75',
         hitArea,
+        justCategorized &&
+          'max-lg:motion-safe:animate-in max-lg:motion-safe:fade-in max-lg:motion-safe:zoom-in-95 max-lg:motion-safe:duration-200',
       )}
       style={{
         backgroundColor: row.group ? `var(--cat-${row.group.color}-bg)` : undefined,
@@ -245,7 +270,12 @@ function CategoryBadge({ row }: { row: TxRow }) {
   return (
     <CategoryPicker
       includeIncome={row.tx.amount > 0}
-      onSelect={(categoryId) => categorize.mutate({ txId: row.tx.id, categoryId })}
+      label={row.tx.label}
+      onSelect={(categoryId) => {
+        haptic(10)
+        categorize.mutate({ txId: row.tx.id, categoryId })
+        onCategorized(row, categoryId)
+      }}
     >
       {trigger}
     </CategoryPicker>
@@ -403,16 +433,164 @@ function DesktopTable({ rows }: { rows: TxRow[] }) {
   )
 }
 
-function MobileList({ rows }: { rows: TxRow[] }) {
+const MOBILE_CHUNK = 50
+
+interface MobileRowProps {
+  row: TxRow
+  selectMode: boolean
+  selected: boolean
+  onLongPress: () => void
+  onToggle: () => void
+}
+
+// Ligne mobile : appui long = entree en mode selection, tap en mode selection
+// = bascule. Les controles internes (pastille, menu) sont neutralises en mode
+// selection pour que le tap n'ouvre rien d'autre.
+function MobileRow({ row, selectMode, selected, onLongPress, onToggle }: MobileRowProps) {
+  const { handlers, firedRecently } = useLongPress(onLongPress)
+  return (
+    <div
+      {...handlers}
+      onClickCapture={(e) => {
+        // Le clic qui suit un appui long ne doit rien declencher (ni le picker,
+        // ni le menu) ; en mode selection, tout tap bascule la ligne.
+        if (firedRecently() || selectMode) {
+          e.stopPropagation()
+          e.preventDefault()
+          if (selectMode && !firedRecently()) onToggle()
+        }
+      }}
+      aria-selected={selectMode ? selected : undefined}
+      className={cn(
+        'flex min-h-[60px] select-none items-center gap-3 px-4 py-3 transition-colors',
+        selectMode && 'cursor-pointer',
+        selected && 'bg-accent/[0.06] ring-2 ring-inset ring-accent/60',
+      )}
+    >
+      {selectMode ? (
+        <span
+          className={cn(
+            'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+            selected ? 'border-accent bg-accent text-accentfg' : 'border-line bg-surface text-transparent',
+          )}
+          aria-hidden
+        >
+          <Check className="h-4 w-4" />
+        </span>
+      ) : (
+        <GroupPill group={row.group ?? undefined} size="md" />
+      )}
+      <div className={cn('min-w-0 flex-1', selectMode && 'pointer-events-none')}>
+        <p className="truncate font-medium" title={row.tx.label}>
+          {row.parsed.short}
+        </p>
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+          <CategoryBadge row={row} />
+          {/* Les transferts gardent leur badge dedie : pas de double chip */}
+          {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
+          <AccountChip account={row.account} />
+        </div>
+      </div>
+      <Amount
+        cents={row.tx.amount}
+        signed={row.tx.amount > 0}
+        className={cn('font-semibold', row.tx.amount > 0 && 'text-success')}
+      />
+      <RowMenu row={row} className={cn('-mr-1', selectMode && 'pointer-events-none opacity-0')} />
+    </div>
+  )
+}
+
+/**
+ * Liste mobile : rendu progressif (scroll infini par tranches de 50, sentinelle
+ * IntersectionObserver) et selection multiple par appui long.
+ */
+function MobileList({ rows, resetKey }: { rows: TxRow[]; resetKey: string }) {
+  const [visibleCount, setVisibleCount] = useState(MOBILE_CHUNK)
+  useEffect(() => {
+    setVisibleCount(MOBILE_CHUNK)
+  }, [resetKey])
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const hasMore = visibleCount < rows.length
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el || !hasMore) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisibleCount((n) => Math.min(rows.length, n + MOBILE_CHUNK))
+        }
+      },
+      { rootMargin: '400px 0px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [hasMore, rows.length])
+
+  const visibleRows = useMemo(() => rows.slice(0, visibleCount), [rows, visibleCount])
+
   const byDay = useMemo(() => {
     const map = new Map<string, TxRow[]>()
-    for (const row of rows) {
+    for (const row of visibleRows) {
       const list = map.get(row.tx.date) ?? []
       list.push(row)
       map.set(row.tx.date, list)
     }
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1))
-  }, [rows])
+  }, [visibleRows])
+
+  // Mode selection : seules les lignes categorisables sont selectionnables
+  // (comptes budget, hors transfert).
+  const [selected, setSelected] = useState<Set<string> | null>(null)
+  const selectMode = selected !== null
+  const categorizeMany = useCategorizeMany()
+  const canSelect = (row: TxRow) => !row.tx.transferGroupId && row.account.onBudget
+
+  const exitSelect = useCallback(() => setSelected(null), [])
+  useEffect(() => {
+    if (!selectMode) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') exitSelect()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectMode, exitSelect])
+  // Les filtres changent : on sort du mode selection (les ids pourraient
+  // ne plus etre visibles).
+  useEffect(() => {
+    setSelected(null)
+  }, [resetKey])
+
+  const enterSelect = (row: TxRow) => {
+    if (!canSelect(row)) return
+    haptic(15)
+    setSelected((prev) => {
+      const next = new Set(prev ?? [])
+      next.add(row.tx.id)
+      return next
+    })
+  }
+  const toggle = (row: TxRow) => {
+    if (!canSelect(row)) return
+    setSelected((prev) => {
+      const next = new Set(prev ?? [])
+      if (next.has(row.tx.id)) next.delete(row.tx.id)
+      else next.add(row.tx.id)
+      return next
+    })
+  }
+  const firstSelectedLabel = useMemo(() => {
+    if (!selected || selected.size === 0) return undefined
+    const first = rows.find((r) => selected.has(r.tx.id))
+    return first?.tx.label ?? ''
+  }, [selected, rows])
+
+  const applyToSelection = (categoryId: string | null) => {
+    if (!selected || selected.size === 0) return
+    haptic([10, 30, 10])
+    categorizeMany.mutate({ txIds: [...selected], categoryId })
+    exitSelect()
+  }
 
   return (
     <div className="space-y-5 lg:hidden">
@@ -427,30 +605,32 @@ function MobileList({ rows }: { rows: TxRow[] }) {
           </div>
           <Card className="divide-y divide-line/60 overflow-hidden">
             {dayRows.map((row) => (
-              <div key={row.tx.id} className="flex min-h-[60px] items-center gap-3 px-4 py-3">
-                <GroupPill group={row.group ?? undefined} size="md" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium" title={row.tx.label}>
-                    {row.parsed.short}
-                  </p>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                    <CategoryBadge row={row} />
-                    {/* Les transferts gardent leur badge dedie : pas de double chip */}
-                    {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
-                    <AccountChip account={row.account} />
-                  </div>
-                </div>
-                <Amount
-                  cents={row.tx.amount}
-                  signed={row.tx.amount > 0}
-                  className={cn('font-semibold', row.tx.amount > 0 && 'text-success')}
-                />
-                <RowMenu row={row} className="-mr-1" />
-              </div>
+              <MobileRow
+                key={row.tx.id}
+                row={row}
+                selectMode={selectMode}
+                selected={selected?.has(row.tx.id) ?? false}
+                onLongPress={() => enterSelect(row)}
+                onToggle={() => toggle(row)}
+              />
             ))}
           </Card>
         </div>
       ))}
+      {hasMore && (
+        <div ref={sentinelRef} className="space-y-3 px-1 py-2" aria-hidden>
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-4 w-1/2" />
+        </div>
+      )}
+      {selectMode && (
+        <SelectionBar
+          count={selected.size}
+          label={firstSelectedLabel}
+          onCategorize={applyToSelection}
+          onCancel={exitSelect}
+        />
+      )}
     </div>
   )
 }
@@ -609,6 +789,64 @@ export function TransactionsPage() {
 
   const uncatCount = useMemo(() => (txs ?? []).filter(isUncat).length, [txs, isUncat])
 
+  // Toast « Appliquer aux N autres » apres une categorisation manuelle : les
+  // autres transactions non categorisees du meme tiers (cle payee) sont
+  // proposees en un tap. Aucune lecture reseau : tout vient du cache.
+  const [toast, setToast] = useState<CategorizeToastData | null>(null)
+  const [ruleDialog, setRuleDialog] = useState<{ value: string; categoryId: string } | null>(null)
+  const categorizeMany = useCategorizeMany()
+  const dismissToast = useCallback(() => setToast(null), [])
+  const onCategorized = useCallback<(row: TxRow, categoryId: string | null) => void>(
+    (row, categoryId) => {
+      if (!categoryId) {
+        setToast(null)
+        return
+      }
+      const category = categoryById.get(categoryId)
+      if (!category) return
+      const key = payeeKey(row.tx.label)
+      const similarIds = key
+        ? (txs ?? [])
+            .filter((t) => t.id !== row.tx.id && isUncat(t) && payeeKey(t.label) === key)
+            .map((t) => t.id)
+        : []
+      if (similarIds.length === 0) {
+        setToast(null)
+        return
+      }
+      setToast({
+        shortLabel: row.parsed.short,
+        categoryName: category.name,
+        categoryId,
+        similarIds,
+      })
+    },
+    [categoryById, txs, isUncat],
+  )
+  const applyToast = () => {
+    if (!toast) return
+    haptic([10, 30, 10])
+    categorizeMany.mutate({ txIds: toast.similarIds, categoryId: toast.categoryId })
+    setToast(null)
+  }
+  const openRuleFromToast = () => {
+    if (!toast) return
+    setRuleDialog({ value: toast.shortLabel, categoryId: toast.categoryId })
+    setToast(null)
+  }
+
+  // Filtres mobile : chips + feuille basse (memes variables d'etat que la
+  // barre desktop, qui reste inchangee).
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const sheetFilterCount =
+    (accountFilter !== 'all' ? 1 : 0) + (categoryFilter !== 'all' ? 1 : 0) + (monthFilter !== 'all' ? 1 : 0)
+  const isAllChip = !onlyUncat && sheetFilterCount === 0
+  const chipClass = (active: boolean) =>
+    cn(
+      'flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-[13px] font-medium transition-colors',
+      active ? 'border-accent/40 bg-accent/10 text-accent' : 'border-line bg-surface text-soft',
+    )
+
   // Categorisation automatique : meme action que la page Regles, proposee ici
   // parce que c'est ici qu'on constate le retard. Sans regle definie, l'action
   // ne peut rien faire : on n'affiche alors pas la banniere du tout.
@@ -643,6 +881,7 @@ export function TransactionsPage() {
   useEffect(() => {
     setPage(0)
   }, [search, accountFilter, categoryFilter, monthFilter, onlyUncat])
+  const filtersKey = [search, accountFilter, categoryFilter, monthFilter, onlyUncat ? '1' : '0'].join('|')
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount - 1)
   const pagedRows = rows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
@@ -650,8 +889,88 @@ export function TransactionsPage() {
   if (!txs) return <TransactionsSkeleton />
 
   return (
+    <CategorizedContext.Provider value={onCategorized}>
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2.5">
+      {/* Mobile : recherche pleine largeur + chips defilantes + feuille de filtres */}
+      <div className="space-y-2.5 lg:hidden">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-soft" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Rechercher un libellé, une catégorie…"
+            className="h-11 pl-10"
+          />
+        </div>
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <button
+            type="button"
+            onClick={() => {
+              setOnlyUncat(false)
+              setAccountFilter('all')
+              setCategoryFilter('all')
+              setMonthFilter('all')
+            }}
+            className={chipClass(isAllChip)}
+          >
+            Tout
+          </button>
+          <button type="button" onClick={() => setOnlyUncat((v) => !v)} className={chipClass(onlyUncat)}>
+            À catégoriser
+            {uncatCount > 0 && (
+              <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-bold text-warning tnum">
+                {uncatCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMonthFilter((m) => (m === CURRENT_MONTH ? 'all' : CURRENT_MONTH))}
+            className={chipClass(monthFilter === CURRENT_MONTH)}
+          >
+            Ce mois
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltersOpen(true)}
+            className={chipClass(sheetFilterCount > 0)}
+            aria-haspopup="dialog"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            Filtres
+            {sheetFilterCount > 0 && (
+              <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-[11px] font-bold text-accent tnum">
+                {sheetFilterCount}
+              </span>
+            )}
+          </button>
+          {hasFilters && (
+            <button type="button" onClick={clearFilters} className={chipClass(false)} aria-label="Effacer les filtres">
+              <X className="h-3.5 w-3.5" />
+              Effacer
+            </button>
+          )}
+        </div>
+        <MobileFiltersSheet
+          open={filtersOpen}
+          onOpenChange={setFiltersOpen}
+          categoryOptions={categoryOptions}
+          accountOptions={accountOptions}
+          categoryFilter={categoryFilter}
+          onCategoryChange={setCategoryFilter}
+          accountFilter={accountFilter}
+          onAccountChange={setAccountFilter}
+          monthFilter={monthFilter}
+          onMonthChange={setMonthFilter}
+          monthMin={monthBounds.min}
+          monthMax={monthBounds.max}
+          hasFilters={hasFilters}
+          onClear={clearFilters}
+        />
+      </div>
+
+      {/* Desktop : barre de filtres inchangee */}
+      <div className="hidden flex-wrap items-center gap-2.5 lg:flex">
         <div className="relative min-w-[180px] flex-1">
           <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-soft" />
           <Input
@@ -770,9 +1089,9 @@ export function TransactionsPage() {
       ) : (
         <>
           <DesktopTable rows={pagedRows} />
-          <MobileList rows={pagedRows} />
+          <MobileList rows={rows} resetKey={filtersKey} />
           {pageCount > 1 && (
-            <div className="flex items-center justify-between gap-3 px-1">
+            <div className="hidden items-center justify-between gap-3 px-1 lg:flex">
               <p className="text-[12.5px] text-soft tnum">
                 {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, rows.length)} sur{' '}
                 {rows.length}
@@ -801,6 +1120,19 @@ export function TransactionsPage() {
           )}
         </>
       )}
+      <CategorizeToast
+        data={toast}
+        onApply={applyToast}
+        onCreateRule={openRuleFromToast}
+        onDismiss={dismissToast}
+      />
+      <CreateRuleDialog
+        open={ruleDialog !== null}
+        onOpenChange={(open) => !open && setRuleDialog(null)}
+        initialValue={ruleDialog?.value ?? ''}
+        initialCategoryId={ruleDialog?.categoryId}
+      />
     </div>
+    </CategorizedContext.Provider>
   )
 }

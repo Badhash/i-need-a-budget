@@ -1,14 +1,68 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Search } from 'lucide-react'
-import { useCategoriesList, useGroupsList } from '@/lib/data'
+import { useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
+import { useCategorySuggestions, type SuggestionReason } from '@/lib/categorize'
+import { haptic } from '@/lib/haptics'
 import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { useKeyboardInset } from '@/hooks/useKeyboardInset'
+import { GroupPill } from '@/components/shared/GroupPill'
 
 interface CategoryPickerProps {
   children: ReactNode
   onSelect: (categoryId: string | null) => void
   includeIncome?: boolean
+  /** Libelle de la transaction : active la ligne « Suggestions » (tiers
+   * memorise, categories recentes/frequentes). Sans libelle, pas de ligne. */
+  label?: string
+}
+
+const REASON_HINT: Record<SuggestionReason, string> = {
+  payee: 'tiers',
+  recent: 'récent',
+  frequent: 'fréquent',
+}
+
+/**
+ * Ligne de suggestions (jusqu'a 4 chips) au-dessus de la liste. Composant
+ * separe : le hook de suggestions lit le cache des transactions, on ne le
+ * monte donc que lorsqu'un libelle est fourni (jamais depuis la page Regles).
+ */
+function SuggestionsRow({ label, onPick }: { label: string; onPick: (id: string) => void }) {
+  const suggestions = useCategorySuggestions(label)
+  const categoryById = useCategoriesMap()
+  const groupById = useGroupsMap()
+  if (suggestions.length === 0) return null
+  return (
+    <div className="px-1 pb-1">
+      <p className="px-1 py-1 text-[11px] font-semibold uppercase tracking-wide text-soft">Suggestions</p>
+      <div className="flex flex-wrap gap-1.5 px-1">
+        {suggestions.map((s) => {
+          const cat = categoryById.get(s.categoryId)
+          if (!cat) return null
+          const group = groupById.get(cat.groupId)
+          return (
+            <button
+              key={s.categoryId}
+              type="button"
+              title={REASON_HINT[s.reason]}
+              onClick={() => onPick(s.categoryId)}
+              className="inline-flex min-h-[36px] max-w-full items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2.5 text-[12.5px] font-medium transition-opacity hover:opacity-80 lg:min-h-0"
+              style={{
+                backgroundColor: group ? `var(--cat-${group.color}-bg)` : undefined,
+                color: group ? `var(--cat-${group.color}-fg)` : undefined,
+              }}
+            >
+              <GroupPill group={group} size="sm" className="bg-surface/60" />
+              <span className="truncate">{cat.name}</span>
+              <span className="text-[10px] font-normal opacity-70">{REASON_HINT[s.reason]}</span>
+            </button>
+          )
+        })}
+      </div>
+      <div className="mt-1 border-t border-line/60" />
+    </div>
+  )
 }
 
 // Normalisation insensible casse/accents pour la recherche.
@@ -38,7 +92,7 @@ const VIEWPORT_MARGIN = 12 // px
  * ancre suivrait ce scroll et se retrouverait detache tout en haut (bug). La
  * feuille basse, calee sur le clavier via useKeyboardInset, reste stable.
  */
-export function CategoryPicker({ children, onSelect, includeIncome = false }: CategoryPickerProps) {
+export function CategoryPicker({ children, onSelect, includeIncome = false, label }: CategoryPickerProps) {
   const allCategories = useCategoriesList()
   const allGroups = useGroupsList()
   const isDesktop = useIsDesktop()
@@ -189,6 +243,15 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
               />
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-1">
+              {label !== undefined && !query && (
+                <SuggestionsRow
+                  label={label}
+                  onPick={(id) => {
+                    haptic()
+                    choose(id)
+                  }}
+                />
+              )}
               {groups.length === 0 && (
                 <p className="px-2 py-3 text-[13px] text-soft">Aucune catégorie</p>
               )}
@@ -203,7 +266,7 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
                       key={cat.id}
                       type="button"
                       onClick={() => choose(cat.id)}
-                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13.5px] transition-colors hover:bg-surface2"
+                      className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13.5px] transition-colors hover:bg-surface2 lg:min-h-0"
                     >
                       <span
                         className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -219,7 +282,7 @@ export function CategoryPicker({ children, onSelect, includeIncome = false }: Ca
               <button
                 type="button"
                 onClick={() => choose(null)}
-                className="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-[13.5px] text-soft transition-colors hover:bg-surface2"
+                className="flex min-h-[44px] w-full items-center rounded-lg px-2 py-1.5 text-left text-[13.5px] text-soft transition-colors hover:bg-surface2 lg:min-h-0"
               >
                 Sans catégorie
               </button>

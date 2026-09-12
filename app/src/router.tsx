@@ -52,6 +52,7 @@ const RulesPage = lazyPage(() => import('@/pages/RulesPage').then((m) => ({ defa
 const SettingsPage = lazyPage(() =>
   import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 )
+const TriagePage = lazyPage(() => import('@/pages/TriagePage').then((m) => ({ default: m.TriagePage })))
 
 interface RouterAuthContext {
   auth: { isAuthenticated: boolean; userId: string | null }
@@ -166,6 +167,14 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 })
 
+// Tri une-par-une des transactions a categoriser. Volontairement HORS de la
+// liste blanche de persistance : au refresh on ne revient pas sur cette vue.
+const triageRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: '/trier',
+  component: TriagePage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   protectedRoute.addChildren([
@@ -176,6 +185,7 @@ const routeTree = rootRoute.addChildren([
     reportsRoute,
     rulesRoute,
     settingsRoute,
+    triageRoute,
   ]),
 ])
 

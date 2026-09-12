@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { cn } from '@/lib/utils'
+import { useIsDesktop } from '@/hooks/useIsDesktop'
 
 const MIN_DATE = `${MIN_MONTH}-01`
 
@@ -98,6 +99,11 @@ export function TransactionForm({
   const [categoryId, setCategoryId] = useState<string>(initial.categoryId)
   const [note, setNote] = useState(initial.note)
   const [error, setError] = useState<string | null>(null)
+  // Mobile : date et note repliees sous « Plus d'options » (saisie rapide,
+  // montant d'abord). Depliees d'office si la valeur initiale n'est pas celle
+  // par defaut (edition d'une transaction datee ou annotee).
+  const isDesktop = useIsDesktop()
+  const [moreOpen, setMoreOpen] = useState(initial.date !== TODAY || initial.note.trim() !== '')
 
   // Filet : selectionne le premier compte si aucun n'est defini (taxonomie
   // pas encore chargee a l'ouverture).
@@ -164,6 +170,157 @@ export function TransactionForm({
     }
     return opts
   }, [visibleGroups, categories, wantIncome])
+
+  // Pied de formulaire partage entre les deux mises en page.
+  const footer = (
+    <div
+      className="flex gap-3 border-t border-line p-5"
+      style={keyboardInset ? { paddingBottom: keyboardInset + 20 } : undefined}
+    >
+      <Button variant="secondary" className="flex-1" onClick={onCancel}>
+        Annuler
+      </Button>
+      <Button className="flex-1" onClick={submit} disabled={submitting}>
+        {submitting ? submittingLabel : submitLabel}
+      </Button>
+    </div>
+  )
+
+  // Mobile (< lg) : saisie rapide, montant en premier et en grand, sens de la
+  // transaction en segmented control 44 px, puis libelle, compte, categorie ;
+  // date et note sous un disclosure. La branche desktop ci-dessous est
+  // inchangee.
+  if (!isDesktop) {
+    return (
+      <>
+        <div className="flex-1 space-y-4 overflow-y-auto p-5 pt-2">
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-surface2 p-1">
+            {(
+              [
+                ['expense', 'Dépense'],
+                ['income', 'Revenu'],
+              ] as const
+            ).map(([value, lbl]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setKind(value)
+                  setCategoryId('')
+                }}
+                className={cn(
+                  'h-11 rounded-lg text-[15px] font-medium transition-colors',
+                  kind === value ? 'bg-surface text-ink shadow-sm' : 'text-soft hover:text-ink',
+                )}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+
+          <div>
+            <label className="label-caps mb-1.5 block">Montant</label>
+            <div className="relative">
+              <Input
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0,00"
+                inputMode="decimal"
+                autoFocus={autoFocusAmount}
+                aria-label="Montant"
+                className={cn(
+                  'h-16 pr-10 text-right text-[32px] font-semibold tnum',
+                  kind === 'income' && 'text-success',
+                )}
+              />
+              <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[20px] text-soft">
+                €
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <label className="label-caps mb-1.5 block">Libellé</label>
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={kind === 'expense' ? 'Boulangerie Maison Landemaine' : 'Virement reçu'}
+            />
+          </div>
+
+          <div>
+            <label className="label-caps mb-1.5 block">Compte</label>
+            <Combobox
+              options={accountOptions}
+              value={accountId}
+              onChange={setAccountId}
+              placeholder="Choisir un compte"
+              searchPlaceholder="Rechercher un compte…"
+              aria-label="Compte"
+            />
+          </div>
+
+          {isTracking ? (
+            <p className="rounded-xl bg-surface2 px-3.5 py-2.5 text-[13px] text-soft">
+              Compte hors budget : ce mouvement n'a pas de catégorie, il ne touche ni les
+              enveloppes ni le Prêt à assigner.
+            </p>
+          ) : (
+            <div>
+              <label className="label-caps mb-1.5 block">Catégorie</label>
+              <Combobox
+                options={categoryOptions}
+                value={categoryId}
+                onChange={setCategoryId}
+                placeholder="À catégoriser"
+                searchPlaceholder="Rechercher une catégorie…"
+                aria-label="Catégorie"
+              />
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+            className="flex min-h-[44px] w-full items-center justify-between rounded-xl px-1 text-[14px] font-medium text-soft transition-colors hover:text-ink"
+          >
+            <span>{moreOpen ? 'Moins d’options' : 'Plus d’options'}</span>
+            <span className="text-[13px] tnum">{date === TODAY ? "Aujourd'hui" : date}</span>
+          </button>
+
+          {moreOpen && (
+            <>
+              <div>
+                <label className="label-caps mb-1.5 block">Date</label>
+                <Input
+                  type="date"
+                  value={date}
+                  min={minDate}
+                  max={TODAY}
+                  onChange={(e) => setDate(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label-caps mb-1.5 block">Note</label>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Optionnel"
+                  rows={2}
+                  maxLength={500}
+                  className="flex w-full resize-none rounded-xl border border-line bg-surface px-3.5 py-2.5 text-[16px] text-ink placeholder:text-soft/70 transition-colors focus:border-accent/60"
+                />
+              </div>
+            </>
+          )}
+
+          {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
+        </div>
+        {footer}
+      </>
+    )
+  }
 
   return (
     <>
