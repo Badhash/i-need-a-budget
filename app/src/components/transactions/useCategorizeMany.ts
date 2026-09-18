@@ -5,7 +5,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Transaction } from '@/types/domain'
 import { apiCategorizeMany, patchUncategorizedCount } from '@/lib/data'
-import { applyCategorizeOptimistic } from '@/lib/categorize'
+import { applyCategorizeOptimistic, scheduleBudgetRefetch } from '@/lib/categorize'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 
 export interface CategorizeManyVars {
@@ -41,7 +41,7 @@ export function useCategorizeMany() {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
       if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
     },
-    // Pas d'invalidation directe : le cache est deja exact, la reconciliation
-    // passe par le signal Realtime coalesce (cf. useRealtimeSync).
+    // Liste et badge deja exacts ; refetch cible et coalesce du budget.
+    onSuccess: () => scheduleBudgetRefetch(queryClient),
   })
 }

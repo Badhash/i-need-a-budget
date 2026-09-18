@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiAddTransaction, countsAsUncategorized, patchUncategorizedCount, useAccountsList } from '@/lib/data'
 import { useUiStore } from '@/stores/ui'
 import { haptic } from '@/lib/haptics'
+import { scheduleBudgetRefetch } from '@/lib/categorize'
 import {
   Dialog,
   DialogContent,
@@ -32,6 +33,8 @@ export function AddTransactionDialog() {
       // budget/les rapports/les soldes sont reconcilies en fond par le signal
       // Realtime coalesce, sans recharger toute la table chiffree.
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      // Une saisie categorisee ou un revenu deplace le budget du mois.
+      scheduleBudgetRefetch(queryClient)
       // Une saisie manuelle sans categorie (jusqu'a aujourd'hui) alimente le
       // badge « À catégoriser » : on incremente le compteur porte par bootstrap.
       if (countsAsUncategorized(queryClient, { ...vars, transferGroupId: null })) {

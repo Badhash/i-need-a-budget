@@ -19,6 +19,24 @@ import { payeeKey } from '../../../packages/crypto/src/payee'
 
 export { payeeKey }
 
+// Une categorisation deplace de l'activite entre enveloppes (et peut toucher
+// le Pret a assigner : revenus, depassement d'un mois passe). Le cache budget
+// n'est pas patchable en optimiste sans rejouer le moteur, on refetch donc la
+// SEULE cle budget (agregats, quelques Ko) apres un court debounce : une rafale
+// de tris (mode Tri rapide) ne coute qu'un appel. Le signal Realtime, lui, est
+// coalesce sur 30 s et peut ne jamais arriver sur iOS (websocket coupee en
+// arriere-plan) : sans ce refetch cible, le Pret a assigner restait fige.
+const BUDGET_REFETCH_DEBOUNCE_MS = 1200
+let budgetRefetchTimer: ReturnType<typeof setTimeout> | null = null
+
+export function scheduleBudgetRefetch(queryClient: QueryClient): void {
+  if (budgetRefetchTimer) clearTimeout(budgetRefetchTimer)
+  budgetRefetchTimer = setTimeout(() => {
+    budgetRefetchTimer = null
+    void queryClient.invalidateQueries({ queryKey: ['budget'] })
+  }, BUDGET_REFETCH_DEBOUNCE_MS)
+}
+
 export interface CategorizeVars {
   txId: string
   categoryId: string | null
@@ -60,9 +78,9 @@ export function useCategorize() {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
       if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
     },
-    // Pas d'invalidation directe ici : le cache est deja exact (mise a jour
-    // optimiste), et le signal Realtime declenche une reconciliation UNIQUE et
-    // coalescee en fond (cf. useRealtimeSync + realtimeGate).
+    // Liste et badge sont deja exacts (optimiste) ; seul le budget du mois est
+    // refetche, de facon ciblee et coalescee (cf. scheduleBudgetRefetch).
+    onSuccess: () => scheduleBudgetRefetch(queryClient),
   })
 }
 

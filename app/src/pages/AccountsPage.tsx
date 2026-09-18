@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { SignedAmountInput } from '@/components/shared/SignedAmountInput'
 import { Select } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -222,12 +223,11 @@ function EditAccountDialog({
               </p>
             </div>
             <div className="flex gap-3">
-              <Input
+              <SignedAmountInput
                 value={targetBalance}
-                onChange={(e) => setTargetBalance(e.target.value)}
-                placeholder="-350,00"
-                inputMode="decimal"
-                className="flex-1 text-right tnum"
+                onChange={setTargetBalance}
+                placeholder="350,00"
+                className="flex-1"
               />
               <Button
                 variant="secondary"
@@ -382,13 +382,7 @@ function AddAccountDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label-caps mb-1.5 block">Solde d'ouverture (€)</label>
-              <Input
-                value={balance}
-                onChange={(e) => setBalance(e.target.value)}
-                placeholder="0,00"
-                inputMode="decimal"
-                className="text-right tnum"
-              />
+              <SignedAmountInput value={balance} onChange={setBalance} placeholder="0,00" />
             </div>
             <div>
               <label className="label-caps mb-1.5 block">Date d'ouverture</label>

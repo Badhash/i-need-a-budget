@@ -24,6 +24,7 @@ import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { useTargets, neededThisMonth, type Target } from '@/lib/targets'
 import { FundTargetsSheet, type FundPlanItem } from '@/components/budget/FundTargetsSheet'
+import { CoverOverspendingDialog, type CoverItem } from '@/components/budget/CoverOverspendingDialog'
 import { Button } from '@/components/ui/button'
 import { fmtEUR, fmtMonthLong } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
@@ -885,6 +886,8 @@ export function BudgetPage() {
   const { data: targets } = useTargets()
   const [targetCat, setTargetCat] = useState<Category | null>(null)
   const [fundOpen, setFundOpen] = useState(false)
+  // Recapitulatif apres « Couvrir les depassements » (null = ferme).
+  const [coverDone, setCoverDone] = useState<CoverItem[] | null>(null)
   // Mutation d'assignation partagee pour l'assignation guidee : chaque ligne du
   // plan est appliquee via la MEME mutation optimiste que la saisie manuelle
   // (cache mis a jour immediatement, POST en fond, rollback par ligne si echec).
@@ -966,27 +969,37 @@ export function BudgetPage() {
   // vient du Pret a assigner). budget peut etre undefined avant le garde-fou de
   // rendu : on securise avec un tableau vide (les hooks restent inconditionnels).
   const overspentRows = useMemo(() => {
-    const rows: { categoryId: string; assigned: number; missing: number }[] = []
+    const rows: CoverItem[] = []
     if (!budget) return rows
     for (const block of budget.groups) {
       for (const row of block.rows) {
         if (row.available < 0) {
-          rows.push({ categoryId: row.category.id, assigned: row.assigned, missing: -row.available })
+          rows.push({
+            categoryId: row.category.id,
+            categoryName: row.category.name,
+            group: block.group,
+            previousAssigned: row.assigned,
+            added: -row.available,
+          })
         }
       }
     }
     return rows
   }, [budget])
 
-  const overspentTotal = overspentRows.reduce((sum, r) => sum + r.missing, 0)
+  const overspentTotal = overspentRows.reduce((sum, r) => sum + r.added, 0)
 
   // Couvre TOUS les depassements en une action : chaque enveloppe negative
   // recoit le manque (nouvel assigne = assigne + manque -> disponible = 0).
   // Chaque mutate part independamment (rollback par ligne si echec reseau).
+  // Le recapitulatif s'ouvre ensuite avec la liste figee de ce qui a ete fait
+  // (les lignes ne sont plus « en depassement » une fois le cache patche).
   const coverOverspending = () => {
-    for (const row of overspentRows) {
-      assign.mutate({ categoryId: row.categoryId, amount: row.assigned + row.missing })
+    const done = overspentRows
+    for (const row of done) {
+      assign.mutate({ categoryId: row.categoryId, amount: row.previousAssigned + row.added })
     }
+    setCoverDone(done)
   }
 
   const confirmFunding = () => {
@@ -1165,6 +1178,7 @@ export function BudgetPage() {
           hideEmptyRows={hideEmptyRows}
         />
       )}
+      <CoverOverspendingDialog items={coverDone} rtaAfter={budget.rta} onClose={() => setCoverDone(null)} />
       <FundTargetsSheet
         open={fundOpen}
         items={fundPlan}

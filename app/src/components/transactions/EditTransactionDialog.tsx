@@ -7,6 +7,7 @@ import {
 } from '@/lib/data'
 import type { Transaction } from '@/types/domain'
 import { useUiStore } from '@/stores/ui'
+import { scheduleBudgetRefetch } from '@/lib/categorize'
 import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import {
   Dialog,
@@ -62,9 +63,9 @@ function useUpdateTransaction() {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
       if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
     },
-    // Deja reflete de facon optimiste : reconciliation en fond via le signal
-    // Realtime coalesce (pas d'invalidation directe qui rechargerait toute la
-    // table chiffree a chaque edition).
+    // Liste et badge deja exacts (optimiste) ; une edition peut changer
+    // categorie, montant ou mois : refetch cible et coalesce du budget.
+    onSuccess: () => scheduleBudgetRefetch(queryClient),
   })
 }
 

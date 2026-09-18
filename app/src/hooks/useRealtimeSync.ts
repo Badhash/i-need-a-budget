@@ -23,6 +23,13 @@ import { msSinceLocalWrite } from '@/lib/realtimeGate'
 // au plus tard a la fin de la fenetre ; hors activite, il l'est en 300ms.
 const QUIET_WINDOW_MS = 30000
 const EXTERNAL_DEBOUNCE_MS = 300
+// Retour au premier plan (PWA iOS) : le websocket Realtime est coupe des que
+// l'app passe en arriere-plan et un broadcast emis pendant la coupure est
+// perdu ; le re-abonnement n'est pas garanti non plus. Apres une absence d'au
+// moins RESUME_AFTER_MS, on force donc UNE reconciliation (l'equivalent du
+// relancement de l'app, sans le relancer). Les absences courtes (changement
+// d'app rapide) ne coutent rien.
+const RESUME_AFTER_MS = 5 * 60 * 1000
 
 export function useRealtimeSync() {
   const queryClient = useQueryClient()
@@ -82,8 +89,24 @@ export function useRealtimeSync() {
         })
     })()
 
+    let hiddenAt = 0
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now()
+        return
+      }
+      if (hiddenAt && Date.now() - hiddenAt >= RESUME_AFTER_MS) {
+        hiddenAt = 0
+        if (timer) clearTimeout(timer)
+        timer = null
+        void queryClient.invalidateQueries()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
       active = false
+      document.removeEventListener('visibilitychange', onVisibility)
       if (timer) clearTimeout(timer)
       if (channel) void supabase.removeChannel(channel)
     }
