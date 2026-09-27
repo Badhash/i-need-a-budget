@@ -23,3 +23,16 @@ export interface BudgetMonth {
   groups: BudgetGroupBlock[]
   totals: { assigned: number; activity: number; available: number }
 }
+
+/** Depassements d'un ensemble de lignes : nombre d'enveloppes negatives et manque total (> 0). */
+export function overspendingOf(rows: BudgetRow[]): { count: number; missing: number } {
+  let count = 0
+  let missing = 0
+  for (const row of rows) {
+    if (row.available < 0) {
+      count += 1
+      missing += -row.available
+    }
+  }
+  return { count, missing }
+}

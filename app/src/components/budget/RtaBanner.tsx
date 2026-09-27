@@ -5,7 +5,7 @@ import { fmtEUR } from '@/lib/format'
 import { Amount } from '@/components/shared/Amount'
 import { cn } from '@/lib/utils'
 
-export function RtaBanner({ budget }: { budget: BudgetMonth }) {
+export function RtaBanner({ budget, overspent = 0 }: { budget: BudgetMonth; overspent?: number }) {
   const negative = budget.rta < 0
   const animated = useAnimatedNumber(budget.rta)
 
@@ -82,6 +82,16 @@ export function RtaBanner({ budget }: { budget: BudgetMonth }) {
             )}
           </div>
         </div>
+        {/* Le Pret a assigner ne deduit les depassements qu'au mois SUIVANT
+            (regle YNAB) : un RTA positif peut cohabiter avec des enveloppes
+            negatives. On le dit explicitement pour ne pas surprendre. */}
+        {!negative && overspent > 0 && (
+          <p className="mt-3 flex items-center gap-2 text-[13px] font-medium text-danger">
+            <TriangleAlert className="h-4 w-4 shrink-0" />
+            {fmtEUR(overspent)} de dépassements à couvrir ce mois, sinon ils seront retirés du
+            Prêt à assigner le mois prochain.
+          </p>
+        )}
         {negative && (
           <p className="mt-3 flex items-center gap-2 text-[13px] font-medium text-danger">
             <TriangleAlert className="h-4 w-4 shrink-0" />

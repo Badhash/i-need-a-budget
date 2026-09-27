@@ -18,7 +18,7 @@ import {
   Undo2,
   Wand2,
 } from 'lucide-react'
-import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
+import { overspendingOf, type BudgetGroupBlock, type BudgetMonth, type BudgetRow } from '@/lib/budget'
 import type { Category } from '@/types/domain'
 import { useBudgetMonth, useBootstrap, apiSetAssigned } from '@/lib/data'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
@@ -30,6 +30,7 @@ import { fmtEUR, fmtMonthLong } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { RtaBanner } from '@/components/budget/RtaBanner'
 import { TriageCard } from '@/components/budget/TriageCard'
+import { OverspendingCard } from '@/components/budget/OverspendingCard'
 import { AssignedEditor } from '@/components/budget/AssignedEditor'
 import { AssignSheet } from '@/components/budget/AssignSheet'
 import {
@@ -558,6 +559,7 @@ function GroupRows({
   const collapsed = useUiStore((s) => Boolean(s.collapsedGroups[block.group.id]))
   const toggle = useUiStore((s) => s.toggleGroupCollapsed)
   const Chevron = collapsed ? ChevronRight : ChevronDown
+  const groupOverspent = overspendingOf(block.rows)
 
   return (
     <>
@@ -590,13 +592,26 @@ function GroupRows({
           <Amount cents={block.totals.activity} className="font-medium text-soft" />
         </td>
         <td className="px-5 py-2 text-right">
-          <Amount
-            cents={block.totals.available}
-            className={cn(
-              'font-semibold',
-              block.totals.available < 0 ? 'text-danger' : 'text-ink',
+          {/* La somme des disponibles peut masquer un depassement (une enveloppe
+              a +50 et une a -30 font +20) : on signale explicitement les
+              enveloppes negatives du groupe, meme si la somme est positive. */}
+          <span className="inline-flex items-center justify-end gap-2">
+            {groupOverspent.count > 0 && (
+              <span
+                className="rounded-full bg-danger/10 px-2 py-0.5 text-[11px] font-semibold text-danger tnum"
+                title={`${groupOverspent.count} enveloppe${groupOverspent.count > 1 ? 's' : ''} en dépassement, ${fmtEUR(groupOverspent.missing)} à couvrir`}
+              >
+                {groupOverspent.count} en dépassement
+              </span>
             )}
-          />
+            <Amount
+              cents={block.totals.available}
+              className={cn(
+                'font-semibold',
+                block.totals.available < 0 || groupOverspent.count > 0 ? 'text-danger' : 'text-ink',
+              )}
+            />
+          </span>
         </td>
       </tr>
       {!collapsed &&
@@ -774,6 +789,7 @@ function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity, hi
         .map((block) => {
         const collapsed = Boolean(collapsedGroups[block.group.id])
         const Chevron = collapsed ? ChevronRight : ChevronDown
+        const groupOverspent = overspendingOf(block.rows)
         return (
           <Card key={block.group.id} className="overflow-hidden">
             <button
@@ -784,8 +800,20 @@ function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity, hi
             >
               <Chevron className="h-5 w-5 shrink-0 text-soft" aria-hidden />
               <GroupPill group={block.group} size="md" />
-              <p className="min-w-0 flex-1 truncate font-semibold">{block.group.name}</p>
-              <AvailablePill cents={block.totals.available} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-semibold">{block.group.name}</span>
+                {groupOverspent.count > 0 && (
+                  <span className="block text-[12px] font-medium text-danger tnum">
+                    {groupOverspent.count === 1
+                      ? '1 enveloppe en dépassement'
+                      : `${groupOverspent.count} enveloppes en dépassement`}
+                  </span>
+                )}
+              </span>
+              <AvailablePill
+                cents={block.totals.available}
+                className={cn(groupOverspent.count > 0 && block.totals.available >= 0 && 'ring-1 ring-danger/40')}
+              />
             </button>
             {!collapsed && (
               <div className="divide-y divide-line/60">
@@ -1054,10 +1082,13 @@ export function BudgetPage() {
       {/* Desktop : le resume est dans le header (HeaderBudgetSummary). Mobile :
           on garde le grand bandeau sticky. */}
       <div className="lg:hidden">
-        <RtaBanner budget={budget} />
+        <RtaBanner budget={budget} overspent={overspentTotal} />
       </div>
       {/* Mobile uniquement : raccourci vers le tri des transactions a categoriser. */}
       <TriageCard />
+      {/* Mobile uniquement : depassements du mois et action « Couvrir » (le
+          desktop a le bouton dans la barre d'actions). */}
+      <OverspendingCard count={overspentRows.length} missing={overspentTotal} onCover={coverOverspending} />
       {/* Tout replier / tout deplier les groupes du budget. */}
       {groupIds.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-1.5">
