@@ -83,6 +83,12 @@ export function useSyncLogs(): UseQueryResult<SyncLog[]> {
 // Appel bas niveau vers l'endpoint sync-bank, JWT de la session courante joint
 // (meme schema d'auth que apiCall). Lance en cas d'erreur : l'appelant catch.
 async function syncBankCall<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
+  // Mode demonstration (VITE_DEMO=1) : sync-bank factice en memoire (cf. api.ts).
+  if (import.meta.env.VITE_DEMO === '1') {
+    const { demoSyncBankCall } = await import('@/dev/demo')
+    return demoSyncBankCall<T>(action, params)
+  }
+
   const {
     data: { session },
   } = await supabase.auth.getSession()
