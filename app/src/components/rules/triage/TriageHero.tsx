@@ -145,7 +145,11 @@ export function TriageHero({
       {showKeys ? (
         <div className="flex items-center gap-6">
           {counter}
-          <div className="flex min-h-[88px] min-w-0 flex-1 flex-col justify-center border-l border-line/70 pl-6">
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex min-h-[88px] min-w-0 flex-1 flex-col justify-center border-l border-line/70 pl-6"
+          >
             {receiptArea}
           </div>
           <Button variant="ghost" size="icon" aria-label="Fermer le tri" onClick={onClose} className="self-start">
@@ -160,7 +164,11 @@ export function TriageHero({
               <X className="h-5 w-5" />
             </Button>
           </div>
-          <div className="mt-3 flex min-h-[80px] flex-col justify-center border-t border-line/70 pt-2">
+          <div
+            role="status"
+            aria-live="polite"
+            className="mt-3 flex min-h-[80px] flex-col justify-center border-t border-line/70 pt-2"
+          >
             {receiptArea}
           </div>
         </>

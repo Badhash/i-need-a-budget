@@ -156,6 +156,11 @@ export function RuleForm({
             </button>
           </CategoryPicker>
         </div>
+        {category?.isIncome && (
+          <p className="text-[12.5px] leading-snug text-warning">
+            Une règle ne peut pas classer dans les revenus : choisis une enveloppe.
+          </p>
+        )}
       </div>
 
       <RulePreviewPanel preview={preview} op={op} value={deferredValue} />

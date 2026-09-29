@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from 'lucide-react'
 import {
   isPendingRule,
+  opLabel,
   ruleRenderKey,
   swapPriorityChanges,
   useDeleteRule,
@@ -70,6 +71,12 @@ export function RulesList({ rules, onEdit, highlightId }: RulesListProps) {
   useLayoutEffect(() => {
     const list = listRef.current
     if (!list) return
+    // Liste masquee (onglet mobile inactif) : aucune position fiable, on
+    // repart de zero a son affichage plutot que d'animer depuis le haut.
+    if (list.offsetParent === null) {
+      positions.current = new Map()
+      return
+    }
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const next = new Map<string, number>()
     list.querySelectorAll<HTMLElement>('[data-rule-key]').forEach((el) => {
@@ -153,7 +160,7 @@ function RuleRow({
           onClick={() => onMove(-1)}
           disabled={first || pending}
           aria-label="Monter la règle (plus prioritaire)"
-          className="flex h-10 w-11 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink disabled:pointer-events-none disabled:opacity-25 lg:h-7 lg:w-8"
+          className="flex h-10 w-11 items-center justify-center rounded-lg text-soft transition-colors disabled:pointer-events-none [@media(hover:hover)]:hover:bg-surface2 [@media(hover:hover)]:hover:text-ink disabled:opacity-25 lg:h-7 lg:w-8"
         >
           <ChevronUp className="h-4 w-4" />
         </button>
@@ -162,7 +169,7 @@ function RuleRow({
           onClick={() => onMove(1)}
           disabled={last || pending}
           aria-label="Descendre la règle (moins prioritaire)"
-          className="flex h-10 w-11 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink disabled:pointer-events-none disabled:opacity-25 lg:h-7 lg:w-8"
+          className="flex h-10 w-11 items-center justify-center rounded-lg text-soft transition-colors disabled:pointer-events-none [@media(hover:hover)]:hover:bg-surface2 [@media(hover:hover)]:hover:text-ink disabled:opacity-25 lg:h-7 lg:w-8"
         >
           <ChevronDown className="h-4 w-4" />
         </button>
@@ -172,8 +179,8 @@ function RuleRow({
         type="button"
         onClick={onEdit}
         disabled={pending}
-        className="group flex min-w-0 flex-1 items-start gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-surface2/60 disabled:cursor-default"
-        aria-label={`Modifier la règle ${rank}`}
+        className="group flex min-w-0 flex-1 items-start gap-3 rounded-xl px-2 py-2 text-left transition-colors active:bg-surface2/60 disabled:cursor-default [@media(hover:hover)]:hover:bg-surface2/60"
+        aria-label={`Modifier la règle ${rank} : ${opLabel(rule.matcher.op)} « ${rule.matcher.value} »`}
       >
         <span
           className={cn(

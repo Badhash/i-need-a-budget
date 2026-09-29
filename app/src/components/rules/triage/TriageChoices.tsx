@@ -61,8 +61,8 @@ export const TriageChoices = forwardRef<HTMLButtonElement, TriageChoicesProps>(f
                   'group flex w-full items-center gap-3 rounded-2xl border bg-surface text-left shadow-card transition-[transform,background-color,border-color] duration-150 ease-spring active:scale-[0.97]',
                   showKeys ? 'min-h-[52px] px-3 py-2' : 'min-h-[56px] gap-2.5 px-2.5 py-2',
                   remembered
-                    ? 'border-accent/40 bg-accent/[0.07] hover:bg-accent/10'
-                    : 'border-edge hover:border-accent/30 hover:bg-accent/[0.04]',
+                    ? 'border-accent/40 bg-accent/[0.07] [@media(hover:hover)]:hover:bg-accent/10'
+                    : 'border-edge [@media(hover:hover)]:hover:border-accent/30 [@media(hover:hover)]:hover:bg-accent/[0.04]',
                 )}
               >
                 <GroupPill group={group} size={showKeys ? 'md' : 'sm'} />
