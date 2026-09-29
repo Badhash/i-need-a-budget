@@ -4,7 +4,7 @@ import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import { apiSetAssigned } from '@/lib/data'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { fmtEUR } from '@/lib/format'
-import { toast } from '@/lib/toast'
+import { dismissToast, toast } from '@/lib/toast'
 import type {
   MovePayload,
   MoveTarget,
@@ -177,7 +177,7 @@ export function useAssignMutation(month: string) {
 }
 
 /**
- * Assignation GROUPEE (« Financer les objectifs », « Couvrir les dépassements »,
+ * Assignation GROUPEE (« Financer les objectifs », « Couvrir les depassements »,
  * annuler / refaire) : une seule mise a jour optimiste, UNE etape d'historique
  * (sauf record: false, pour les replays), un seul rollback et une seule
  * notification d'erreur si le lot echoue.
@@ -274,6 +274,9 @@ export function moveTargetsFor(groups: BudgetGroupBlock[], excludeId: string | u
 // Annuler / refaire (page Budget)
 // ---------------------------------------------------------------------------
 
+/** Toast unique des actions de l'historique (remplace en place). */
+export const HISTORY_TOAST = 'budget-history'
+
 function stepSubject(step: HistoryStep): string {
   return step.changes.length === 1 ? step.changes[0]!.name : `${step.changes.length} enveloppes`
 }
@@ -288,7 +291,7 @@ function stepDescription(step: HistoryStep, direction: 'undo' | 'redo'): string 
 /**
  * Annuler / refaire une ETAPE entiere (toutes ses enveloppes) en une seule
  * mise a jour optimiste, avec un toast qui propose l'operation inverse
- * (« Annulé : 3 enveloppes » -> Rétablir). Le toast garde un identifiant fixe :
+ * (« Annule : 3 enveloppes » -> Retablir). Le toast garde un identifiant fixe :
  * des annulations successives le remplacent au lieu de s'empiler.
  */
 export function useBudgetUndo(month: string) {
@@ -312,12 +315,16 @@ export function useBudgetUndo(month: string) {
     }
     const step = direction === 'undo' ? history.undo() : history.redo()
     if (!step) return
-    mutateRef.current({
-      changes: step.changes.map((c) => ({ categoryId: c.categoryId, amount: direction === 'undo' ? c.prev : c.next })),
-      record: false,
-    })
+    mutateRef.current(
+      {
+        changes: step.changes.map((c) => ({ categoryId: c.categoryId, amount: direction === 'undo' ? c.prev : c.next })),
+        record: false,
+      },
+      // Replay echoue : rollback du cache, l'etape n'a pas ete rejouee.
+      { onError: () => dismissToast(HISTORY_TOAST) },
+    )
     toast({
-      id: 'budget-history',
+      id: HISTORY_TOAST,
       message: `${direction === 'undo' ? 'Annulé' : 'Rétabli'} : ${stepSubject(step)}`,
       description: stepDescription(step, direction),
       action: {

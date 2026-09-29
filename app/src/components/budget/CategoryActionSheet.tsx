@@ -65,7 +65,7 @@ interface CategoryActionSheetProps {
   onAssign?: () => void
   /** Ouvre les transactions de l'enveloppe pour le mois affiche. */
   onViewActivity?: (categoryId: string) => void
-  /** Masque l'enveloppe (elle rejoint « Catégories masquées »). */
+  /** Masque l'enveloppe (elle rejoint « Categories masquees »). */
   onHide?: () => void
 }
 
@@ -225,14 +225,20 @@ export function CategoryActionSheet({
     setMode(next)
   }
 
-  // Montant par défaut à la sélection d'une enveloppe partenaire : tout le
-  // dépassement (plafonné au disponible de la source s'il est plus petit), ou
-  // tout l'excédent à déplacer.
+  // Montant par defaut a la selection d'une enveloppe partenaire. Couvrir :
+  // tout le depassement, plafonne au disponible de la source s'il est plus
+  // petit. Deplacer : tout l'excedent, ou juste de quoi remettre a 0 une
+  // destination en depassement.
   const selectPartner = (partner: MoveTarget) => {
-    const deficit = -available
-    const sourceAvailable = partner.row.available
+    const other = partner.row.available
     const defaultCents =
-      mode === 'cover' ? (sourceAvailable > 0 ? Math.min(deficit, sourceAvailable) : deficit) : available
+      mode === 'cover'
+        ? other > 0
+          ? Math.min(-available, other)
+          : -available
+        : other < 0
+          ? Math.min(available, -other)
+          : available
     setPicked(partner)
     setAmountDraft(toDraft(defaultCents))
   }

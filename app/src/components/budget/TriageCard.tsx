@@ -1,4 +1,4 @@
-// Ligne « à faire » (MOBILE uniquement) de la page Budget : invite a trier les
+// Ligne « a faire » (MOBILE uniquement) de la page Budget : invite a trier les
 // transactions a categoriser. Lit bootstrap.uncategorizedCount (calcule
 // serveur, patche en optimiste), jamais la liste des transactions. Rien n'est
 // rendu quand le compteur est a zero. Posee dans la carte des actions du mois.

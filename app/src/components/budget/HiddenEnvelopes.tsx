@@ -1,4 +1,4 @@
-// Section « Catégories masquées » en bas de la page Budget (mobile ET desktop),
+// Section « Categories masquees » en bas de la page Budget (mobile ET desktop),
 // repliee par defaut. Une enveloppe masquee (ou toutes celles d'un groupe
 // masque) n'apparait plus dans la grille, mais son argent reste bien dans le
 // budget : on en montre le Disponible et on permet de la reafficher.

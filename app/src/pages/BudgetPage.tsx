@@ -6,7 +6,7 @@ import type { BudgetGroupBlock, BudgetRow } from '@/lib/budget'
 import { useBudgetMonth, useBootstrap, useCategoriesMap, useGroupsMap } from '@/lib/data'
 import { useTargets, neededThisMonth, type Target } from '@/lib/targets'
 import { fmtEUR, fmtMonthLong } from '@/lib/format'
-import { toast } from '@/lib/toast'
+import { dismissToast, toast } from '@/lib/toast'
 import { useUiStore } from '@/stores/ui'
 import { useBudgetHistory } from '@/stores/budgetHistory'
 import { useIsDesktop } from '@/hooks/useIsDesktop'
@@ -22,7 +22,13 @@ import { TargetDialog } from '@/components/budget/TargetDialog'
 import { BudgetToolbar } from '@/components/budget/BudgetToolbar'
 import { HiddenEnvelopes, type HiddenEntry } from '@/components/budget/HiddenEnvelopes'
 import { useEnvelopeVisibility } from '@/components/budget/useEnvelopeVisibility'
-import { findRow, isEmptyRow, useAssignBatchMutation, useBudgetUndo } from '@/components/budget/budgetMutations'
+import {
+  findRow,
+  HISTORY_TOAST,
+  isEmptyRow,
+  useAssignBatchMutation,
+  useBudgetUndo,
+} from '@/components/budget/budgetMutations'
 import { DesktopGrid } from '@/components/budget/DesktopGrid'
 import { MobileGroups } from '@/components/budget/MobileGroups'
 import { BudgetError, BudgetSkeleton } from '@/components/budget/BudgetStates'
@@ -103,8 +109,8 @@ export function BudgetPage() {
   const targetMap = targets ?? new Map<string, Target>()
 
   // Enveloppes AFFICHEES vs MASQUEES. Une enveloppe masquee (ou toutes celles
-  // d'un groupe masque) quitte la grille pour la section « Catégories
-  // masquées » en bas de page ; son argent reste compte dans le budget.
+  // d'un groupe masque) quitte la grille pour la section « Categories
+  // masquees » en bas de page ; son argent reste compte dans le budget.
   const { visibleGroups, hiddenEntries } = useMemo(() => {
     const visible: BudgetGroupBlock[] = []
     const hidden: HiddenEntry[] = []
@@ -201,14 +207,19 @@ export function BudgetPage() {
   const confirmFunding = () => {
     const plan = fundPlan
     if (plan.length === 0) return setFundOpen(false)
-    // Assignations absolues (assigne actuel + supplement) en UN lot.
-    assignBatch.mutate({
-      changes: plan.map((item) => ({ categoryId: item.categoryId, amount: item.currentAssigned + item.add })),
-      label: FUND_LABEL,
-    })
+    // Assignations absolues (assigne actuel + supplement) en UN lot. En cas
+    // d'echec, le rollback remet les chiffres et le toast de confirmation
+    // disparait (l'erreur est signalee par la notification globale).
+    assignBatch.mutate(
+      {
+        changes: plan.map((item) => ({ categoryId: item.categoryId, amount: item.currentAssigned + item.add })),
+        label: FUND_LABEL,
+      },
+      { onError: () => dismissToast(HISTORY_TOAST) },
+    )
     setFundOpen(false)
     toast({
-      id: 'budget-history',
+      id: HISTORY_TOAST,
       tone: 'success',
       message: plan.length === 1 ? `${plan[0]!.categoryName} financée` : `${plan.length} objectifs financés`,
       description: `${fmtEUR(fundTotal)} assignés`,

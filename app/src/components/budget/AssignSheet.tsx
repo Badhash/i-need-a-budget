@@ -121,7 +121,7 @@ export function AssignSheet({ row, target, month, group, rta, onCommit, onViewAc
                   <button
                     type="button"
                     onClick={() => onViewActivity(row.category.id)}
-                    className="relative inline-flex items-center gap-0.5 rounded-md font-medium text-accent-ink underline-offset-2 after:absolute after:-inset-2 after:content-[''] hover:underline dark:text-accent"
+                    className="relative inline-flex items-center gap-0.5 rounded-md font-medium text-accent-ink underline-offset-2 after:absolute after:-inset-x-2 after:-inset-y-3 after:content-[''] hover:underline dark:text-accent"
                   >
                     <span className="tnum">Activité {fmtEUR(row.activity)}</span>
                     <ChevronRight className="h-3.5 w-3.5" />

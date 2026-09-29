@@ -1,6 +1,6 @@
 // Ligne des depassements du mois (dans le heros du Pret a assigner, mobile) :
 // quelles enveloppes sont dans le rouge, combien il manque, et l'action pour
-// les couvrir en une fois (l'equivalent du bouton « Couvrir les dépassements »
+// les couvrir en une fois (l'equivalent du bouton « Couvrir les depassements »
 // du desktop). Rien n'est rendu quand aucune enveloppe n'est negative.
 
 import { LifeBuoy } from 'lucide-react'

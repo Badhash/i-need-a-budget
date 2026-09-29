@@ -1,4 +1,4 @@
-// Champ « échéance » d'un objectif : bouton qui deplie, DANS le flux de la
+// Champ « echeance » d'un objectif : bouton qui deplie, DANS le flux de la
 // feuille (jamais un popover rogne par le defilement du dialog), un choix
 // d'annee et une grille de mois, plus des raccourcis pour les objectifs
 // lointains (1, 2, 5 ans). Bornes : [min, max] au format 'YYYY-MM'.

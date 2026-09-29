@@ -7,7 +7,7 @@ import { create } from 'zustand'
 //
 // Une ETAPE regroupe toutes les enveloppes modifiees par UNE action utilisateur :
 // une saisie (1 enveloppe), un deplacement d'argent (2 enveloppes), « Financer
-// les objectifs » ou « Couvrir les dépassements » (N enveloppes). Annuler ou
+// les objectifs » ou « Couvrir les depassements » (N enveloppes). Annuler ou
 // refaire rejoue l'etape entiere en une fois.
 
 export interface AssignChange {

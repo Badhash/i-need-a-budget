@@ -138,7 +138,7 @@ export function TargetDialog({ category, target, row = null, onClose }: TargetDi
     setError(null)
   }, [category, target])
 
-  // « Recharger jusqu'à » n'existe qu'avec un serveur qui l'annonce ; un
+  // « Recharger jusqu'a » n'existe qu'avec un serveur qui l'annonce ; un
   // objectif recharge deja pose reste editable dans tous les cas.
   const options = TYPE_OPTIONS.filter(
     (o) => o.type !== 'refill' || features.has(SERVER_FEATURES.refillTargets) || target?.type === 'refill',
@@ -147,8 +147,9 @@ export function TargetDialog({ category, target, row = null, onClose }: TargetDi
   // Echeance : jusqu'a 10 ans ; une echeance passee d'un objectif existant
   // reste selectionnable (sinon elle serait perdue a l'enregistrement).
   const thisMonth = currentMonth()
+  const horizon = addMonths(thisMonth, DUE_HORIZON_MONTHS)
   const minDue = target?.dueMonth && target.dueMonth < thisMonth ? target.dueMonth : thisMonth
-  const maxDue = addMonths(thisMonth, DUE_HORIZON_MONTHS)
+  const maxDue = target?.dueMonth && target.dueMonth > horizon ? target.dueMonth : horizon
 
   const cents = parseEuros(amount)
   const explanation = useMemo(
