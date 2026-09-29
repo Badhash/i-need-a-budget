@@ -112,7 +112,7 @@ function ToastCard({ item, closing }: { item: FeedbackItem; closing: boolean }) 
         <div className="min-w-0 flex-1 py-1">
           <p className="line-clamp-2 text-[14px] font-semibold leading-snug tracking-tight text-ink">{item.message}</p>
           {item.description && (
-            <p className="truncate text-[12.5px] leading-snug text-soft">{item.description}</p>
+            <p className="line-clamp-2 text-[12.5px] leading-snug text-soft">{item.description}</p>
           )}
         </div>
         {item.undo && (

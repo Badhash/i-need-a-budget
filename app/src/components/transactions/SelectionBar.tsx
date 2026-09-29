@@ -41,40 +41,46 @@ export function SelectionBar({
 
   if (variant === 'mobile') {
     return createPortal(
-      <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6.5rem+env(safe-area-inset-bottom))] z-[45] flex justify-center px-4 lg:hidden">
-        <div className="glass pointer-events-auto flex w-full max-w-md animate-toast-in items-center gap-1.5 rounded-[22px] border border-edge p-1.5 shadow-elevated">
-          <button
-            type="button"
-            onClick={onClear}
-            aria-label="Quitter la sélection"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-soft transition-colors hover:bg-ink/[0.06] hover:text-ink"
-          >
-            <X className="h-[18px] w-[18px]" />
-          </button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[14px] font-semibold leading-tight text-ink tnum">{countLabel}</p>
-            <Amount cents={total} signed={total > 0} className="block truncate text-[12px] leading-tight text-soft" />
+      <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6.5rem+env(safe-area-inset-bottom))] z-[45] flex justify-center px-3 lg:hidden">
+        <div className="glass pointer-events-auto w-full max-w-md animate-toast-in rounded-[24px] border border-edge p-2 shadow-elevated">
+          <div className="flex items-center gap-2 pb-1.5 pl-2.5">
+            <p className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink tnum">
+              {countLabel}
+              <span className="font-medium text-soft">
+                {' · '}
+                <Amount cents={total} signed={total > 0} />
+              </span>
+            </p>
+            <button
+              type="button"
+              onClick={onClear}
+              aria-label="Quitter la sélection"
+              className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-soft transition-colors after:absolute after:-inset-1 after:content-[''] hover:bg-ink/[0.06] hover:text-ink"
+            >
+              <X className="h-[18px] w-[18px]" />
+            </button>
           </div>
-          {similarCount > 0 && (
-            <button
-              type="button"
-              onClick={onSelectSimilar}
-              aria-label={`Sélectionner les ${similarCount} similaires`}
-              className="flex h-11 shrink-0 items-center gap-1 rounded-xl bg-accent/10 px-3 text-[13px] font-semibold text-accent-ink tnum transition-transform active:scale-95 dark:text-accent"
-            >
-              <ListPlus className="h-4 w-4" />+{similarCount}
-            </button>
-          )}
-          <CategoryPicker label={label} includeIncome={includeIncome} onSelect={onCategorize}>
-            <button
-              type="button"
-              disabled={count === 0}
-              className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 text-[13.5px] font-semibold text-accentfg shadow-button transition-transform active:scale-95 disabled:opacity-50"
-            >
-              <Tag className="h-4 w-4" />
-              Catégoriser
-            </button>
-          </CategoryPicker>
+          <div className="flex gap-2">
+            {similarCount > 0 && (
+              <button
+                type="button"
+                onClick={onSelectSimilar}
+                className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-accent/10 px-3.5 text-[13.5px] font-semibold text-accent-ink tnum transition-transform active:scale-95 dark:text-accent"
+              >
+                <ListPlus className="h-4 w-4" />+{similarCount} {similarCount > 1 ? 'similaires' : 'similaire'}
+              </button>
+            )}
+            <CategoryPicker label={label} includeIncome={includeIncome} onSelect={onCategorize} className="flex-1">
+              <button
+                type="button"
+                disabled={count === 0}
+                className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-3.5 text-[14px] font-semibold text-accentfg shadow-button transition-transform active:scale-[0.98] disabled:opacity-50"
+              >
+                <Tag className="h-4 w-4" />
+                Catégoriser
+              </button>
+            </CategoryPicker>
+          </div>
         </div>
       </div>,
       document.body,

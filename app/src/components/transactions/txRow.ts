@@ -1,6 +1,7 @@
 import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
-import { isUnconfirmedTx, txRowKey } from '@/lib/transactions'
+import { isUnconfirmedTx } from '@/lib/transactions'
+import { txRowKey } from '@/lib/txIds'
 
 export interface TxRow {
   tx: Transaction

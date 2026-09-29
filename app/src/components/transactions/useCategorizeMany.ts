@@ -11,6 +11,7 @@ import {
   scheduleBudgetRefetch,
 } from '@/lib/categorize'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
+import { followTxId } from '@/lib/txIds'
 
 export interface CategorizeManyVars {
   txIds: string[]
@@ -27,14 +28,18 @@ export function useCategorizeMany() {
       enqueue(
         () =>
           apiCategorizeMany(
-            txIds.slice(0, CATEGORIZE_MANY_MAX).map(resolveId),
+            txIds.slice(0, CATEGORIZE_MANY_MAX).map((id) => resolveId(followTxId(id))),
             categoryId === null ? null : resolveId(categoryId),
           ),
         { deps: categoryId === null ? [] : [categoryId] },
       ),
     onMutate: async ({ txIds, categoryId }) => {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
-      return applyCategorizeManyOptimistic(queryClient, txIds.slice(0, CATEGORIZE_MANY_MAX), categoryId)
+      return applyCategorizeManyOptimistic(
+        queryClient,
+        txIds.slice(0, CATEGORIZE_MANY_MAX).map(followTxId),
+        categoryId,
+      )
     },
     onError: (_err, _vars, contexts) => {
       if (contexts) revertCategorizeOptimistic(queryClient, contexts)

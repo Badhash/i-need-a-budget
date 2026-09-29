@@ -39,6 +39,7 @@ import {
 } from '@/lib/data'
 import { enqueue, isTempId, newTempId, registerRealId, resolveId } from '@/lib/mutationQueue'
 import { forgetPayeeOptimistic, learnPayeeOptimistic, scheduleBudgetRefetch } from '@/lib/categorize'
+import { followTxId, registerConfirmedTx, txRowKey } from '@/lib/txIds'
 import { fmtDayLong, today } from '@/lib/format'
 
 type BalanceDelta = { accountId: string; delta: number }
@@ -121,23 +122,10 @@ export interface PendingRemoval {
 
 const pendingAdds = new Map<string, PendingAdd>()
 const pendingDeletes = new Map<string, PendingRemoval>()
-// Id temporaire -> id serveur, et l'inverse : l'interface suit une ligne
-// confirmee (feuille de detail, selection) et garde la meme cle React, donc
-// aucun remontage ni animation rejouee au remplacement de l'id.
-const confirmedIds = new Map<string, string>()
-const tempOfReal = new Map<string, string>()
 // Ajouts de la session (cle stable -> horodatage) : mise en lumiere discrete.
 const addedAt = new Map<string, number>()
 
-/** Id courant d'une ligne (l'id temporaire d'un ajout confirme devient l'id serveur). */
-export function followTxId(id: string): string {
-  return confirmedIds.get(id) ?? id
-}
-
-/** Cle React stable d'une ligne : l'id temporaire d'origine survit a la confirmation. */
-export function txRowKey(id: string): string {
-  return tempOfReal.get(id) ?? id
-}
+export { followTxId, txRowKey }
 
 /** Ligne ajoutee a l'instant (moins de `ms`) : mise en lumiere a l'apparition. */
 export function isFreshlyAdded(id: string, ms = 2500): boolean {
@@ -252,8 +240,7 @@ interface AddContext {
 function confirmAdd(queryClient: QueryClient, tempId: string, realId: string): void {
   const pending = pendingAdds.get(tempId)
   pendingAdds.delete(tempId)
-  confirmedIds.set(tempId, realId)
-  tempOfReal.set(realId, tempId)
+  registerConfirmedTx(tempId, realId)
   writeTxs(queryClient, (old) => {
     const hasReal = old.some((t) => t.id === realId)
     const hasTemp = old.some((t) => t.id === tempId)
@@ -364,19 +351,23 @@ export function useUpdateTransaction(onFailure: (previous: Transaction) => void)
   return useMutation({
     // Echec signale dans le dialogue rouvert : pas de toast global.
     meta: { errorToast: false },
-    mutationFn: (input: UpdateTransactionInput) =>
-      enqueue(
+    // Id eventuellement capture avant la confirmation de la ligne (dialogue
+    // ouvert sur une saisie toute fraiche) : suivi vers l'id serveur.
+    mutationFn: (input: UpdateTransactionInput) => {
+      const txId = followTxId(input.transactionId)
+      return enqueue(
         () =>
           apiUpdateTransaction({
             ...input,
-            transactionId: resolveId(input.transactionId),
+            transactionId: resolveId(txId),
             categoryId: input.categoryId === null ? null : resolveId(input.categoryId),
           }),
-        { deps: input.categoryId === null ? [input.transactionId] : [input.transactionId, input.categoryId] },
-      ),
+        { deps: input.categoryId === null ? [txId] : [txId, input.categoryId] },
+      )
+    },
     onMutate: async (input): Promise<UpdateContext | undefined> => {
       await queryClient.cancelQueries({ queryKey: TRANSACTIONS_KEY })
-      const before = findTx(queryClient, input.transactionId)
+      const before = findTx(queryClient, followTxId(input.transactionId))
       if (!before) return undefined
       const after: Transaction = {
         ...before,

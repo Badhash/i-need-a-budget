@@ -20,6 +20,8 @@ interface CategoryPickerProps {
   value?: string | null
   /** Empeche l'ouverture (ex. ligne en cours d'enregistrement). */
   disabled?: boolean
+  /** Classes du conteneur du declencheur (ex. « flex-1 » pour un bouton pleine largeur). */
+  className?: string
 }
 
 const REASON_HINT: Record<SuggestionReason, string> = {
@@ -108,6 +110,7 @@ export function CategoryPicker({
   label,
   value = null,
   disabled = false,
+  className,
 }: CategoryPickerProps) {
   // Le declencheur reste leger (une pastille par ligne de liste) : lectures de
   // taxonomie, mesures du clavier et ecouteurs ne vivent que dans le panneau,
@@ -116,7 +119,7 @@ export function CategoryPicker({
   const triggerRef = useRef<HTMLSpanElement>(null)
 
   return (
-    <span ref={triggerRef} className="inline-flex max-w-full">
+    <span ref={triggerRef} className={cn('inline-flex max-w-full', className)}>
       {/* Le declencheur reel (une pastille bouton) reste children ; ce wrapper
           ne sert qu'a ancrer le popover et a basculer l'ouverture. Le clic ne
           remonte pas a la ligne (ouverture du detail). */}
@@ -125,7 +128,7 @@ export function CategoryPicker({
           e.stopPropagation()
           if (!disabled) setOpen((o) => !o)
         }}
-        className="inline-flex max-w-full"
+        className="inline-flex w-full max-w-full"
       >
         {children}
       </span>

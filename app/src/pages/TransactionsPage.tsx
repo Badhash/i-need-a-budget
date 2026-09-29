@@ -340,8 +340,8 @@ export function TransactionsPage() {
           onClick: () => {
             haptic([10, 30, 10])
             const toastKey = showFeedback({
-              message: `${n} ${plural(n, 'autre transaction catégorisée', 'autres transactions catégorisées')}`,
-              description: `Dans ${category.name}`,
+              message: `${n} ${plural(n, 'autre transaction', 'autres transactions')}`,
+              description: `${plural(n, 'Catégorisée', 'Catégorisées')} dans ${category.name}`,
               icon: 'check',
               undo: () => categorizeMany.mutate({ txIds: similarIds, categoryId: null }),
             })
@@ -468,10 +468,10 @@ export function TransactionsPage() {
     const n = targets.length
     const category = categoryId ? categoryById.get(categoryId) : undefined
     const toastKey = showFeedback({
-      message: category
-        ? `${n} ${plural(n, 'transaction catégorisée', 'transactions catégorisées')}`
-        : `${n} ${plural(n, 'transaction remise', 'transactions remises')} à catégoriser`,
-      description: category ? `Dans ${category.name}` : undefined,
+      message: `${n} ${plural(n, 'transaction', 'transactions')}`,
+      description: category
+        ? `${plural(n, 'Catégorisée', 'Catégorisées')} dans ${category.name}`
+        : `${plural(n, 'Remise', 'Remises')} à catégoriser`,
       icon: 'check',
       // Chaque ligne retrouve SA categorie d'avant (un appel par categorie).
       undo: () => {

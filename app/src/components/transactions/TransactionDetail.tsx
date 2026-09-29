@@ -111,7 +111,13 @@ function DetailBody({ row, onClose }: { row: TxRow; onClose: () => void }) {
       <DialogHeader className="items-center px-6 pb-3 pt-7 text-center">
         <TxBubble row={row} size="lg" className="shadow-raised" />
         <DialogTitle className="mt-3 max-w-full text-[19px] leading-snug">{row.name}</DialogTitle>
-        <DialogDescription className="max-w-full select-text break-words font-mono text-[11.5px] leading-relaxed">
+        {/* Libelle brut (source de verite), sauf s'il repete le titre. */}
+        <DialogDescription
+          className={cn(
+            'max-w-full select-text break-words font-mono text-[11.5px] leading-relaxed',
+            tx.label.trim().toLowerCase() === row.name.toLowerCase() && 'sr-only',
+          )}
+        >
           {tx.label}
         </DialogDescription>
       </DialogHeader>

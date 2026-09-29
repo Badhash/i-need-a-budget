@@ -20,6 +20,7 @@ import {
 } from '@/lib/data'
 import { useTransactions } from '@/lib/queries'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
+import { followTxId } from '@/lib/txIds'
 import { payeeKey } from '../../../packages/crypto/src/payee'
 
 export { payeeKey }
@@ -232,13 +233,17 @@ export function useCategorize() {
     // Serialise derriere une eventuelle creation en vol (categorie tout juste
     // creee, transaction tout juste saisie) : les ids sont resolus temp -> real
     // au moment de l'envoi, la tache est annulee si la creation a echoue.
-    mutationFn: ({ txId, categoryId }: CategorizeVars) =>
-      enqueue(() => apiCategorize(resolveId(txId), categoryId === null ? null : resolveId(categoryId)), {
+    // Un id capture avant la confirmation de la ligne (« Annuler » d'un toast)
+    // est suivi vers l'id serveur.
+    mutationFn: ({ txId: capturedId, categoryId }: CategorizeVars) => {
+      const txId = followTxId(capturedId)
+      return enqueue(() => apiCategorize(resolveId(txId), categoryId === null ? null : resolveId(categoryId)), {
         deps: categoryId === null ? [txId] : [txId, categoryId],
-      }),
+      })
+    },
     onMutate: async (vars) => {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
-      return applyCategorizeOptimistic(queryClient, vars)
+      return applyCategorizeOptimistic(queryClient, { ...vars, txId: followTxId(vars.txId) })
     },
     onError: (_err, _vars, ctx) => {
       if (ctx) revertCategorizeOptimistic(queryClient, [ctx])
