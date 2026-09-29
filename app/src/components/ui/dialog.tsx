@@ -107,8 +107,16 @@ const DialogContent = React.forwardRef<
     const velocity = dy / Math.max(1, performance.now() - start.t)
     // Fermeture : l'animation de sortie repart de la position glissee (la
     // keyframe n'a pas d'etat initial) ; sinon retour elastique a 0.
-    if (dy > DISMISS_DISTANCE || (dy > 24 && velocity > DISMISS_VELOCITY)) closeRef.current?.click()
-    else setDrag(0)
+    if (dy > DISMISS_DISTANCE || (dy > 24 && velocity > DISMISS_VELOCITY)) {
+      const content = e.currentTarget.closest<HTMLElement>('[role="dialog"]')
+      closeRef.current?.click()
+      // Fermeture refusee par l'appelant (onOpenChange ignore, ex. action en
+      // cours) : la feuille reste ouverte, elle revient en place au lieu de
+      // rester decalee. L'etat est relu apres le rendu de la fermeture.
+      requestAnimationFrame(() => {
+        if (content?.dataset.state === 'open') setDrag(0)
+      })
+    } else setDrag(0)
   }
 
   return (
