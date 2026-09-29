@@ -12,7 +12,10 @@
  * Les noms d'assets etant generes par Vite, rien n'est precache a part le
  * shell : tout le reste se remplit a l'usage.
  */
-const VERSION = 'v1'
+// Remplace par le SHA du commit au deploiement (workflow deploy-pages) : un
+// nouveau deploiement = un nouveau worker = anciens caches purges a l'activation.
+// Sans estampille (build local), le worker ne change jamais.
+const VERSION = '__BUILD_ID__'
 const SHELL_CACHE = `inab-shell-${VERSION}`
 const ASSETS_CACHE = `inab-assets-${VERSION}`
 const FONTS_CACHE = `inab-fonts-${VERSION}`
@@ -52,7 +55,12 @@ self.addEventListener('activate', (event) => {
 })
 
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting()
+  if (!event.data) return
+  if (event.data.type === 'SKIP_WAITING') self.skipWaiting()
+  // La page compare la version du worker a celle de son bundle (main.tsx).
+  if (event.data.type === 'GET_VERSION' && event.ports && event.ports[0]) {
+    event.ports[0].postMessage({ version: VERSION })
+  }
 })
 
 function isNeverCached(url) {

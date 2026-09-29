@@ -5,7 +5,7 @@ import { THEMES } from '@/styles/themes'
 import { resolveDark, useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { supabase } from '@/lib/supabase'
-import { addMonths, fmtEUR, fmtMonthTitle, MAX_MONTH, MIN_MONTH } from '@/lib/format'
+import { addMonths, fmtEUR, fmtMonthTitle, maxMonth, MIN_MONTH } from '@/lib/format'
 import { useBootstrap, useBudgetMonth } from '@/lib/data'
 import { Button } from '@/components/ui/button'
 import {
@@ -47,7 +47,7 @@ function MonthSelector() {
         variant="ghost"
         size="iconSm"
         onClick={() => shiftMonth(1)}
-        disabled={addMonths(month, 1) > MAX_MONTH}
+        disabled={addMonths(month, 1) > maxMonth()}
         aria-label="Mois suivant"
       >
         <ChevronRight className="h-4 w-4" />

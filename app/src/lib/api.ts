@@ -4,6 +4,7 @@
 
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '@/lib/supabase'
 import { markLocalWrite } from '@/lib/realtimeGate'
+import { mfaSatisfied } from '@/lib/mfa'
 
 const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1/api`
 const ANON_KEY = SUPABASE_ANON_KEY
@@ -15,13 +16,37 @@ const ANON_KEY = SUPABASE_ANON_KEY
 // une ecriture : sans ca, chaque ouverture ouvrait la fenetre de silence 30 s).
 const READ_ACTION = /^(get|list|export|bootstrap)/
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Code machine renvoye par le serveur (ex. mfa_required). */
+    public code?: string,
   ) {
     super(message)
     this.name = 'ApiError'
+  }
+}
+
+// Le serveur exige un jeton aal2 des que l'utilisateur a un facteur TOTP
+// verifie. Si notre session locale se croit complete (objet user sans
+// facteurs, ex. MFA activee depuis un autre appareil), on rafraichit la session
+// pour recuperer les facteurs : la garde d'auth bascule alors sur la saisie du
+// code. Si le rafraichissement ne change rien, deconnexion locale (retour au
+// mot de passe) plutot qu'une boucle de 403.
+let mfaRecovering = false
+async function recoverFromMfaRequired(): Promise<void> {
+  if (mfaRecovering) return
+  mfaRecovering = true
+  try {
+    const { data, error } = await supabase.auth.refreshSession()
+    if (error || !data.session || mfaSatisfied(data.session)) {
+      await supabase.auth.signOut({ scope: 'local' })
+    }
+  } catch {
+    await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
+  } finally {
+    mfaRecovering = false
   }
 }
 
@@ -58,9 +83,10 @@ export async function apiCall<T>(
   }
 
   if (!res.ok) {
-    const message =
-      (body as { error?: string } | null)?.error ?? `Erreur ${res.status}`
-    throw new ApiError(res.status, message)
+    const errBody = body as { error?: string; code?: string } | null
+    const message = errBody?.error ?? `Erreur ${res.status}`
+    if (res.status === 403 && errBody?.code === 'mfa_required') void recoverFromMfaRequired()
+    throw new ApiError(res.status, message, errBody?.code)
   }
   // Re-horodate au succes : etend la fenetre de silence jusqu'apres le commit
   // serveur (le trigger Realtime tire sur le commit, donc apres la reponse).

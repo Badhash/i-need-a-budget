@@ -36,6 +36,42 @@ export function opLabel(op: RuleMatcher['op']): string {
   return RULE_OPS.find((o) => o.value === op)?.label ?? op
 }
 
+// Mots que l'on ne veut pas voir devenir la valeur d'une regle (memes mots de
+// bruit que la cle de tiers, cf. packages/crypto/src/payee.ts).
+const RULE_NOISE_WORDS = new Set([
+  'carte', 'cb', 'paiement', 'achat', 'prelevement', 'prlv', 'sepa', 'virement', 'vir',
+  'emis', 'recu', 'de', 'du', 'le', 'la', 'les', 'en', 'votre', 'faveur', 'x',
+])
+
+/**
+ * Propose la valeur d'une regle « contient » a partir d'un libelle BRUT : la
+ * plus longue suite CONTIGUE de mots stables (sans chiffre, hors bruit). Le
+ * serveur compare le libelle brut normalise (minuscules sans accents) a cette
+ * valeur : un libelle court retravaille (« Edf Client », mots reordonnes,
+ * points de suspension) ne matcherait jamais.
+ */
+export function ruleValueFromLabel(label: string): string {
+  const tokens = label
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+  const stable = tokens.map((t) => !/\d/.test(t) && t.length > 1 && !RULE_NOISE_WORDS.has(t))
+  let best: string[] = []
+  let current: string[] = []
+  tokens.forEach((t, i) => {
+    if (stable[i]) {
+      current.push(t)
+      if (current.length > best.length) best = current.slice()
+    } else {
+      current = []
+    }
+  })
+  if (best.length > 0) return best.join(' ')
+  return tokens.find((t) => /[a-z]/.test(t)) ?? label.trim()
+}
+
 export const RULES_KEY = ['rules'] as const
 
 export async function fetchRules(): Promise<Rule[]> {

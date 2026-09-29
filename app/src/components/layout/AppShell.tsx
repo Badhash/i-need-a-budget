@@ -2,6 +2,7 @@ import { Outlet, useRouterState } from '@tanstack/react-router'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
 import { BottomNav, Fab } from '@/components/layout/BottomNav'
+import { UpdateBanner } from '@/components/shared/UpdateBanner'
 import { AddTransactionDialog } from '@/components/transactions/AddTransactionDialog'
 import { EditTransactionDialog } from '@/components/transactions/EditTransactionDialog'
 import { OnboardingPage } from '@/pages/OnboardingPage'
@@ -46,6 +47,7 @@ export function AppShell() {
       <div className="lg:pl-64">
         <Header />
         <main className="mx-auto max-w-content px-4 pb-32 pt-6 lg:px-8 lg:pb-12">
+          <UpdateBanner />
           <Outlet />
         </main>
       </div>

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useKeyboardInset } from '@/hooks/useKeyboardInset'
+import { useSheetKeyboardInset } from '@/hooks/useKeyboardInset'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Category } from '@/types/domain'
 import { apiDeleteTarget, apiSetTarget, type SetTargetInput, type Target } from '@/lib/targets'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
-import { CURRENT_MONTH, MAX_MONTH } from '@/lib/format'
+import { currentMonth, evalAmountCents, maxMonth } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -22,11 +22,11 @@ type TargetType = 'monthly' | 'byDate'
 
 /** Parse un montant en euros saisi (fr-FR) vers des centimes entiers. */
 function parseEuros(raw: string): number | null {
-  const trimmed = raw.trim()
-  if (!trimmed) return null
-  const parsed = Number.parseFloat(trimmed.replace(/\s/g, '').replace(',', '.'))
-  if (Number.isNaN(parsed) || parsed < 0) return null
-  return Math.round(parsed * 100)
+  if (!raw.trim()) return null
+  // Parser strict partage : « 1.234,56 » est rejete au lieu d'etre tronque.
+  const cents = evalAmountCents(raw)
+  if (cents === null || cents < 0) return null
+  return cents
 }
 
 /** Centimes -> chaine editable "400,00" (sans separateur de milliers). */
@@ -48,7 +48,7 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
 
   const [type, setType] = useState<TargetType>('monthly')
   const [amount, setAmount] = useState('')
-  const [dueMonth, setDueMonth] = useState(CURRENT_MONTH)
+  const [dueMonth, setDueMonth] = useState(currentMonth())
   const [error, setError] = useState<string | null>(null)
 
   // Reinitialise le formulaire a chaque ouverture (categorie / objectif).
@@ -57,11 +57,11 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
     if (target) {
       setType(target.type)
       setAmount(centsToInput(target.amount))
-      setDueMonth(target.dueMonth ?? CURRENT_MONTH)
+      setDueMonth(target.dueMonth ?? currentMonth())
     } else {
       setType('monthly')
       setAmount('')
-      setDueMonth(CURRENT_MONTH)
+      setDueMonth(currentMonth())
     }
     setError(null)
   }, [category, target])
@@ -115,7 +115,7 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
   }
 
   const pending = setMutation.isPending || deleteMutation.isPending
-  const keyboardInset = useKeyboardInset()
+  const keyboardInset = useSheetKeyboardInset()
 
   return (
     <Dialog open={category !== null} onOpenChange={(o) => (o ? undefined : onClose())}>
@@ -170,8 +170,8 @@ export function TargetDialog({ category, target, onClose }: TargetDialogProps) {
                 <MonthPicker
                   value={dueMonth}
                   onChange={setDueMonth}
-                  min={CURRENT_MONTH}
-                  max={MAX_MONTH}
+                  min={currentMonth()}
+                  max={maxMonth()}
                   aria-label="Mois cible"
                 />
               </div>

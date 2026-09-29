@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, RotateCcw } from 'lucide-react'
 import { apiNewBudget, useBootstrap } from '@/lib/data'
-import { addMonths, CURRENT_MONTH, fmtMonthLong } from '@/lib/format'
+import { addMonths, currentMonth, fmtMonthLong } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -28,8 +28,8 @@ export function NewBudgetSection() {
   const setMonth = useUiStore((s) => s.setMonth)
   const currentStart = boot.data?.budgetStartMonth ?? null
 
-  const options = [CURRENT_MONTH, addMonths(CURRENT_MONTH, 1)]
-  const [startMonth, setStartMonth] = useState(CURRENT_MONTH)
+  const options = [currentMonth(), addMonths(currentMonth(), 1)]
+  const [startMonth, setStartMonth] = useState(currentMonth())
   const [open, setOpen] = useState(false)
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
@@ -97,7 +97,7 @@ export function NewBudgetSection() {
             ))}
           </div>
           <p className="mt-2 text-[12.5px] text-soft">
-            {startMonth === CURRENT_MONTH
+            {startMonth === currentMonth()
               ? 'Les dépenses déjà passées ce mois-ci restent dans leurs enveloppes, à couvrir en assignant.'
               : 'Le mois en cours est gelé avec le reste de l’historique, le budget démarre propre le mois prochain.'}
           </p>
@@ -131,7 +131,7 @@ export function NewBudgetSection() {
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 autoComplete="off"
-                className="mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[15px] outline-none focus:ring-2 focus:ring-accent/40"
+                className="mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[16px] outline-none focus:ring-2 focus:ring-accent/40 lg:text-[14px]"
               />
             </label>
             <div className="flex justify-end gap-2">

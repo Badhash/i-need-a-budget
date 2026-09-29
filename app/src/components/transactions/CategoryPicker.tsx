@@ -218,7 +218,11 @@ export function CategoryPicker({ children, onSelect, includeIncome = false, labe
                     position: 'fixed' as const,
                     left: VIEWPORT_MARGIN,
                     right: VIEWPORT_MARGIN,
-                    bottom: keyboardInset + VIEWPORT_MARGIN,
+                    // Clavier ferme : au-dessus de l'indicateur home (safe-area).
+                    bottom:
+                      keyboardInset > 0
+                        ? keyboardInset + VIEWPORT_MARGIN
+                        : `calc(${VIEWPORT_MARGIN}px + env(safe-area-inset-bottom))`,
                     maxHeight: Math.max(200, window.innerHeight - keyboardInset - 2 * VIEWPORT_MARGIN),
                   }),
             }}

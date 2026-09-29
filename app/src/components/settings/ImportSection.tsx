@@ -125,7 +125,9 @@ export function ImportSection() {
     document.body.appendChild(a)
     a.click()
     a.remove()
-    URL.revokeObjectURL(url)
+    // Revocation differee : Safari peut annuler le telechargement si l'URL est
+    // revoquee de facon synchrone juste apres le clic.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
 
   async function handleAnalyze() {

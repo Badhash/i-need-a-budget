@@ -19,7 +19,7 @@ export function RtaBanner({ budget, overspent = 0 }: { budget: BudgetMonth; over
   const pct = Math.round(ratio * 100)
 
   return (
-    <div className="sticky top-[68px] z-30">
+    <div className="sticky top-[calc(68px+env(safe-area-inset-top))] z-30">
       <div
         className={cn(
           'rounded-2xl border p-5 shadow-card',

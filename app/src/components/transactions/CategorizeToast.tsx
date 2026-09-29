@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils'
 export interface CategorizeToastData {
   /** Libelle court de la transaction qui vient d'etre categorisee. */
   shortLabel: string
+  /** Libelle BRUT (base d'une eventuelle regle : le serveur matche le brut). */
+  rawLabel: string
   categoryName: string
   categoryId: string
   /** Autres transactions non categorisees du meme tiers. */

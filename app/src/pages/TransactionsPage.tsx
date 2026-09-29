@@ -11,15 +11,16 @@ import {
 } from '@tanstack/react-table'
 import { ArrowDownUp, ArrowLeftRight, Check, ChevronLeft, ChevronRight, CreditCard, Inbox, MoreHorizontal, Plus, Search, SlidersHorizontal, Sprout, TrendingUp, Wallet, Wand2, X } from 'lucide-react'
 import type { Account, Category, CategoryGroup, Transaction } from '@/types/domain'
-import { countsAsUncategorized, patchUncategorizedCount, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
+import { countsAsUncategorized, patchAccountBalances, patchUncategorizedCount, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
 import { apiCall } from '@/lib/api'
-import { payeeKey, useCategorize } from '@/lib/categorize'
+import { payeeKey, scheduleBudgetRefetch, useCategorize } from '@/lib/categorize'
 import { haptic } from '@/lib/haptics'
 import { useLongPress } from '@/hooks/useLongPress'
+import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { parseBankLabel, type ParsedLabel } from '@/lib/bankLabel'
 import { useTransactions } from '@/lib/queries'
-import { useApplyRules, useRules } from '@/lib/rules'
-import { CURRENT_MONTH, fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
+import { ruleValueFromLabel, useApplyRules, useRules } from '@/lib/rules'
+import { currentMonth, fmtDateShort, fmtDayLong, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
 import { TxKindChip } from '@/components/transactions/TxKindChip'
@@ -90,6 +91,8 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
       // Conversion rare : un rafraichissement du bootstrap remet le compteur
       // « À catégoriser » du badge d'aplomb (le transfert sort du decompte).
       void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+      // Une depense categorisee devenue virement sort de son enveloppe.
+      scheduleBudgetRefetch(queryClient)
     },
     onError: (err) => showError(err),
   })
@@ -98,6 +101,7 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
       void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+      scheduleBudgetRefetch(queryClient)
     },
     onError: (err) => showError(err),
   })
@@ -113,23 +117,29 @@ function RowMenu({ row, className }: { row: TxRow; className?: string }) {
       queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
         old?.filter((t) => t.id !== row.tx.id),
       )
+      // Solde du compte : la ligne part avec son montant (le miroir d'un
+      // virement est inconnu ici, le bootstrap est refetche au succes).
+      if (!isTransfer) patchAccountBalances(queryClient, [{ accountId: row.tx.accountId, delta: -row.tx.amount }])
       return { snapshot, countDelta }
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
       if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
+      if (!isTransfer) patchAccountBalances(queryClient, [{ accountId: row.tx.accountId, delta: row.tx.amount }])
       showError(err)
     },
-    // Suppression deja refletee de facon optimiste : reconciliation en fond via
-    // le signal Realtime coalesce (pas d'invalidation directe qui rechargerait
-    // toute la table chiffree). EXCEPTION virement : le serveur supprime ou
-    // delie aussi le MIROIR (autre compte) que le patch optimiste ne connait
-    // pas — sans refetch il resterait affiche comme un virement orphelin.
+    // Suppression deja refletee de facon optimiste dans la liste ; le budget
+    // (activite de l'enveloppe, Pret a assigner), les soldes et les rapports
+    // sont relus de facon ciblee et coalescee. EXCEPTION virement : le serveur
+    // supprime ou delie aussi le MIROIR (autre compte) que le patch optimiste
+    // ne connait pas — sans refetch il resterait affiche comme un virement
+    // orphelin.
     onSuccess: () => {
       if (isTransfer) {
         void queryClient.invalidateQueries({ queryKey: ['transactions'] })
         void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
       }
+      scheduleBudgetRefetch(queryClient)
     },
   })
   // Confirmation en deux temps dans le menu : premier clic arme, second supprime.
@@ -314,6 +324,15 @@ function AccountChip({ account }: { account: Account }) {
 
 const PAGE_SIZE = 50
 
+/** Recherche insensible a la casse ET aux accents (« epargne » trouve « Épargne »). */
+function normSearch(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
 const columnHelper = createColumnHelper<TxRow>()
 
 const columns = [
@@ -364,16 +383,23 @@ const columns = [
   }),
 ]
 
-function DesktopTable({ rows }: { rows: TxRow[] }) {
+// Recoit TOUTES les lignes filtrees : le tri par colonne s'applique a
+// l'ensemble, la page n'est decoupee qu'apres (sinon « trier par montant »
+// ne triait que les 50 lignes de la page courante).
+function DesktopTable({ rows, page }: { rows: TxRow[]; page: number }) {
   const [sorting, setSorting] = useState<SortingState>([{ id: 'date', desc: true }])
   const table = useReactTable({
     data: rows,
     columns,
     state: { sorting },
     onSortingChange: setSorting,
+    // Id stable : sans lui, l'etat d'une ligne (menu, erreur) suivait l'index et
+    // se retrouvait sur la ligne suivante apres une suppression optimiste.
+    getRowId: (row) => row.tx.id,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   })
+  const pageRows = table.getRowModel().rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
   return (
     <Card className="hidden overflow-hidden lg:block">
@@ -415,7 +441,7 @@ function DesktopTable({ rows }: { rows: TxRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {table.getRowModel().rows.map((row) => (
+          {pageRows.map((row) => (
             <tr key={row.id} className="group border-t border-line/60 transition-colors hover:bg-surface2/40">
               {row.getVisibleCells().map((cell) => (
                 <td
@@ -627,6 +653,7 @@ function MobileList({ rows, resetKey }: { rows: TxRow[]; resetKey: string }) {
         <SelectionBar
           count={selected.size}
           label={firstSelectedLabel}
+          includeIncome={rows.some((r) => selected.has(r.tx.id) && r.tx.amount > 0)}
           onCategorize={applyToSelection}
           onCancel={exitSelect}
         />
@@ -656,6 +683,8 @@ function TransactionsSkeleton() {
 }
 
 export function TransactionsPage() {
+  const queryClient = useQueryClient()
+  const isDesktop = useIsDesktop()
   const setAddTxOpen = useUiStore((s) => s.setAddTxOpen)
   const { data: txs } = useTransactions()
   const boot = useBootstrap()
@@ -742,12 +771,14 @@ export function TransactionsPage() {
     setOnlyUncat(false)
   }
 
-  // Non categorisee au sens du badge : compte budget, hors transfert. Les
-  // comptes de suivi ne se categorisent pas.
+  // Non categorisee au sens du badge : compte budget, hors transfert, pas dans
+  // le futur ni avant le mois de depart (meme regle que le compteur de la nav,
+  // sinon chip et badge se contredisaient apres « Nouveau budget »).
   const isUncat = useCallback(
-    (t: Transaction) =>
-      !t.categoryId && !t.transferGroupId && (accountById.get(t.accountId)?.onBudget ?? true),
-    [accountById],
+    (t: Transaction) => countsAsUncategorized(queryClient, t),
+    // La taxonomie est lue dans le cache ; on recalcule quand elle change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queryClient, boot.data],
   )
 
   // Filtres appliques a TOUTES les transactions (tous mois confondus), tri
@@ -757,7 +788,7 @@ export function TransactionsPage() {
   const rows = useMemo(() => {
     if (!txs || !boot.data) return []
     const maps: Maps = { accountById, categoryById, groupById }
-    const q = search.trim().toLowerCase()
+    const q = normSearch(search)
     return txs
       .filter((t) => accountFilter === 'all' || t.accountId === accountFilter)
       .filter((t) => categoryFilter === 'all' || t.categoryId === categoryFilter)
@@ -768,9 +799,10 @@ export function TransactionsPage() {
       .filter(
         (r) =>
           !q ||
-          r.tx.label.toLowerCase().includes(q) ||
-          r.parsed.short.toLowerCase().includes(q) ||
-          (r.category?.name.toLowerCase().includes(q) ?? false),
+          normSearch(r.tx.label).includes(q) ||
+          normSearch(r.parsed.short).includes(q) ||
+          (r.category ? normSearch(r.category.name).includes(q) : false) ||
+          (r.tx.note ? normSearch(r.tx.note).includes(q) : false),
       )
       .sort((a, b) => (a.tx.date < b.tx.date ? 1 : a.tx.date > b.tx.date ? -1 : 0))
   }, [
@@ -816,6 +848,7 @@ export function TransactionsPage() {
       }
       setToast({
         shortLabel: row.parsed.short,
+        rawLabel: row.tx.label,
         categoryName: category.name,
         categoryId,
         similarIds,
@@ -831,7 +864,7 @@ export function TransactionsPage() {
   }
   const openRuleFromToast = () => {
     if (!toast) return
-    setRuleDialog({ value: toast.shortLabel, categoryId: toast.categoryId })
+    setRuleDialog({ value: ruleValueFromLabel(toast.rawLabel), categoryId: toast.categoryId })
     setToast(null)
   }
 
@@ -884,7 +917,6 @@ export function TransactionsPage() {
   const filtersKey = [search, accountFilter, categoryFilter, monthFilter, onlyUncat ? '1' : '0'].join('|')
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount - 1)
-  const pagedRows = rows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
 
   if (!txs) return <TransactionsSkeleton />
 
@@ -925,8 +957,8 @@ export function TransactionsPage() {
           </button>
           <button
             type="button"
-            onClick={() => setMonthFilter((m) => (m === CURRENT_MONTH ? 'all' : CURRENT_MONTH))}
-            className={chipClass(monthFilter === CURRENT_MONTH)}
+            onClick={() => setMonthFilter((m) => (m === currentMonth() ? 'all' : currentMonth()))}
+            className={chipClass(monthFilter === currentMonth())}
           >
             Ce mois
           </button>
@@ -1088,8 +1120,13 @@ export function TransactionsPage() {
         </Card>
       ) : (
         <>
-          <DesktopTable rows={pagedRows} />
-          <MobileList rows={rows} resetKey={filtersKey} />
+          {/* Un seul arbre monte : les deux (table + liste) coutaient une
+              centaine de pickers et de mesures clavier sur telephone. */}
+          {isDesktop ? (
+            <DesktopTable rows={rows} page={safePage} />
+          ) : (
+            <MobileList rows={rows} resetKey={filtersKey} />
+          )}
           {pageCount > 1 && (
             <div className="hidden items-center justify-between gap-3 px-1 lg:flex">
               <p className="text-[12.5px] text-soft tnum">
@@ -1100,7 +1137,7 @@ export function TransactionsPage() {
                 <Button
                   variant="outline"
                   className="h-10 px-3.5"
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  onClick={() => setPage(Math.max(0, safePage - 1))}
                   disabled={safePage === 0}
                 >
                   <ChevronLeft className="h-4 w-4" />
@@ -1109,7 +1146,7 @@ export function TransactionsPage() {
                 <Button
                   variant="outline"
                   className="h-10 px-3.5"
-                  onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                  onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
                   disabled={safePage >= pageCount - 1}
                 >
                   Suivant

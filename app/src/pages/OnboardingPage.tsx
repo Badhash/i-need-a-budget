@@ -3,22 +3,19 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, Landmark, Sparkles } from 'lucide-react'
 import { apiCreateAccount, apiSeedDefaults, useBootstrap } from '@/lib/data'
 import type { AccountKind } from '@/types/domain'
-import { TODAY } from '@/lib/format'
+import { evalAmountCents, MIN_MONTH, today } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-const MIN_DATE = '2026-01-01'
+const MIN_DATE = `${MIN_MONTH}-01`
 
+// Parser strict partage (evalAmountCents). Negatif autorise : l'encours d'une
+// carte a debit differe est souvent negatif (meme regle que AddAccountDialog).
 function parseEuros(raw: string): number | null {
-  const trimmed = raw.trim()
-  if (!trimmed) return 0
-  const parsed = Number.parseFloat(trimmed.replace(/\s/g, '').replace(',', '.'))
-  // Negatif autorise : l'encours d'une carte a debit differe est souvent negatif
-  // (meme regle que AddAccountDialog dans AccountsPage).
-  if (Number.isNaN(parsed)) return null
-  return Math.round(parsed * 100)
+  if (!raw.trim()) return 0
+  return evalAmountCents(raw)
 }
 
 /** Etat vide apres login : initialise la taxonomie puis cree un premier compte. */
@@ -32,7 +29,7 @@ export function OnboardingPage() {
   const [kind, setKind] = useState<AccountKind>('checking')
   const [onBudget, setOnBudget] = useState(true)
   const [balance, setBalance] = useState('')
-  const [openingDate, setOpeningDate] = useState(TODAY)
+  const [openingDate, setOpeningDate] = useState(today())
   const [error, setError] = useState<string | null>(null)
 
   // Onboarding : le cache est quasi vide, l'impact est negligeable, mais on
@@ -68,7 +65,7 @@ export function OnboardingPage() {
       setError('Saisissez un solde valide, par exemple 1234,56.')
       return
     }
-    if (openingDate < MIN_DATE || openingDate > TODAY) {
+    if (openingDate < MIN_DATE || openingDate > today()) {
       setError("La date d'ouverture doit être antérieure ou égale à aujourd'hui.")
       return
     }
@@ -176,7 +173,7 @@ export function OnboardingPage() {
                 type="date"
                 value={openingDate}
                 min={MIN_DATE}
-                max={TODAY}
+                max={today()}
                 onChange={(e) => setOpeningDate(e.target.value)}
               />
             </div>

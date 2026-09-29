@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Loader2, Wallet } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { mfaSatisfied } from '@/lib/mfa'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -22,15 +23,37 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null)
 
   // Deja connecte (et niveau MFA satisfait) : filer directement au budget.
+  // Session au niveau aal1 avec un facteur verifie (mot de passe accepte, code
+  // pas encore saisi, ou MFA active depuis un autre appareil) : on enchaine
+  // directement sur la saisie du code, sans redemander le mot de passe.
   useEffect(() => {
+    let cancelled = false
     void supabase.auth.getSession().then(async ({ data }) => {
-      if (!data.session) return
-      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-      if (!aal || aal.nextLevel === aal.currentLevel) {
+      if (!data.session || cancelled) return
+      if (mfaSatisfied(data.session)) {
         void navigate({ to: readLastPath() })
+        return
+      }
+      const { data: factors } = await supabase.auth.mfa.listFactors()
+      const totp = factors?.totp?.[0]
+      if (totp && !cancelled) {
+        setFactorId(totp.id)
+        setStep('mfa')
       }
     })
+    return () => {
+      cancelled = true
+    }
   }, [navigate])
+
+  // Abandonner la verification : deconnexion locale, retour au mot de passe.
+  async function backToPassword() {
+    setError(null)
+    setCode('')
+    await supabase.auth.signOut({ scope: 'local' })
+    setFactorId(null)
+    setStep('password')
+  }
 
   async function resolveMfaOrEnter() {
     const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
@@ -168,6 +191,13 @@ export function LoginPage() {
                 <Button type="submit" size="lg" className="w-full" disabled={loading}>
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Vérifier'}
                 </Button>
+                <button
+                  type="button"
+                  onClick={() => void backToPassword()}
+                  className="min-h-[44px] text-[13px] font-medium text-soft transition-colors hover:text-ink"
+                >
+                  Retour à la connexion
+                </button>
               </form>
             )}
           </CardContent>

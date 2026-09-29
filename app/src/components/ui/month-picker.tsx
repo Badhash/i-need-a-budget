@@ -12,6 +12,8 @@ interface MonthPickerProps {
   max?: string
   /** Ajoute un choix "Tous les mois" represente par value='all'. */
   allowAll?: boolean
+  /** 'up' : le panneau s'ouvre AU-DESSUS du bouton (feuille basse, dernier champ). */
+  direction?: 'down' | 'up'
   className?: string
   'aria-label'?: string
 }
@@ -34,6 +36,7 @@ export function MonthPicker({
   min,
   max,
   allowAll = false,
+  direction = 'down',
   className,
   'aria-label': ariaLabel,
 }: MonthPickerProps) {
@@ -87,7 +90,12 @@ export function MonthPicker({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1 w-64 rounded-xl border border-line bg-surface p-2 shadow-card">
+        <div
+          className={cn(
+            'absolute z-50 w-64 rounded-xl border border-line bg-surface p-2 shadow-card',
+            direction === 'up' ? 'bottom-full mb-1' : 'mt-1',
+          )}
+        >
           {allowAll && (
             <button
               type="button"

@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { useKeyboardInset } from '@/hooks/useKeyboardInset'
+import { useSheetKeyboardInset } from '@/hooks/useKeyboardInset'
 import { evalAmountCents, fmtEUR } from '@/lib/format'
 import type { BudgetRow } from '@/lib/budget'
-import type { Target } from '@/lib/targets'
+import { neededThisMonth, type Target } from '@/lib/targets'
 import { cn } from '@/lib/utils'
 
 interface AssignSheetProps {
   row: BudgetRow | null
   target: Target | null
+  /** Mois affiche : sert a calculer la part d'un objectif a echeance. */
+  month: string
   onCommit: (categoryId: string, cents: number) => void
   // Clic sur l'activite : ferme la feuille et ouvre les transactions filtrees.
   onViewActivity?: (categoryId: string) => void
@@ -32,12 +34,12 @@ function toDraft(cents: number): string {
  * d'ecran avec grand champ, raccourcis (objectif, remise a zero, increments)
  * et apercu du Disponible resultant. Validation optimiste via onCommit.
  */
-export function AssignSheet({ row, target, onCommit, onViewActivity, onClose }: AssignSheetProps) {
+export function AssignSheet({ row, target, month, onCommit, onViewActivity, onClose }: AssignSheetProps) {
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   // iOS : le clavier recouvre les feuilles fixed bottom-0. On remonte la
   // feuille de la hauteur du clavier mesuree via visualViewport.
-  const keyboardInset = useKeyboardInset()
+  const keyboardInset = useSheetKeyboardInset()
 
   // (Re)initialise le brouillon a l'ouverture pour la categorie visee.
   useEffect(() => {
@@ -72,6 +74,14 @@ export function AssignSheet({ row, target, onCommit, onViewActivity, onClose }: 
   // au Pret a assigner. available = rollover + assigned + activity, donc pour
   // available = 0 il faut assigned = assigned - available.
   const emptyToRta = row.assigned - row.available
+  // Raccourci « Objectif » : un objectif mensuel vise son montant ; un objectif
+  // a echeance vise la PART de ce mois (meme calcul que « Financer les
+  // objectifs »), pas la totalite de la cible.
+  const goal = target
+    ? target.type === 'monthly'
+      ? target.amount
+      : row.assigned + neededThisMonth(target, month, row.assigned, row.available)
+    : null
 
   const commit = () => {
     if (!valid) return
@@ -125,13 +135,13 @@ export function AssignSheet({ row, target, onCommit, onViewActivity, onClose }: 
           />
 
           <div className="flex gap-2 overflow-x-auto pb-0.5 scrollbar-none">
-            {target && target.amount !== row.assigned && (
+            {goal !== null && goal !== row.assigned && (
               <button
                 type="button"
-                onClick={() => setCents(target.amount)}
+                onClick={() => setCents(goal)}
                 className="h-9 shrink-0 whitespace-nowrap rounded-full border border-accent/40 bg-accent/10 px-3.5 text-[13px] font-medium text-accent active:bg-accent/20"
               >
-                Objectif : {fmtEUR(target.amount)}
+                Objectif : {fmtEUR(goal)}
               </button>
             )}
             <button

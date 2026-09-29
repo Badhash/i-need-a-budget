@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAccountsList, useCategoriesList, useGroupsList } from '@/lib/data'
-import { MIN_MONTH, TODAY } from '@/lib/format'
+import { evalAmountCents, MIN_MONTH, today } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -33,7 +33,7 @@ interface TxFormInitial {
 }
 
 export function emptyTxForm(accountId: string): TxFormInitial {
-  return { kind: 'expense', amount: '', label: '', date: TODAY, accountId, categoryId: '', note: '' }
+  return { kind: 'expense', amount: '', label: '', date: today(), accountId, categoryId: '', note: '' }
 }
 
 // Prepare l'etat du formulaire a partir d'une transaction existante : le signe
@@ -57,10 +57,13 @@ export function txFormFrom(tx: {
   }
 }
 
+// Parser strict partage (evalAmountCents) : « 1.234,56 » est REJETE au lieu
+// d'etre tronque a 1,23 par parseFloat, et une expression (« 12+3,50 ») passe.
 function parseAmount(raw: string): number | null {
-  const parsed = Number.parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
-  if (Number.isNaN(parsed) || parsed <= 0) return null
-  return Math.round(parsed * 100)
+  if (!raw.trim()) return null
+  const cents = evalAmountCents(raw)
+  if (cents === null || cents <= 0) return null
+  return cents
 }
 
 export function TransactionForm({
@@ -103,7 +106,7 @@ export function TransactionForm({
   // montant d'abord). Depliees d'office si la valeur initiale n'est pas celle
   // par defaut (edition d'une transaction datee ou annotee).
   const isDesktop = useIsDesktop()
-  const [moreOpen, setMoreOpen] = useState(initial.date !== TODAY || initial.note.trim() !== '')
+  const [moreOpen, setMoreOpen] = useState(initial.date !== today() || initial.note.trim() !== '')
 
   // Filet : selectionne le premier compte si aucun n'est defini (taxonomie
   // pas encore chargee a l'ouverture).
@@ -121,7 +124,7 @@ export function TransactionForm({
       setError('Le libellé est obligatoire.')
       return
     }
-    if (!date || date < minDate || date > TODAY) {
+    if (!date || date < minDate || date > today()) {
       setError("La date doit être antérieure ou égale à aujourd'hui.")
       return
     }
@@ -143,9 +146,16 @@ export function TransactionForm({
   useEffect(() => {
     if (isTracking && categoryId) setCategoryId('')
   }, [isTracking, categoryId])
+  // Depense : enveloppes seulement. Entree d'argent : revenus d'abord, puis les
+  // enveloppes (un remboursement est une entree SUR une enveloppe de depense).
+  const allowsCategory = (isIncome: boolean) => (wantIncome ? true : !isIncome)
+  const isIncomeGroup = (groupId: string) => categories.some((c) => c.groupId === groupId && c.isIncome)
   const visibleGroups = groups
-    .filter((g) => categories.some((c) => c.groupId === g.id && c.isIncome === wantIncome))
-    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .filter((g) => categories.some((c) => c.groupId === g.id && allowsCategory(c.isIncome)))
+    .sort(
+      (a, b) =>
+        Number(isIncomeGroup(b.id)) - Number(isIncomeGroup(a.id)) || a.sortOrder - b.sortOrder,
+    )
 
   const accountOptions = useMemo<ComboboxOption[]>(
     () => accounts.map((acc) => ({ value: acc.id, label: acc.name })),
@@ -158,7 +168,7 @@ export function TransactionForm({
     const opts: ComboboxOption[] = [{ value: '', label: 'À catégoriser' }]
     for (const group of visibleGroups) {
       for (const cat of categories
-        .filter((c) => c.groupId === group.id && c.isIncome === wantIncome)
+        .filter((c) => c.groupId === group.id && allowsCategory(c.isIncome))
         .sort((a, b) => a.sortOrder - b.sortOrder)) {
         opts.push({
           value: cat.id,
@@ -169,7 +179,14 @@ export function TransactionForm({
       }
     }
     return opts
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleGroups, categories, wantIncome])
+
+  // Sens change : une categorie qui n'est plus proposee (revenu sur une
+  // depense) est desselectionnee plutot que conservee invisible.
+  useEffect(() => {
+    if (categoryId && !categoryOptions.some((o) => o.value === categoryId)) setCategoryId('')
+  }, [categoryId, categoryOptions])
 
   // Pied de formulaire partage entre les deux mises en page.
   const footer = (
@@ -286,7 +303,7 @@ export function TransactionForm({
             className="flex min-h-[44px] w-full items-center justify-between rounded-xl px-1 text-[14px] font-medium text-soft transition-colors hover:text-ink"
           >
             <span>{moreOpen ? 'Moins d’options' : 'Plus d’options'}</span>
-            <span className="text-[13px] tnum">{date === TODAY ? "Aujourd'hui" : date}</span>
+            <span className="text-[13px] tnum">{date === today() ? "Aujourd'hui" : date}</span>
           </button>
 
           {moreOpen && (
@@ -297,7 +314,7 @@ export function TransactionForm({
                   type="date"
                   value={date}
                   min={minDate}
-                  max={TODAY}
+                  max={today()}
                   onChange={(e) => setDate(e.target.value)}
                 />
               </div>
@@ -381,7 +398,7 @@ export function TransactionForm({
               type="date"
               value={date}
               min={minDate}
-              max={TODAY}
+              max={today()}
               onChange={(e) => setDate(e.target.value)}
             />
           </div>

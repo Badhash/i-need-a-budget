@@ -7,11 +7,23 @@ function isoLocal(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
-export const TODAY = isoLocal(new Date())
-export const CURRENT_MONTH = TODAY.slice(0, 7)
+// FONCTIONS et non constantes de module : une PWA iOS reste residente des
+// jours durant, une constante figee au chargement ferait basculer la date du
+// jour, le mois courant et l'horizon d'assignation sur ceux du lancement
+// (date de saisie « hier », aujourd'hui refuse comme futur, mois non remis a
+// jour au 1er). Chaque appel relit l'horloge.
+export function today(): string {
+  return isoLocal(new Date())
+}
+export function currentMonth(): string {
+  return today().slice(0, 7)
+}
 export const MIN_MONTH = '2026-02'
 // Assignation sur les mois futurs autorisee : horizon glissant de 6 mois.
-export const MAX_MONTH = isoLocal(new Date(new Date().getFullYear(), new Date().getMonth() + 6, 1)).slice(0, 7)
+export function maxMonth(): string {
+  const now = new Date()
+  return isoLocal(new Date(now.getFullYear(), now.getMonth() + 6, 1)).slice(0, 7)
+}
 
 const eur = new Intl.NumberFormat('fr-FR', {
   style: 'currency',
@@ -25,7 +37,8 @@ const eurSigned = new Intl.NumberFormat('fr-FR', {
 })
 
 export function fmtEUR(cents: number): string {
-  return eur.format(cents / 100)
+  // -0 (ex. -activity d'un mois sans mouvement) s'afficherait « -0,00 € ».
+  return eur.format((cents === 0 ? 0 : cents) / 100)
 }
 
 export function fmtEURSigned(cents: number): string {
@@ -149,6 +162,12 @@ export function fmtDayLong(date: string): string {
   return capitalize(
     d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }),
   )
+}
+
+/** '2026-07-12' -> '12/07/2026' (fuseau fixe : une date seule ne glisse jamais d'un jour). */
+export function fmtDateNumeric(date: string): string {
+  const d = new Date(date + 'T00:00:00Z')
+  return d.toLocaleDateString('fr-FR', { timeZone: 'UTC' })
 }
 
 /** '2026-07-12' -> '12 juil.' */

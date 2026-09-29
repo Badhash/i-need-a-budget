@@ -16,12 +16,12 @@ import {
   useUpdateCategoryMutation,
 } from '@/lib/taxonomy'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { useKeyboardInset } from '@/hooks/useKeyboardInset'
+import { useSheetKeyboardInset } from '@/hooks/useKeyboardInset'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { AvailablePill } from '@/components/budget/AvailablePill'
-import { fmtEUR } from '@/lib/format'
+import { evalAmountCents, fmtEUR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 /** Une enveloppe candidate au transfert (source ou destination). */
@@ -55,11 +55,11 @@ interface CategoryActionSheetProps {
 
 /** Parse un montant en euros (fr-FR) vers des centimes positifs, ou null. */
 function parseEuros(raw: string): number | null {
-  const trimmed = raw.trim()
-  if (!trimmed) return 0
-  const parsed = Number.parseFloat(trimmed.replace(/\s/g, '').replace(',', '.'))
-  if (Number.isNaN(parsed) || parsed < 0) return null
-  return Math.round(parsed * 100)
+  if (!raw.trim()) return 0
+  // Parser strict partage : « 1.000 » (mille) n'est plus lu comme 1 €.
+  const cents = evalAmountCents(raw)
+  if (cents === null || cents < 0) return null
+  return cents
 }
 
 function toDraft(cents: number): string {
@@ -126,7 +126,7 @@ export function CategoryActionSheet({
   const [amountDraft, setAmountDraft] = useState('')
   const rename = useUpdateCategoryMutation()
   const remove = useDeleteCategoryMutation()
-  const keyboardInset = useKeyboardInset()
+  const keyboardInset = useSheetKeyboardInset()
 
   useEffect(() => {
     if (category) {

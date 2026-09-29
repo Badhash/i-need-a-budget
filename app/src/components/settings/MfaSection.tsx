@@ -50,9 +50,11 @@ export function MfaSection() {
     setBusy(true)
     // Nettoie d'eventuels facteurs non verifies restes d'un essai precedent
     // (evite l'accumulation et les conflits de nom a l'enrolement).
+    // `totp` ne contient que les facteurs VERIFIES : les brouillons d'un
+    // enrolement abandonne ne sont visibles que dans `all`.
     const { data: existing } = await supabase.auth.mfa.listFactors()
-    for (const f of existing?.totp ?? []) {
-      if (f.status !== 'verified') {
+    for (const f of existing?.all ?? []) {
+      if (f.factor_type === 'totp' && f.status !== 'verified') {
         await supabase.auth.mfa.unenroll({ factorId: f.id })
       }
     }

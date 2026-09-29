@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiAddTransaction, countsAsUncategorized, patchUncategorizedCount, useAccountsList } from '@/lib/data'
+import { apiAddTransaction, countsAsUncategorized, patchAccountBalances, patchUncategorizedCount, useAccountsList } from '@/lib/data'
+import { useSheetKeyboardInset } from '@/hooks/useKeyboardInset'
 import { useUiStore } from '@/stores/ui'
 import { haptic } from '@/lib/haptics'
 import { scheduleBudgetRefetch } from '@/lib/categorize'
@@ -19,6 +20,14 @@ export function AddTransactionDialog() {
   const queryClient = useQueryClient()
   const accounts = useAccountsList()
   const [error, setError] = useState<string | null>(null)
+  // iOS : le clavier s'ouvre d'emblee (montant en autofocus) et recouvrait le
+  // pied de la feuille (boutons Ajouter / Annuler).
+  const keyboardInset = useSheetKeyboardInset()
+
+  // Un echec precedent ne doit pas reapparaitre a l'ouverture suivante.
+  useEffect(() => {
+    if (open) setError(null)
+  }, [open])
 
   const mutation = useMutation({
     mutationFn: apiAddTransaction,
@@ -33,6 +42,8 @@ export function AddTransactionDialog() {
       // budget/les rapports/les soldes sont reconcilies en fond par le signal
       // Realtime coalesce, sans recharger toute la table chiffree.
       void queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      // Solde du compte a jour sans attendre la relecture de fond.
+      patchAccountBalances(queryClient, [{ accountId: vars.accountId, delta: vars.amount }])
       // Une saisie categorisee ou un revenu deplace le budget du mois.
       scheduleBudgetRefetch(queryClient)
       // Une saisie manuelle sans categorie (jusqu'a aujourd'hui) alimente le
@@ -73,6 +84,7 @@ export function AddTransactionDialog() {
           submitLabel="Ajouter"
           submittingLabel="Ajout…"
           submitting={mutation.isPending}
+          keyboardInset={keyboardInset}
           autoFocusAmount
           onSubmit={submit}
           onCancel={() => setOpen(false)}

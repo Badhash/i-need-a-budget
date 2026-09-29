@@ -10,7 +10,7 @@ import {
   apiLinkBankAccount,
   type BankConnection,
 } from '@/lib/bank'
-import { fmtEUR, TODAY } from '@/lib/format'
+import { fmtEUR, today } from '@/lib/format'
 import { apiCreateAccount, useAccountsList } from '@/lib/data'
 import type { EbAccountLink } from '@/lib/bank'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -119,13 +119,18 @@ export function BankSection() {
     setImportMessage(null)
     setImporting(true)
     try {
-      const { imported } = await bankSync(Number(importDays), connId)
-      const { adjusted } = await bankReconcile()
+      const sync = await bankSync(Number(importDays), connId)
+      // Un import d'historique reconcilie deja les soldes cote serveur : on ne
+      // relance la reconciliation que si le resultat ne la contient pas (sinon
+      // la seconde passe trouvait un ecart nul et affichait « solde déjà
+      // exact » alors que le solde venait d'etre ajuste).
+      const adjusted = sync.adjusted ?? (await bankReconcile()).adjusted
       const totalDelta = adjusted.reduce((s, a) => s + a.delta, 0)
-      const importedPart = `${imported} transaction${imported > 1 ? 's' : ''} importée${imported > 1 ? 's' : ''}`
+      const importedPart = `${sync.imported} transaction${sync.imported > 1 ? 's' : ''} importée${sync.imported > 1 ? 's' : ''}`
       const deltaPart =
         totalDelta === 0 ? 'solde déjà exact' : `solde ajusté de ${fmtEUR(totalDelta)}`
-      setImportMessage(`${importedPart}, ${deltaPart}.`)
+      const errorPart = sync.errors && sync.errors.length > 0 ? ` Attention : ${sync.errors[0]}` : ''
+      setImportMessage(`${importedPart}, ${deltaPart}.${errorPart}`)
       // Import + reconciliation : soldes, transactions, budget, rapports et
       // journaux de sync changent. On scope au lieu d'un invalidateQueries()
       // global qui rechargerait aussi targets/rules/aspsps inutilement.
@@ -170,7 +175,7 @@ export function BankSection() {
       // recales par l'import, pas ici).
       await queryClient.invalidateQueries({ queryKey: ['bankConnections'] })
     } catch {
-      // silencieux : l'utilisateur peut reessayer
+      setSyncMessage("Association du compte impossible pour le moment. Réessaie dans un instant.")
     }
   }
 
@@ -187,7 +192,7 @@ export function BankSection() {
         kind: isCard ? 'card_deferred' : 'checking',
         onBudget: true,
         openingBalance: 0,
-        openingDate: TODAY,
+        openingDate: today(),
       })
       await apiLinkBankAccount({ connectionId: c.id, providerAccountUid: acc.uid, accountId: id })
       // Nouveau compte local (+ solde d'ouverture) et association : soldes,
@@ -210,7 +215,7 @@ export function BankSection() {
       <CardHeader>
         <CardTitle>Connexion bancaire</CardTitle>
         <p className="text-[13px] text-soft">
-          Synchronisation automatique via Enable Banking (PSD2), trois fois par jour.
+          Synchronisation automatique via Enable Banking (PSD2), deux fois par jour.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">

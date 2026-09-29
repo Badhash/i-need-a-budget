@@ -51,6 +51,13 @@ jobs:
           # Settings > Secrets and variables > Actions.
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          # Identifiant de build (compare a celui du service worker, cf. main.tsx).
+          VITE_BUILD_ID: ${{ github.sha }}
+      # Le service worker est copie tel quel depuis public/ : on y injecte le
+      # meme identifiant pour qu'un deploiement produise un nouveau worker
+      # (purge des anciens caches, detection de la nouvelle version).
+      - name: Estampiller le service worker
+        run: sed -i "s/__BUILD_ID__/${GITHUB_SHA}/" app/dist/sw.js && grep -q "$GITHUB_SHA" app/dist/sw.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: app/dist

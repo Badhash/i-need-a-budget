@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ArrowRight, ChevronDown, ChevronUp, Pencil, Trash2, Wand2 } from 'lucide-react'
 import { useCategoriesMap, useGroupsMap } from '@/lib/data'
@@ -34,6 +34,7 @@ function RuleRow({
   onMove,
   onEdit,
   onDelete,
+  confirmingDelete,
 }: {
   rule: Rule
   index: number
@@ -42,6 +43,7 @@ function RuleRow({
   onMove: (index: number, direction: -1 | 1) => void
   onEdit: (rule: Rule) => void
   onDelete: (rule: Rule) => void
+  confirmingDelete: boolean
 }) {
   const categoryById = useCategoriesMap()
   const groupById = useGroupsMap()
@@ -99,15 +101,26 @@ function RuleRow({
         >
           <Pencil className="h-[18px] w-[18px]" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => onDelete(rule)}
-          aria-label="Supprimer la règle"
-          className="h-11 w-11 text-soft hover:text-danger sm:h-10 sm:w-10"
-        >
-          <Trash2 className="h-[18px] w-[18px]" />
-        </Button>
+        {confirmingDelete ? (
+          <Button
+            variant="ghost"
+            onClick={() => onDelete(rule)}
+            aria-label="Confirmer la suppression de la règle"
+            className="h-11 px-3 text-[13px] font-semibold text-danger hover:text-danger sm:h-10"
+          >
+            Confirmer
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onDelete(rule)}
+            aria-label="Supprimer la règle"
+            className="h-11 w-11 text-soft hover:text-danger sm:h-10 sm:w-10"
+          >
+            <Trash2 className="h-[18px] w-[18px]" />
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -148,14 +161,22 @@ export function RulesPage() {
   const applyMut = useApplyRules()
   const applyResult = applyMut.data ?? null
 
+  // Erreurs serveur (valeur vide apres normalisation, categorie de revenus,
+  // reseau) affichees au lieu d'un formulaire qui reste muet.
+  const [actionError, setActionError] = useState<string | null>(null)
+  const onActionError = (err: unknown) =>
+    setActionError(err instanceof Error && err.message ? err.message : 'Une erreur est survenue.')
+
   const createMut = useMutation({
     mutationFn: (input: { matcher: RuleMatcher; categoryId: string }) =>
       apiCreateRule({ matcher: input.matcher, categoryId: input.categoryId, priority: nextPriority }),
     onSuccess: () => {
+      setActionError(null)
       setFormKey((k) => k + 1)
       applyMut.reset()
       invalidateRules()
     },
+    onError: onActionError,
   })
 
   const updateMut = useMutation({
@@ -166,15 +187,38 @@ export function RulesPage() {
       priority: number
     }) => apiUpdateRule(input),
     onSuccess: () => {
+      setActionError(null)
       setEditing(null)
       invalidateRules()
     },
+    onError: onActionError,
   })
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => apiDeleteRule(id),
-    onSuccess: invalidateRules,
+    onSuccess: () => {
+      setActionError(null)
+      invalidateRules()
+    },
+    onError: onActionError,
   })
+
+  // Suppression en deux temps (premier tap arme, second supprime) : une regle
+  // supprimee par megarde ne se retrouve pas.
+  const [armedDelete, setArmedDelete] = useState<string | null>(null)
+  useEffect(() => {
+    if (!armedDelete) return
+    const t = window.setTimeout(() => setArmedDelete(null), 4000)
+    return () => window.clearTimeout(t)
+  }, [armedDelete])
+  const requestDelete = (rule: Rule) => {
+    if (armedDelete === rule.id) {
+      setArmedDelete(null)
+      deleteMut.mutate(rule.id)
+    } else {
+      setArmedDelete(rule.id)
+    }
+  }
 
   const swapMut = useMutation({
     mutationFn: async ({ a, b }: { a: Rule; b: Rule }) => {
@@ -245,6 +289,12 @@ export function RulesPage() {
             pending={createMut.isPending}
             onSubmit={(matcher, categoryId) => createMut.mutate({ matcher, categoryId })}
           />
+          {actionError && (
+            <p role="alert" className="mt-3 flex items-center gap-1.5 text-[13px] font-medium text-danger">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {actionError}
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -286,7 +336,8 @@ export function RulesPage() {
                 reordering={swapMut.isPending}
                 onMove={move}
                 onEdit={setEditing}
-                onDelete={(r) => deleteMut.mutate(r.id)}
+                onDelete={requestDelete}
+                confirmingDelete={armedDelete === rule.id}
               />
             ))}
           </Card>

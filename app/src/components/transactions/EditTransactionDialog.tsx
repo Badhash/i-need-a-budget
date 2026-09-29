@@ -1,14 +1,16 @@
+import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   apiUpdateTransaction,
   countsAsUncategorized,
+  patchAccountBalances,
   patchUncategorizedCount,
   type UpdateTransactionInput,
 } from '@/lib/data'
 import type { Transaction } from '@/types/domain'
 import { useUiStore } from '@/stores/ui'
 import { scheduleBudgetRefetch } from '@/lib/categorize'
-import { useKeyboardInset } from '@/hooks/useKeyboardInset'
+import { useSheetKeyboardInset } from '@/hooks/useKeyboardInset'
 import {
   Dialog,
   DialogContent,
@@ -20,7 +22,7 @@ import { TransactionForm, txFormFrom, type TxFormResult } from './TransactionFor
 
 // Mise a jour optimiste : la ligne reflete immediatement les nouvelles valeurs
 // dans le cache TanStack, le POST part en arriere-plan, rollback si echec.
-function useUpdateTransaction() {
+function useUpdateTransaction(onFailure: (previous: Transaction) => void) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (input: UpdateTransactionInput) => apiUpdateTransaction(input),
@@ -31,6 +33,17 @@ function useUpdateTransaction() {
       // compteur « À catégoriser » du badge en optimiste.
       const prev = snapshot?.find((t) => t.id === input.transactionId)
       let countDelta = 0
+      // Soldes de comptes (montant ou compte modifie) en optimiste.
+      const balanceDeltas =
+        prev === undefined
+          ? []
+          : prev.accountId === input.accountId
+            ? [{ accountId: input.accountId, delta: input.amount - prev.amount }]
+            : [
+                { accountId: prev.accountId, delta: -prev.amount },
+                { accountId: input.accountId, delta: input.amount },
+              ]
+      patchAccountBalances(queryClient, balanceDeltas)
       if (prev) {
         const before = countsAsUncategorized(queryClient, prev)
         const after = countsAsUncategorized(queryClient, {
@@ -57,11 +70,18 @@ function useUpdateTransaction() {
             : t,
         ),
       )
-      return { snapshot, countDelta }
+      return { snapshot, countDelta, balanceDeltas, prev }
     },
+    // Rollback discret du cache, puis on ROUVRE le dialogue sur les valeurs
+    // d'origine avec un message : une edition perdue en silence semblait
+    // enregistree alors qu'elle ne l'etait pas.
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
       if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
+      if (ctx?.balanceDeltas) {
+        patchAccountBalances(queryClient, ctx.balanceDeltas.map((d) => ({ ...d, delta: -d.delta })))
+      }
+      if (ctx?.prev) onFailure(ctx.prev)
     },
     // Liste et badge deja exacts (optimiste) ; une edition peut changer
     // categorie, montant ou mois : refetch cible et coalesce du budget.
@@ -72,12 +92,20 @@ function useUpdateTransaction() {
 export function EditTransactionDialog() {
   const editTx = useUiStore((s) => s.editTx)
   const setEditTx = useUiStore((s) => s.setEditTx)
-  const keyboardInset = useKeyboardInset()
-  const update = useUpdateTransaction()
+  const keyboardInset = useSheetKeyboardInset()
+  const [failure, setFailure] = useState<string | null>(null)
+  const update = useUpdateTransaction((previous) => {
+    setFailure('Modification non enregistrée. Vérifie ta connexion et réessaye.')
+    setEditTx(previous)
+  })
 
-  const close = () => setEditTx(null)
+  const close = () => {
+    setFailure(null)
+    setEditTx(null)
+  }
 
   const submit = (tx: Transaction) => (r: TxFormResult) => {
+    setFailure(null)
     // Optimisme immediat : on ferme sans attendre le reseau.
     update.mutate({
       transactionId: tx.id,
@@ -98,6 +126,7 @@ export function EditTransactionDialog() {
           <DialogTitle>Modifier la transaction</DialogTitle>
           <DialogDescription>Corrigez le montant, la date, le libellé ou la note.</DialogDescription>
         </DialogHeader>
+        {failure && <p className="px-5 pb-1 text-[13px] font-medium text-danger">{failure}</p>}
 
         {editTx && (
           <TransactionForm

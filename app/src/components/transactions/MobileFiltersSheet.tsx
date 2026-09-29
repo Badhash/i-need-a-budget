@@ -86,6 +86,7 @@ export function MobileFiltersSheet({
               min={monthMin}
               max={monthMax}
               allowAll
+              direction="up"
               className="w-full"
               aria-label="Filtrer par mois"
             />

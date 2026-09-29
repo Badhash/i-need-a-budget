@@ -25,11 +25,47 @@ function PageFallback() {
   )
 }
 
+// Apres un deploiement, une PWA restee ouverte (iOS garde l'app residente des
+// jours) reference encore les anciens chunks haches, que GitHub Pages ne sert
+// plus : le premier import d'une page pas encore visitee echoue (404) et, sans
+// garde, React demontait toute l'app (ecran blanc jusqu'au relancement). On
+// recharge alors UNE fois (index.html reseau d'abord -> nouveau bundle) ; si
+// l'echec persiste (hors-ligne), l'erreur remonte a l'ErrorBoundary.
+const CHUNK_RELOAD_FLAG = 'inab:chunk-reload'
+
+function loadWithReload<T>(loader: () => Promise<T>): Promise<T> {
+  return loader().then(
+    (m) => {
+      try {
+        sessionStorage.removeItem(CHUNK_RELOAD_FLAG)
+      } catch {
+        // ignore
+      }
+      return m
+    },
+    (err: unknown) => {
+      let alreadyReloaded = false
+      try {
+        alreadyReloaded = sessionStorage.getItem(CHUNK_RELOAD_FLAG) === '1'
+        if (!alreadyReloaded) sessionStorage.setItem(CHUNK_RELOAD_FLAG, '1')
+      } catch {
+        // sessionStorage indisponible : on tente quand meme un rechargement.
+      }
+      if (!alreadyReloaded) {
+        window.location.reload()
+        // Le rechargement est en cours : on laisse le squelette affiche.
+        return new Promise<T>(() => undefined)
+      }
+      throw err
+    },
+  )
+}
+
 // Charge une page en lazy (chunk separe) et l'enveloppe dans un Suspense avec le
 // fallback commun. Les pages lourdes (Recharts, TanStack Table) sortent ainsi du
 // chunk initial ; seule BudgetPage (page de demarrage) reste en import statique.
 function lazyPage(loader: () => Promise<{ default: ComponentType }>) {
-  const Lazy = lazy(loader)
+  const Lazy = lazy(() => loadWithReload(loader))
   return function LazyRoute() {
     return (
       <Suspense fallback={<PageFallback />}>

@@ -30,6 +30,15 @@ const EXTERNAL_DEBOUNCE_MS = 300
 // relancement de l'app, sans le relancer). Les absences courtes (changement
 // d'app rapide) ne coutent rien.
 const RESUME_AFTER_MS = 5 * 60 * 1000
+// Fenetre pendant laquelle le SUBSCRIBED de re-abonnement qui suit une reprise
+// est considere comme redondant avec la reconciliation de reprise.
+const RESUME_DEDUP_MS = 15 * 1000
+
+// Queries reconciliees par un signal : tout SAUF la liste des banques Enable
+// Banking (['aspsps'], appel tiers authentifie, valable une heure) qu'une
+// invalidation globale rechargerait a chaque signal tant que les reglages
+// sont ouverts.
+const isReconcilable = (query: { queryKey: readonly unknown[] }) => query.queryKey[0] !== 'aspsps'
 
 export function useRealtimeSync() {
   const queryClient = useQueryClient()
@@ -38,6 +47,7 @@ export function useRealtimeSync() {
     let channel: RealtimeChannel | null = null
     let active = true
     let timer: ReturnType<typeof setTimeout> | null = null
+    let resumedAt = 0
 
     // Planifie la reconciliation en fonction de l'origine probable du signal :
     // - ecriture locale recente -> on repousse jusqu'a la fin de la fenetre de
@@ -57,7 +67,7 @@ export function useRealtimeSync() {
           return
         }
         timer = null
-        void queryClient.invalidateQueries()
+        void queryClient.invalidateQueries({ predicate: isReconcilable })
       }, delay)
     }
 
@@ -70,6 +80,9 @@ export function useRealtimeSync() {
       // Canal prive : le token doit etre transmis a Realtime pour passer la RLS
       // de realtime.messages (sinon le join est refuse silencieusement).
       await supabase.realtime.setAuth(session.access_token)
+      // Demonte pendant l'attente (deconnexion immediate) : ne pas creer un
+      // canal que le nettoyage ne verra jamais.
+      if (!active) return
 
       // Un broadcast emis PENDANT une coupure websocket est perdu (pas de
       // rejeu cote Realtime) : au re-abonnement apres la premiere connexion,
@@ -83,7 +96,9 @@ export function useRealtimeSync() {
         })
         .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
-            if (joinedOnce) scheduleInvalidate()
+            // Le re-abonnement qui suit un retour au premier plan double la
+            // reconciliation deja lancee par onVisibility : on l'ignore.
+            if (joinedOnce && Date.now() - resumedAt > RESUME_DEDUP_MS) scheduleInvalidate()
             joinedOnce = true
           }
         })
@@ -97,9 +112,10 @@ export function useRealtimeSync() {
       }
       if (hiddenAt && Date.now() - hiddenAt >= RESUME_AFTER_MS) {
         hiddenAt = 0
+        resumedAt = Date.now()
         if (timer) clearTimeout(timer)
         timer = null
-        void queryClient.invalidateQueries()
+        void queryClient.invalidateQueries({ predicate: isReconcilable })
       }
     }
     document.addEventListener('visibilitychange', onVisibility)

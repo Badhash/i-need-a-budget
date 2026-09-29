@@ -436,6 +436,10 @@ export function CategoriesSection() {
     }
     if (pendingDelete.kind === 'category') {
       deleteCategory.mutate({ categoryId: pendingDelete.id }, { onError })
+    } else if ((boot.data?.categories ?? []).some((c) => c.groupId === pendingDelete.id)) {
+      // Le serveur refuse un groupe non vide : inutile de le retirer en
+      // optimiste pour le voir reapparaitre avec une erreur.
+      setDeleteError("Ce groupe contient encore des catégories : déplace-les ou supprime-les d'abord.")
     } else {
       deleteGroup.mutate({ groupId: pendingDelete.id }, { onError })
     }

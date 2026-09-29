@@ -34,3 +34,23 @@ export function useKeyboardInset(): number {
 
   return inset
 }
+
+const SM_UP = '(min-width: 640px)'
+
+/**
+ * Variante pour les feuilles basses (DialogContent) : au-dela de sm (640px), le
+ * dialog est une modale CENTREE par transform ; lui appliquer un decalage
+ * clavier remplacerait ce transform et casserait son centrage (iPad, fenetre
+ * etroite). On ne remonte donc la feuille que sous sm.
+ */
+export function useSheetKeyboardInset(): number {
+  const inset = useKeyboardInset()
+  const [smUp, setSmUp] = useState(() => window.matchMedia(SM_UP).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(SM_UP)
+    const onChange = () => setSmUp(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return smUp ? 0 : inset
+}

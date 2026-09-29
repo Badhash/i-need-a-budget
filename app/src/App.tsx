@@ -22,7 +22,7 @@ import {
 } from '@/lib/data'
 import { RULES_KEY, fetchRules } from '@/lib/rules'
 import { TARGETS_KEY, fetchTargets } from '@/lib/targets'
-import { MAX_MONTH, MIN_MONTH, addMonths } from '@/lib/format'
+import { maxMonth, MIN_MONTH, addMonths } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { AppLoader } from '@/components/shared/AppLoader'
 
@@ -37,7 +37,7 @@ import { AppLoader } from '@/components/shared/AppLoader'
  * Promise.allSettled : une query en erreur ne bloque JAMAIS l'entree dans l'app,
  * les vues gerent leurs propres etats vides/erreur.
  *
- * Prechargement (par mois de MIN_MONTH a MAX_MONTH inclus) : bootstrap,
+ * Prechargement (par mois de MIN_MONTH a maxMonth() inclus) : bootstrap,
  * transactions, objectifs, regles, connexions bancaires, logs de sync, budget de
  * chaque mois, rapport de chaque mois.
  */
@@ -90,7 +90,7 @@ function preloadRest(queryClient: QueryClient, taxo: Bootstrap | undefined, curr
   if (taxo) {
     const captured = taxo
     for (const m of [addMonths(currentMonth, -1)]) {
-      if (m >= MIN_MONTH && m <= MAX_MONTH) {
+      if (m >= MIN_MONTH && m <= maxMonth()) {
         tasks.push(
           queryClient.prefetchQuery({ queryKey: budgetKey(m), queryFn: () => fetchBudgetMonth(m, captured) }),
         )

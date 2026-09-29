@@ -19,7 +19,7 @@ import { useUiStore } from '@/stores/ui'
 import { useChartPalette } from '@/hooks/useTheme'
 import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { computeAnalytics, type Analytics, type TaxonomyLite } from '@/lib/analytics'
-import { fmtEUR, fmtMonthLong, fmtMonthShort, fmtPercent, CURRENT_MONTH, TODAY } from '@/lib/format'
+import { currentMonth, evalAmountCents, fmtDateNumeric, fmtDateShort, fmtEUR, fmtMonthLong, fmtMonthShort, fmtPercent, today } from '@/lib/format'
 import type { ReportsData } from '@/lib/reports'
 import { TrendBadge, WidgetCard } from '@/components/reports/WidgetCard'
 import { IncomeExpenseWidget } from '@/components/reports/IncomeExpenseWidget'
@@ -68,15 +68,17 @@ function buildTaxo(boot: Bootstrap): TaxonomyLite {
 
 function SpendingDonut({ data }: { data: ReportsData }) {
   const palette = useChartPalette()
+  // Pas de mois precedent (premier mois de donnees) : pas de tendance, plutot
+  // qu'un faux « 0 % » en rouge.
   const delta =
     data.prevTotalSpending > 0
       ? (data.totalSpending - data.prevTotalSpending) / data.prevTotalSpending
-      : 0
+      : null
 
   return (
     <WidgetCard
       question={
-        data.month === CURRENT_MONTH
+        data.month === currentMonth()
           ? 'Où part mon argent ce mois-ci ?'
           : `Où part mon argent en ${fmtMonthLong(data.month)} ?`
       }
@@ -124,7 +126,23 @@ function SpendingDonut({ data }: { data: ReportsData }) {
 }
 
 function TopMerchants({ data }: { data: ReportsData }) {
-  const list = data.topMerchants.map((m) => ({ ...m, label: parseBankLabel(m.label).short }))
+  // Le serveur regroupe par libelle brut ; deux libelles differents peuvent
+  // donner le meme nom court (dates, numeros) : on fusionne ici, sinon deux
+  // lignes « Carrefour » et des cles React en double.
+  const list = useMemo(() => {
+    const merged = new Map<string, { label: string; total: number; count: number }>()
+    for (const m of data.topMerchants) {
+      const label = parseBankLabel(m.label).short
+      const cur = merged.get(label)
+      if (cur) {
+        cur.total += m.total
+        cur.count += m.count
+      } else {
+        merged.set(label, { label, total: m.total, count: m.count })
+      }
+    }
+    return [...merged.values()].sort((a, b) => b.total - a.total)
+  }, [data.topMerchants])
   const max = list[0]?.total ?? 1
   return (
     <WidgetCard question="Chez qui je dépense le plus ?">
@@ -414,7 +432,7 @@ function BiggestTx({ a }: { a: Analytics }) {
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{t.label}</span>
                 <span className="text-[11.5px] text-soft">
-                  {new Date(t.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                  {fmtDateShort(t.date)}
                   {t.categoryName ? ` · ${t.categoryName}` : ''}
                 </span>
               </span>
@@ -475,14 +493,13 @@ function readLS(key: string, fallback: string): string {
 }
 
 function eurToCents(input: string): number {
-  const cleaned = input.replace(/\s/g, '').replace(',', '.').replace(/[^0-9.]/g, '')
-  const val = Number.parseFloat(cleaned)
-  return Number.isFinite(val) ? Math.round(val * 100) : 0
+  // Parser strict partage (symbole euro tolere) : « 1.234,56 » n'est plus lu 1,23.
+  return evalAmountCents(input.replace(/€/g, '')) ?? 0
 }
 
 function ZakatWidget() {
   const { data: txs } = useTransactions()
-  const [date, setDate] = useState(() => readLS(ZAKAT_DATE_KEY, `${TODAY.slice(0, 4)}-01-01`))
+  const [date, setDate] = useState(() => readLS(ZAKAT_DATE_KEY, `${today().slice(0, 4)}-01-01`))
   const [nisab, setNisab] = useState(() => readLS(NISAB_KEY, ''))
 
   const setDatePersist = (v: string) => {
@@ -532,19 +549,19 @@ function ZakatWidget() {
       {belowNisab ? (
         <p className="text-[13px] text-soft">
           En dessous du nisab (<span className="tnum">{fmtEUR(nisabCents)}</span>) au{' '}
-          {new Date(date).toLocaleDateString('fr-FR')} : aucune zakât due.
+          {fmtDateNumeric(date)} : aucune zakât due.
         </p>
       ) : (
         <p className="text-[13px] text-soft">
           Sur une valeur nette de <Amount cents={base} className="font-medium text-ink" /> au{' '}
-          {new Date(date).toLocaleDateString('fr-FR')}.
+          {fmtDateNumeric(date)}.
         </p>
       )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="label-caps">Date de calcul</span>
-          <input type="date" value={date} max={TODAY} onChange={(e) => setDatePersist(e.target.value)} className={inputClass} />
+          <input type="date" value={date} max={today()} onChange={(e) => setDatePersist(e.target.value)} className={inputClass} />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="label-caps">Nisab (85 g d'or, €)</span>
@@ -748,7 +765,7 @@ export function ReportsPage() {
 
   const analytics = useMemo(() => {
     if (!txs || !boot.data) return null
-    return computeAnalytics(txs, buildTaxo(boot.data), month, TODAY)
+    return computeAnalytics(txs, buildTaxo(boot.data), month, today())
   }, [txs, boot.data, month])
 
   return isDesktop ? (

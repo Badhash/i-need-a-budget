@@ -9,6 +9,8 @@ interface SelectionBarProps {
   label?: string
   onCategorize: (categoryId: string | null) => void
   onCancel: () => void
+  /** Propose aussi les categories de revenus (selection contenant une entree d'argent). */
+  includeIncome?: boolean
 }
 
 /**
@@ -16,7 +18,7 @@ interface SelectionBarProps {
  * au-dessus de la bottom nav, meme decalage que le toast. Portail pour ne pas
  * etre clippee par les cartes (overflow-hidden).
  */
-export function SelectionBar({ count, label, onCategorize, onCancel }: SelectionBarProps) {
+export function SelectionBar({ count, label, onCategorize, onCancel, includeIncome = false }: SelectionBarProps) {
   return createPortal(
     <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6.5rem+env(safe-area-inset-bottom))] z-[45] flex justify-center px-4 lg:hidden">
       <div
@@ -28,7 +30,7 @@ export function SelectionBar({ count, label, onCategorize, onCancel }: Selection
         <p className="min-w-0 flex-1 truncate pl-1 text-[13.5px] font-medium text-ink tnum">
           {count} sélectionnée{count > 1 ? 's' : ''}
         </p>
-        <CategoryPicker label={label} onSelect={onCategorize}>
+        <CategoryPicker label={label} includeIncome={includeIncome} onSelect={onCategorize}>
           <button
             type="button"
             disabled={count === 0}

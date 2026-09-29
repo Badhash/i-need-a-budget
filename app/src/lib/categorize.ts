@@ -33,7 +33,18 @@ export function scheduleBudgetRefetch(queryClient: QueryClient): void {
   if (budgetRefetchTimer) clearTimeout(budgetRefetchTimer)
   budgetRefetchTimer = setTimeout(() => {
     budgetRefetchTimer = null
-    void queryClient.invalidateQueries({ queryKey: ['budget'] })
+    // Serialise derriere les ecritures encore en file : la lecture part apres
+    // leur commit. Sinon une reponse anterieure a une assignation en vol
+    // ecraserait sa valeur optimiste (« valeur qui saute »).
+    void enqueue(async () => {
+      void queryClient.invalidateQueries({ queryKey: ['budget'] })
+      // Soldes de comptes et compteur « À catégoriser » vivent dans bootstrap
+      // (agregats, quelques Ko). Les rapports ne sont refetches que s'ils sont
+      // affiches ; sinon ils sont juste marques perimes pour leur prochain
+      // affichage (zero egress maintenant).
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+      void queryClient.invalidateQueries({ queryKey: ['reports'] })
+    })
   }, BUDGET_REFETCH_DEBOUNCE_MS)
 }
 

@@ -17,7 +17,7 @@ import type {
 import type { CatColor } from '@/styles/themes'
 import type { BudgetMonth, BudgetGroupBlock, BudgetRow } from '@/lib/budget'
 import type { ReportsData } from '@/lib/reports'
-import { monthOf, TODAY } from '@/lib/format'
+import { monthOf, today } from '@/lib/format'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -479,7 +479,34 @@ export function countsAsUncategorized(queryClient: QueryClient, t: UncatCandidat
   if (account && !account.onBudget) return false
   const month = monthOf(t.date)
   const start = boot?.budgetStartMonth ?? null
-  return !t.categoryId && !t.transferGroupId && month <= monthOf(TODAY) && (start === null || month >= start)
+  return !t.categoryId && !t.transferGroupId && month <= monthOf(today()) && (start === null || month >= start)
+}
+
+/**
+ * Ajuste de facon OPTIMISTE les soldes de comptes portes par le cache bootstrap
+ * (page Comptes, valeur nette) : ajout, edition ou suppression d'une
+ * transaction. La verite serveur est relue en fond (scheduleBudgetRefetch).
+ */
+export function patchAccountBalances(
+  queryClient: QueryClient,
+  deltas: { accountId: string; delta: number }[],
+): void {
+  const byAccount = new Map<string, number>()
+  for (const d of deltas) {
+    if (d.delta !== 0) byAccount.set(d.accountId, (byAccount.get(d.accountId) ?? 0) + d.delta)
+  }
+  if (byAccount.size === 0) return
+  queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) =>
+    old
+      ? {
+          ...old,
+          accounts: old.accounts.map((a) => {
+            const delta = byAccount.get(a.id)
+            return delta ? { ...a, balance: a.balance + delta } : a
+          }),
+        }
+      : old,
+  )
 }
 
 /** Lance « Nouveau budget » : efface toutes les assignations et fixe le mois de depart. */

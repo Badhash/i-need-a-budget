@@ -293,7 +293,7 @@ export function TriagePage() {
           )
         })}
 
-        <CategoryPicker label={current.label} onSelect={(id) => id && pick(id)}>
+        <CategoryPicker label={current.label} includeIncome={current.amount > 0} onSelect={(id) => id && pick(id)}>
           <span className="flex h-12 w-full cursor-pointer items-center justify-between gap-3 rounded-xl border border-dashed border-line px-3 text-[14px] font-medium text-ink transition-colors hover:bg-surface2">
             Autre catégorie…
             <ChevronRight className="h-4 w-4 text-soft" />

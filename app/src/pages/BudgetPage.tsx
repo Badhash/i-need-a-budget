@@ -124,7 +124,9 @@ function useAssignMutation(month: string) {
           },
         }
       })
-      return { previous }
+      // La cle est CAPTUREE ici : si l'utilisateur change de mois pendant le
+      // POST, le rollback doit viser le mois de l'assignation, pas celui affiche.
+      return { previous, key }
     },
     // Rollback discret si le reseau echoue : on restaure l'etat d'avant, PUIS
     // on refetch la cle du mois : en rafale (Financer les objectifs, Couvrir les
@@ -132,10 +134,21 @@ function useAssignMutation(month: string) {
     // commitees cote serveur — le refetch scope remet la verite sans attendre la
     // reconciliation Realtime (jusqu'a 30 s).
     onError: (_err, _input, context) => {
-      if (context?.previous) queryClient.setQueryData(key, context.previous)
-      void queryClient.invalidateQueries({ queryKey: key })
+      const k = context?.key ?? key
+      if (context?.previous) queryClient.setQueryData(k, context.previous)
+      void queryClient.invalidateQueries({ queryKey: k })
     },
-    // Pas d'invalidation au succes : le signal Realtime (debounce) reconcilie en fond.
+    // Pas de refetch du mois assigne (deja exact en optimiste). Les AUTRES mois
+    // en cache, eux, sont perimes : une assignation en M pese sur le Pret a
+    // assigner de M-1 et sur le report de M+1. On les marque perimes ; etant
+    // inactifs, ils ne sont refetches qu'a leur prochain affichage.
+    onSuccess: (_data, _input, context) => {
+      const m = context?.key[1] ?? month
+      void queryClient.invalidateQueries({
+        queryKey: ['budget'],
+        predicate: (q) => q.queryKey[1] !== m,
+      })
+    },
   })
 }
 
@@ -230,10 +243,21 @@ function useMoveMutation(month: string) {
         const step1 = applyAssignToCache(old, fromId, fromAssigned - amount)
         return applyAssignToCache(step1, toId, toAssigned + amount)
       })
-      return { previous }
+      return { previous, key }
     },
+    // Meme discipline que useAssignMutation : rollback sur la cle capturee puis
+    // refetch scope (le snapshot peut ecraser d'autres patchs deja commites).
     onError: (_err, _input, context) => {
-      if (context?.previous) queryClient.setQueryData(key, context.previous)
+      const k = context?.key ?? key
+      if (context?.previous) queryClient.setQueryData(k, context.previous)
+      void queryClient.invalidateQueries({ queryKey: k })
+    },
+    onSuccess: (_data, _input, context) => {
+      const m = context?.key[1] ?? month
+      void queryClient.invalidateQueries({
+        queryKey: ['budget'],
+        predicate: (q) => q.queryKey[1] !== m,
+      })
     },
   })
 }
@@ -758,24 +782,35 @@ function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity, hi
   const [assignRow, setAssignRow] = useState<BudgetRow | null>(null)
   const [actionCtx, setActionCtx] = useState<{ block: BudgetGroupBlock; index: number } | null>(null)
 
+  // Voisin VISIBLE d'une ligne : avec « Masquer les lignes vides », permuter
+  // avec une ligne cachee ne changerait rien a l'ecran.
+  const visibleNeighbour = (block: BudgetGroupBlock, index: number, direction: -1 | 1): number | null => {
+    const visible = block.rows
+      .map((_row, i) => i)
+      .filter((i) => !hideEmptyRows || !isEmptyRow(block.rows[i]!))
+    const pos = visible.indexOf(index)
+    if (pos === -1) return null
+    return visible[pos + direction] ?? null
+  }
+
   // Deplace la categorie dans son groupe : reordonne le cache budget
-  // immediatement (optimiste) et pousse l'ordre complet cote serveur.
+  // immediatement (optimiste) et pousse l'ordre complet cote serveur. La ligne
+  // est deplacee (et non permutee) jusqu'a la position de son voisin visible.
   const moveCategory = (block: BudgetGroupBlock, index: number, direction: -1 | 1) => {
-    const to = index + direction
-    if (to < 0 || to >= block.rows.length) return
-    const ids = block.rows.map((r) => r.category.id)
-    ;[ids[index], ids[to]] = [ids[to]!, ids[index]!]
-    reorder.mutate({ groupId: block.group.id, orderedIds: ids })
+    const to = visibleNeighbour(block, index, direction)
+    if (to === null) return
+    const moveItem = <T,>(list: T[]): T[] => {
+      const out = [...list]
+      const [item] = out.splice(index, 1)
+      out.splice(to, 0, item!)
+      return out
+    }
+    reorder.mutate({ groupId: block.group.id, orderedIds: moveItem(block.rows.map((r) => r.category.id)) })
     queryClient.setQueryData<BudgetMonth>(['budget', month], (old) => {
       if (!old) return old
       return {
         ...old,
-        groups: old.groups.map((g) => {
-          if (g.group.id !== block.group.id) return g
-          const rows = [...g.rows]
-          ;[rows[index], rows[to]] = [rows[to]!, rows[index]!]
-          return { ...g, rows }
-        }),
+        groups: old.groups.map((g) => (g.group.id !== block.group.id ? g : { ...g, rows: moveItem(g.rows) })),
       }
     })
   }
@@ -839,6 +874,7 @@ function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity, hi
       })}
       <AssignSheet
         row={assignRow}
+        month={month}
         target={assignRow ? (targets.get(assignRow.category.id) ?? null) : null}
         onCommit={(categoryId, amount) => assign.mutate({ categoryId, amount })}
         onViewActivity={(categoryId) => {
@@ -853,8 +889,8 @@ function MobileGroups({ groups, month, targets, onOpenTarget, onViewActivity, hi
         moveTargets={
           actionCtx ? moveTargetsFor(groups, actionCtx.block.rows[actionCtx.index]?.category.id) : []
         }
-        canMoveUp={actionCtx !== null && actionCtx.index > 0}
-        canMoveDown={actionCtx !== null && actionCtx.index < actionCtx.block.rows.length - 1}
+        canMoveUp={actionCtx !== null && visibleNeighbour(actionCtx.block, actionCtx.index, -1) !== null}
+        canMoveDown={actionCtx !== null && visibleNeighbour(actionCtx.block, actionCtx.index, 1) !== null}
         onMove={(direction) => {
           if (actionCtx) moveCategory(actionCtx.block, actionCtx.index, direction)
         }}

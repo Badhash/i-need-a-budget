@@ -1,18 +1,27 @@
 import type { ReactNode } from 'react'
-import { TrendingDown, TrendingUp } from 'lucide-react'
+import { Minus, TrendingDown, TrendingUp } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { fmtPercent } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 interface TrendBadgeProps {
-  /** variation relative, ex. -0.12 pour -12 % */
-  delta: number
+  /** variation relative, ex. -0.12 pour -12 % ; null = pas de reference (premier mois) */
+  delta: number | null
   /** true si une baisse est une bonne nouvelle (ex. dépenses) */
   downIsGood?: boolean
   label: string
 }
 
 export function TrendBadge({ delta, downIsGood = false, label }: TrendBadgeProps) {
+  // Sans reference ou sans variation : pastille neutre, ni verte ni rouge.
+  if (delta === null || delta === 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-1 text-[12px] font-semibold text-soft">
+        <Minus className="h-3.5 w-3.5" />
+        {delta === null ? 'pas de comparaison' : `stable ${label}`}
+      </span>
+    )
+  }
   const isDown = delta < 0
   const good = downIsGood ? isDown : !isDown
   const Icon = isDown ? TrendingDown : TrendingUp

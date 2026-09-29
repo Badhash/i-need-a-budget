@@ -11,7 +11,7 @@ import {
   useAccounts,
   type AccountWithBalance,
 } from '@/lib/data'
-import { TODAY, fmtEUR } from '@/lib/format'
+import { evalAmountCents, fmtEUR, MIN_MONTH, today } from '@/lib/format'
 import { useBankConnections } from '@/lib/bank'
 import { SyncHealth } from '@/components/settings/SyncHealth'
 import { Amount } from '@/components/shared/Amount'
@@ -128,7 +128,7 @@ function EditAccountDialog({
       if (delta === 0) return
       await apiAddTransaction({
         accountId: account.id,
-        date: TODAY,
+        date: today(),
         label: 'Ajustement de solde',
         categoryId: null,
         amount: delta,
@@ -279,14 +279,15 @@ function EditAccountDialog({
   )
 }
 
-const MIN_DATE = '2026-01-01'
+// Meme borne basse que le selecteur de mois (MIN_MONTH) : un solde d'ouverture
+// ne doit pas tomber dans un mois que l'app ne sait pas afficher.
+const MIN_DATE = `${MIN_MONTH}-01`
 
+// Parser strict partage : « 1.234,56 » est rejete (au lieu de 1,23 € via
+// parseFloat), le negatif reste autorise (encours de carte a debit differe).
 function parseEuros(raw: string): number | null {
-  const trimmed = raw.trim()
-  if (!trimmed) return 0
-  const parsed = Number.parseFloat(trimmed.replace(/\s/g, '').replace(',', '.'))
-  if (Number.isNaN(parsed)) return null
-  return Math.round(parsed * 100)
+  if (!raw.trim()) return 0
+  return evalAmountCents(raw)
 }
 
 /** Dialog de creation de compte (hors onboarding) : type carte a debit differe inclus. */
@@ -297,7 +298,7 @@ function AddAccountDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [kind, setKind] = useState<AccountKind>('checking')
   const [onBudget, setOnBudget] = useState(true)
   const [balance, setBalance] = useState('')
-  const [openingDate, setOpeningDate] = useState(TODAY)
+  const [openingDate, setOpeningDate] = useState(today())
   const [error, setError] = useState<string | null>(null)
 
   const create = useMutation({
@@ -330,7 +331,7 @@ function AddAccountDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
       setError('Saisissez un solde valide, par exemple 1234,56 (négatif autorisé pour une carte).')
       return
     }
-    if (openingDate < MIN_DATE || openingDate > TODAY) {
+    if (openingDate < MIN_DATE || openingDate > today()) {
       setError("La date d'ouverture doit être antérieure ou égale à aujourd'hui.")
       return
     }
@@ -390,7 +391,7 @@ function AddAccountDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                 type="date"
                 value={openingDate}
                 min={MIN_DATE}
-                max={TODAY}
+                max={today()}
                 onChange={(e) => setOpeningDate(e.target.value)}
               />
             </div>

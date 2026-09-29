@@ -144,6 +144,10 @@ interface BankSyncResult {
   imported: number
   linked: number
   transfersLinked?: number
+  /** Reconciliation des soldes deja effectuee par le serveur (import d'historique). */
+  adjusted?: BankReconcileResult['adjusted']
+  /** Erreurs non bloquantes rencontrees pendant la synchronisation. */
+  errors?: string[]
 }
 
 /**
