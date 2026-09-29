@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react'
 import { Outlet, useRouterState } from '@tanstack/react-router'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
@@ -27,6 +28,32 @@ function TopAura() {
   )
 }
 
+// Entree de page : fondu + legere montee (8px), courbe ressort du langage
+// Aurore. La montee anime `top` (element en position relative) et NON une
+// transformation : une transform ferait de ce conteneur le repere des
+// elements fixed de la page (barres de selection, toasts de page) le temps de
+// l'animation, qui sauteraient. Le header, hors de ce conteneur, ne bouge
+// pas. Coupee sous prefers-reduced-motion.
+const PAGE_ENTER: Keyframe[] = [
+  { opacity: 0, top: '8px' },
+  { opacity: 1, top: '0px' },
+]
+const PAGE_ENTER_TIMING: KeyframeAnimationOptions = { duration: 300, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+
+function usePageEnter(pageKey: string | undefined) {
+  const ref = useRef<HTMLDivElement>(null)
+  // Avant la premiere peinture : la page n'apparait jamais a sa place finale
+  // puis ne « rejoue » pas son entree.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || typeof el.animate !== 'function') return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const animation = el.animate(PAGE_ENTER, PAGE_ENTER_TIMING)
+    return () => animation.cancel()
+  }, [pageKey])
+  return ref
+}
+
 export function AppShell() {
   useThemeController()
   useRealtimeSync()
@@ -37,6 +64,7 @@ export function AppShell() {
   // (des le debut du chargement) : une cle sur le pathname remontait la page
   // quittee une fois avant de la remplacer (effets rejoues, vue reconstruite).
   const pageKey = useRouterState({ select: (s) => s.matches[s.matches.length - 1]?.id })
+  const pageRef = usePageEnter(pageKey)
 
   // Etat vide : aucun compte -> onboarding (l'etape 1 seede les categories,
   // l'etape 2 cree le compte ; on reste sur l'onboarding tant qu'aucun compte
@@ -73,10 +101,8 @@ export function AppShell() {
         <Header />
         <main className="mx-auto max-w-content px-4 pb-32 pt-6 lg:px-8 lg:pb-12">
           <UpdateBanner />
-          {/* Fondu d'entree a chaque changement de page (opacite seule : une
-              transformation ferait des elements fixed de la page des enfants
-              positionnes le temps de l'animation). */}
-          <div key={pageKey} className="animate-fade-in">
+          {/* Entree a chaque changement de page (cf. usePageEnter). */}
+          <div key={pageKey} ref={pageRef} className="relative">
             <Outlet />
           </div>
         </main>

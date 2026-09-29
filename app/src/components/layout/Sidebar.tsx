@@ -1,7 +1,7 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
 import { ChevronRight, type LucideIcon } from 'lucide-react'
-import { NAV_ITEMS, RULES_ITEM, SETTINGS_ITEM } from '@/components/layout/nav'
+import { NAV_ITEMS, RULES_ITEM, SETTINGS_ITEM, TRIAGE_ITEM } from '@/components/layout/nav'
 import { BrandMark } from '@/components/layout/BrandMark'
 import { useBudgetMonth } from '@/lib/queries'
 import { useBootstrap } from '@/lib/data'
@@ -32,31 +32,93 @@ function NavLink({ to, label, icon: Icon, badge }: { to: string; label: string; 
 }
 
 /**
+ * Sous-entree « À trier » (sous Transactions) : apparait en se depliant des
+ * qu'il reste des transactions a categoriser, et reste en place sur la page
+ * de tri elle-meme (meme a zero, le temps de finir). Un filet la rattache a
+ * Transactions.
+ */
+function TriageLink({ count, visible }: { count: number; visible: boolean }) {
+  const { to, label, icon: Icon } = TRIAGE_ITEM
+  return (
+    <div
+      aria-hidden={!visible || undefined}
+      className={cn(
+        'grid transition-[grid-template-rows,opacity] duration-280 ease-spring',
+        visible ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0',
+      )}
+    >
+      <div className="min-h-0 overflow-hidden">
+        <Link
+          to={to}
+          tabIndex={visible ? undefined : -1}
+          className={cn(
+            'group relative z-10 ml-7 mt-0.5 flex h-10 items-center gap-2.5 rounded-xl pl-2.5 pr-2 text-[13.5px] font-medium text-soft transition-colors duration-150 hover:text-ink data-[status=active]:text-accent-ink [&:not([data-status=active])]:hover:bg-ink/[0.04]',
+            // Filet de rattachement a Transactions (coude arrondi).
+            "before:pointer-events-none before:absolute before:-left-3 before:-top-2 before:h-[calc(50%+0.5rem)] before:w-2.5 before:rounded-bl-lg before:border-b before:border-l before:border-line before:content-['']",
+          )}
+        >
+          <Icon className="h-4 w-4 transition-transform duration-200 ease-spring group-hover:scale-105" />
+          <span className="flex-1">{label}</span>
+          {count > 0 && (
+            <span
+              key={count}
+              className="animate-pop rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-semibold text-warning ring-1 ring-inset ring-warning/20 tnum"
+            >
+              {count}
+            </span>
+          )}
+        </Link>
+      </div>
+    </div>
+  )
+}
+
+type IndicatorBox = { top: number; left: number; width: number; height: number; visible: boolean; animate: boolean }
+
+/**
  * Indicateur actif glissant : mesure le lien actif (data-status="active" pose
  * par le routeur) et deplace une pastille sous lui. Pas d'animation a la
- * premiere mesure (pas de glissement depuis le haut au chargement).
+ * premiere mesure (pas de glissement depuis le haut au chargement), ni quand
+ * la liste change de taille (la sous-entree « À trier » qui se deplie decale
+ * les liens suivants : la pastille les suit sans trainer).
  */
 function useActiveIndicator(pathname: string) {
   const navRef = useRef<HTMLElement>(null)
-  const [box, setBox] = useState<{ top: number; height: number; visible: boolean; animate: boolean }>({
+  const [box, setBox] = useState<IndicatorBox>({
     top: 0,
+    left: 0,
+    width: 0,
     height: 44,
     visible: false,
     animate: false,
   })
 
   useLayoutEffect(() => {
-    const measure = () => {
-      const active = navRef.current?.querySelector<HTMLElement>('[data-status="active"]')
+    const nav = navRef.current
+    const measure = (animate: boolean) => {
+      const active = nav?.querySelector<HTMLElement>('[data-status="active"]')
       setBox((prev) =>
         active
-          ? { top: active.offsetTop, height: active.offsetHeight, visible: true, animate: prev.visible }
+          ? {
+              top: active.offsetTop,
+              left: active.offsetLeft,
+              width: active.offsetWidth,
+              height: active.offsetHeight,
+              visible: true,
+              animate: animate && prev.visible,
+            }
           : { ...prev, visible: false, animate: prev.visible },
       )
     }
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+    measure(true)
+    const onResize = () => measure(false)
+    window.addEventListener('resize', onResize)
+    const observer = typeof ResizeObserver !== 'undefined' && nav ? new ResizeObserver(onResize) : null
+    if (observer && nav) observer.observe(nav)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      observer?.disconnect()
+    }
   }, [pathname])
 
   return { navRef, box }
@@ -76,6 +138,7 @@ export function Sidebar() {
   const hasBudgetError = budgetError || boot.isError
   const { navRef, box } = useActiveIndicator(pathname)
   const negative = budget !== undefined && budget.rta < 0
+  const showTriage = badge > 0 || pathname === TRIAGE_ITEM.to
 
   return (
     <aside className="glass-bar fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-edge px-3 pb-5 pt-6 lg:flex">
@@ -91,17 +154,23 @@ export function Sidebar() {
         <span
           aria-hidden
           className={cn(
-            'absolute inset-x-0 top-0 rounded-xl bg-accent/10 ring-1 ring-inset ring-accent/15',
-            box.animate && 'transition-[transform,height,opacity] duration-280 ease-spring',
+            'absolute left-0 top-0 rounded-xl bg-accent/10 ring-1 ring-inset ring-accent/15',
+            box.animate && 'transition-[transform,width,height,opacity] duration-280 ease-spring',
           )}
           style={{
-            transform: `translateY(${box.top}px)`,
+            transform: `translate(${box.left}px, ${box.top}px)`,
+            width: box.width || '100%',
             height: box.height,
             opacity: box.visible ? 1 : 0,
           }}
         />
+        {/* Le compteur « À catégoriser » vit sur la sous-entree « À trier »
+            (desktop) ; le mobile le garde sur l'onglet Transactions. */}
         {NAV_ITEMS.map((item) => (
-          <NavLink key={item.to} {...item} badge={item.to === '/transactions' ? badge : undefined} />
+          <Fragment key={item.to}>
+            <NavLink {...item} />
+            {item.to === '/transactions' && <TriageLink count={badge} visible={showTriage} />}
+          </Fragment>
         ))}
         <div aria-hidden className="mx-3 my-2 h-px bg-line/70" />
         <NavLink {...RULES_ITEM} />
