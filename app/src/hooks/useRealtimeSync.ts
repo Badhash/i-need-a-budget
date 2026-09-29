@@ -44,6 +44,9 @@ export function useRealtimeSync() {
   const queryClient = useQueryClient()
 
   useEffect(() => {
+    // Mode demonstration : aucun canal Realtime (pas de Supabase), rien a reconcilier.
+    if (import.meta.env.VITE_DEMO === '1') return
+
     let channel: RealtimeChannel | null = null
     let active = true
     let timer: ReturnType<typeof setTimeout> | null = null

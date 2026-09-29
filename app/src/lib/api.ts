@@ -54,6 +54,13 @@ export async function apiCall<T>(
   action: string,
   params: Record<string, unknown> = {},
 ): Promise<T> {
+  // Mode demonstration (VITE_DEMO=1) : serveur factice en memoire, charge a la
+  // demande. Branche morte hors demo : le module est absent du build de prod.
+  if (import.meta.env.VITE_DEMO === '1') {
+    const { demoApiCall } = await import('@/dev/demo')
+    return demoApiCall<T>(action, params)
+  }
+
   const {
     data: { session },
   } = await supabase.auth.getSession()

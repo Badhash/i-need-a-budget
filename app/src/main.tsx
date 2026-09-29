@@ -71,7 +71,8 @@ function askWorkerVersion(worker: ServiceWorker): Promise<string | null> {
   })
 }
 
-if (!import.meta.env.DEV && 'serviceWorker' in navigator) {
+// Jamais en mode demonstration : un worker garderait en cache le bundle demo.
+if (!import.meta.env.DEV && import.meta.env.VITE_DEMO !== '1' && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker
       .register('./sw.js', { scope: './' })
@@ -110,12 +111,29 @@ if (!import.meta.env.DEV && 'serviceWorker' in navigator) {
   })
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </ErrorBoundary>
-  </React.StrictMode>,
-)
+function mount() {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </ErrorBoundary>
+    </React.StrictMode>,
+  )
+}
+
+// Mode demonstration (VITE_DEMO=1, cf. src/dev/demo) : le module demo pose la
+// session factice AVANT le premier rendu (statut 'authed' d'emblee, aucun appel
+// Supabase Auth). Branche morte hors demo : module absent du build de prod.
+if (import.meta.env.VITE_DEMO === '1') {
+  void import('@/dev/demo').then(
+    (demo) => {
+      demo.installDemo()
+      mount()
+    },
+    (err: unknown) => console.error('Mode demonstration indisponible', err),
+  )
+} else {
+  mount()
+}

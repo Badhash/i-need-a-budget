@@ -27,7 +27,8 @@ function toOrigin(raw: string | undefined): string {
 export const SUPABASE_URL = toOrigin(rawUrl)
 export const SUPABASE_ANON_KEY = (rawAnon ?? '').trim()
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+// Mode demonstration (VITE_DEMO=1) : aucun appel Supabase, configuration inutile.
+if ((!SUPABASE_URL || !SUPABASE_ANON_KEY) && import.meta.env.VITE_DEMO !== '1') {
   // Ne pas jeter au chargement (sinon l'app entiere casse en dev/CI sans .env) :
   // on log clairement et les appels reels echoueront avec un message parlant.
   console.error(

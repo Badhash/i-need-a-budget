@@ -134,6 +134,10 @@ export function App() {
   const setSession = useAuthStore((s) => s.setSession)
 
   useEffect(() => {
+    // Mode demonstration : la session factice est posee de facon synchrone par
+    // installDemo (main.tsx, avant le premier rendu). Aucun appel a Supabase Auth.
+    if (import.meta.env.VITE_DEMO === '1') return
+
     let prevUserId: string | null = null
 
     void supabase.auth.getSession().then(({ data }) => {
@@ -159,6 +163,10 @@ export function App() {
 
   // Rejouer les gardes de route a chaque changement de session.
   useEffect(() => {
+    // Mode demonstration : session fixe, rien a rejouer. Un chargement du
+    // routeur AVANT son montage (contexte par defaut, non connecte) redirigerait
+    // vers /login et perdrait le lien profond (#/transactions...).
+    if (import.meta.env.VITE_DEMO === '1') return
     void router.invalidate()
   }, [session])
 
@@ -168,6 +176,8 @@ export function App() {
   // prise en charge par apparition du code, quel que soit le nombre de rendus.
   const finalizedCodeRef = useRef<string | null>(null)
   useEffect(() => {
+    // Mode demonstration : aucun retour de consentement bancaire a capturer.
+    if (import.meta.env.VITE_DEMO === '1') return
     if (status !== 'authed') return
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
