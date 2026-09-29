@@ -96,6 +96,10 @@ export function showSessionExpired(): void {
 // qu'elle a atteint le reseau, ou qu'elle est en pause hors ligne : la suivante
 // ne demarre qu'ensuite, l'ordre d'envoi d'origine est garde (une creation
 // part avant les mutations qui dependent de son id).
+// Limite assumee : seules les options de useMutation sont rejouees ; les
+// callbacks passes a mutate(vars, { onSuccess, onError }) ne sont pas conserves
+// par TanStack Query. Tout effet de bord indispensable (cache, suite logique)
+// doit donc vivre dans les options du hook, pas dans ceux de mutate().
 function startReplay(client: QueryClient, { options, variables }: FailedMutation): Promise<void> {
   return new Promise((resolve) => {
     const cache = client.getMutationCache()
