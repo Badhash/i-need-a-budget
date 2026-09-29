@@ -8,13 +8,19 @@ import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-q
 import type { Transaction } from '@/types/domain'
 import {
   apiCategorize,
+  apiSetPayeeCategory,
+  BOOTSTRAP_KEY,
   countsAsUncategorized,
   patchUncategorizedCount,
   useBootstrap,
   useCategoriesList,
+  useGroupsList,
+  type Bootstrap,
+  type PayeeDefault,
 } from '@/lib/data'
 import { useTransactions } from '@/lib/queries'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
+import { followTxId } from '@/lib/txIds'
 import { payeeKey } from '../../../packages/crypto/src/payee'
 
 export { payeeKey }
@@ -48,26 +54,175 @@ export function scheduleBudgetRefetch(queryClient: QueryClient): void {
   }, BUDGET_REFETCH_DEBOUNCE_MS)
 }
 
+// ---------------------------------------------------------------------------
+// Memoire de tiers optimiste
+// ---------------------------------------------------------------------------
+//
+// Le serveur apprend chaque categorisation manuelle (compte budget, categorie
+// hors revenus, hors virement) et fait du PREMIER choix le defaut d'un tiers
+// inconnu. On l'anticipe : la suggestion « tiers » apparait des la prochaine
+// transaction du meme marchand, sans attendre la relecture de bootstrap.
+
+/** Cle du tiers appris par cette categorisation (si le serveur l'apprend), sinon null. */
+function learnableKey(queryClient: QueryClient, tx: Transaction, categoryId: string | null): string | null {
+  if (!categoryId || tx.transferGroupId) return null
+  const boot = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)
+  if (!boot) return null
+  const account = boot.accounts.find((a) => a.id === tx.accountId)
+  const category = boot.categories.find((c) => c.id === categoryId)
+  if (!account?.onBudget || !category || category.isIncome) return null
+  return payeeKey(tx.label) || null
+}
+
+/**
+ * Ajoute en optimiste le defaut d'un tiers encore inconnu. Renvoie la cle
+ * ajoutee (a retirer si la categorisation echoue), null sinon.
+ */
+export function learnPayeeOptimistic(
+  queryClient: QueryClient,
+  tx: Transaction,
+  categoryId: string | null,
+): string | null {
+  const key = learnableKey(queryClient, tx, categoryId)
+  if (!key || !categoryId) return null
+  const boot = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)
+  if (!boot || boot.payees.some((p) => p.key === key)) return null
+  queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) =>
+    old ? { ...old, payees: [...old.payees, { key, categoryId }] } : old,
+  )
+  return key
+}
+
+/** Retire une entree ajoutee en optimiste (echec de la categorisation). */
+export function forgetPayeeOptimistic(queryClient: QueryClient, key: string): void {
+  queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) =>
+    old ? { ...old, payees: old.payees.filter((p) => p.key !== key) } : old,
+  )
+}
+
+/** Defaut memorise pour le tiers d'un libelle (bootstrap.payees). */
+export function payeeDefaultOf(queryClient: QueryClient, label: string): PayeeDefault | undefined {
+  const key = payeeKey(label)
+  if (!key) return undefined
+  return queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)?.payees.find((p) => p.key === key)
+}
+
+/**
+ * « Annuler » une categorisation apprise : le choix annule ne doit pas rester
+ * le defaut du tiers (sinon, regle « 2 des 3 », il faudrait deux corrections
+ * pour s'en defaire). On remet la memoire dans l'etat d'avant : defaut
+ * precedent force, ou tiers oublie s'il etait inconnu. Best-effort, silencieux.
+ */
+export function restorePayeeMemory(
+  queryClient: QueryClient,
+  tx: Transaction,
+  learnedCategoryId: string | null,
+  previous: PayeeDefault | undefined,
+): void {
+  const key = learnableKey(queryClient, tx, learnedCategoryId)
+  if (!key) return
+  queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) => {
+    if (!old) return old
+    const rest = old.payees.filter((p) => p.key !== key)
+    return { ...old, payees: previous ? [...rest, previous] : rest }
+  })
+  const label = tx.label
+  void enqueue(() => apiSetPayeeCategory(label, previous ? resolveId(previous.categoryId) : null)).catch(
+    () => undefined,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Categorisation optimiste
+// ---------------------------------------------------------------------------
+
 export interface CategorizeVars {
   txId: string
   categoryId: string | null
 }
 
-/** Applique une categorisation en optimiste sur le cache (liste + badge). */
-export function applyCategorizeOptimistic(queryClient: QueryClient, { txId, categoryId }: CategorizeVars) {
-  const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
-  const prev = snapshot?.find((t) => t.id === txId)
-  let countDelta = 0
-  if (prev) {
+/** Ce qu'une categorisation optimiste a change (retour cible en cas d'echec). */
+export interface CategorizeContext {
+  txId: string
+  /** Categorie avant l'action ; undefined si la ligne etait absente du cache. */
+  previous: string | null | undefined
+  next: string | null
+  countDelta: number
+  /** Entree de memoire de tiers ajoutee en optimiste. */
+  payeeKeyAdded: string | null
+}
+
+/**
+ * Applique des categorisations en optimiste sur le cache (liste, badge,
+ * memoire de tiers) en UNE ecriture de la liste. Renvoie un contexte par
+ * ligne pour un retour cible.
+ */
+export function applyCategorizeManyOptimistic(
+  queryClient: QueryClient,
+  txIds: string[],
+  categoryId: string | null,
+): CategorizeContext[] {
+  const list = queryClient.getQueryData<Transaction[]>(['transactions'])
+  const byId = new Map((list ?? []).map((t) => [t.id, t]))
+  const contexts: CategorizeContext[] = []
+  let countTotal = 0
+  for (const txId of txIds) {
+    const prev = byId.get(txId)
+    if (!prev) {
+      contexts.push({ txId, previous: undefined, next: categoryId, countDelta: 0, payeeKeyAdded: null })
+      continue
+    }
     const before = countsAsUncategorized(queryClient, prev)
     const after = countsAsUncategorized(queryClient, { ...prev, categoryId })
-    countDelta = (after ? 1 : 0) - (before ? 1 : 0)
-    patchUncategorizedCount(queryClient, countDelta)
+    const countDelta = (after ? 1 : 0) - (before ? 1 : 0)
+    countTotal += countDelta
+    // Un seul ajout par tiers (le premier choix fait le defaut).
+    const payeeKeyAdded = learnPayeeOptimistic(queryClient, prev, categoryId)
+    contexts.push({ txId, previous: prev.categoryId, next: categoryId, countDelta, payeeKeyAdded })
   }
+  const targets = new Set(txIds)
   queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
-    old?.map((t) => (t.id === txId ? { ...t, categoryId } : t)),
+    old?.map((t) => (targets.has(t.id) && t.categoryId !== categoryId ? { ...t, categoryId } : t)),
   )
-  return { snapshot, countDelta }
+  patchUncategorizedCount(queryClient, countTotal)
+  return contexts
+}
+
+/** Applique UNE categorisation en optimiste (cf. applyCategorizeManyOptimistic). */
+export function applyCategorizeOptimistic(
+  queryClient: QueryClient,
+  { txId, categoryId }: CategorizeVars,
+): CategorizeContext {
+  return applyCategorizeManyOptimistic(queryClient, [txId], categoryId)[0]!
+}
+
+/**
+ * Retour cible apres un echec : seule la categorie posee par CETTE action est
+ * retiree (une categorisation plus recente de la meme ligne est conservee).
+ * Ligne disparue entre-temps (creation annulee) : seul le compteur est rendu.
+ */
+export function revertCategorizeOptimistic(queryClient: QueryClient, contexts: CategorizeContext[]): void {
+  const list = queryClient.getQueryData<Transaction[]>(['transactions'])
+  const present = new Map((list ?? []).map((t) => [t.id, t]))
+  const revert = new Map<string, string | null>()
+  let count = 0
+  for (const ctx of contexts) {
+    if (ctx.previous === undefined) continue
+    const current = present.get(ctx.txId)
+    if (!current) {
+      count -= ctx.countDelta
+    } else if (current.categoryId === ctx.next) {
+      revert.set(ctx.txId, ctx.previous)
+      count -= ctx.countDelta
+    }
+    if (ctx.payeeKeyAdded) forgetPayeeOptimistic(queryClient, ctx.payeeKeyAdded)
+  }
+  if (revert.size > 0) {
+    queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
+      old?.map((t) => (revert.has(t.id) ? { ...t, categoryId: revert.get(t.id) ?? null } : t)),
+    )
+  }
+  patchUncategorizedCount(queryClient, count)
 }
 
 // Categorisation optimiste : le cache TanStack est mis a jour immediatement,
@@ -75,19 +230,23 @@ export function applyCategorizeOptimistic(queryClient: QueryClient, { txId, cate
 export function useCategorize() {
   const queryClient = useQueryClient()
   return useMutation({
-    // Serialise derriere une eventuelle creation de categorie en vol : le
-    // categoryId cible est resolu temp -> real avant l'envoi.
-    mutationFn: ({ txId, categoryId }: CategorizeVars) =>
-      enqueue(() => apiCategorize(txId, categoryId === null ? null : resolveId(categoryId)), {
-        deps: categoryId === null ? [] : [categoryId],
-      }),
+    // Serialise derriere une eventuelle creation en vol (categorie tout juste
+    // creee, transaction tout juste saisie) : les ids sont resolus temp -> real
+    // au moment de l'envoi, la tache est annulee si la creation a echoue.
+    // Un id capture avant la confirmation de la ligne (« Annuler » d'un toast)
+    // est suivi vers l'id serveur.
+    mutationFn: ({ txId: capturedId, categoryId }: CategorizeVars) => {
+      const txId = followTxId(capturedId)
+      return enqueue(() => apiCategorize(resolveId(txId), categoryId === null ? null : resolveId(categoryId)), {
+        deps: categoryId === null ? [txId] : [txId, categoryId],
+      })
+    },
     onMutate: async (vars) => {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
-      return applyCategorizeOptimistic(queryClient, vars)
+      return applyCategorizeOptimistic(queryClient, { ...vars, txId: followTxId(vars.txId) })
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
-      if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
+      if (ctx) revertCategorizeOptimistic(queryClient, [ctx])
     },
     // Liste et badge sont deja exacts (optimiste) ; seul le budget du mois est
     // refetche, de facon ciblee et coalescee (cf. scheduleBudgetRefetch).
@@ -107,17 +266,21 @@ const MAX_SUGGESTIONS = 4
 /**
  * Suggestions pour un libelle : 1) la categorie memorisee pour ce tiers
  * (bootstrap.payees, calculee serveur), 2) les categories les plus utilisees
- * sur les 90 derniers jours (cache transactions), en excluant les revenus.
- * Ordre stable, sans doublon, au plus MAX_SUGGESTIONS.
+ * sur les 90 derniers jours (cache transactions), en excluant les revenus et
+ * les categories masquees. Ordre stable, sans doublon, au plus MAX_SUGGESTIONS.
  */
 export function useCategorySuggestions(label: string | null | undefined): CategorySuggestion[] {
   const boot = useBootstrap().data
   const { data: txs } = useTransactions()
   const categories = useCategoriesList()
+  const groups = useGroupsList()
   const key = label ? payeeKey(label) : ''
 
   return useMemo(() => {
-    const valid = new Set(categories.filter((c) => !c.isIncome).map((c) => c.id))
+    const hiddenGroups = new Set(groups.filter((g) => g.hidden).map((g) => g.id))
+    const valid = new Set(
+      categories.filter((c) => !c.isIncome && !c.hidden && !hiddenGroups.has(c.groupId)).map((c) => c.id),
+    )
     const out: CategorySuggestion[] = []
     const seen = new Set<string>()
     const push = (categoryId: string | null | undefined, reason: SuggestionReason) => {
@@ -148,5 +311,5 @@ export function useCategorySuggestions(label: string | null | undefined): Catego
       }
     }
     return out.slice(0, MAX_SUGGESTIONS)
-  }, [boot?.payees, txs, categories, key])
+  }, [boot?.payees, txs, categories, groups, key])
 }

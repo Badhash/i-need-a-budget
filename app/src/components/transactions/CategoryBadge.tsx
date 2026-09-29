@@ -1,23 +1,34 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react'
-import { ArrowLeftRight } from 'lucide-react'
-import { useCategorize } from '@/lib/categorize'
-import { haptic } from '@/lib/haptics'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowLeftRight, Plus } from 'lucide-react'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
-import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import type { TxRow } from '@/components/transactions/txRow'
+import { canCategorize, transferLabel, type TxRow } from '@/components/transactions/txRow'
+import { useTxList } from '@/components/transactions/listContext'
 
-// Notifie la page qu'une categorie vient d'etre choisie a la main sur une
-// ligne (toast « Appliquer aux N autres »). Contexte plutot que prop : la
-// colonne du tableau desktop est definie au niveau module.
-type OnCategorized = (row: TxRow, categoryId: string | null) => void
-export const CategorizedContext = createContext<OnCategorized>(() => {})
+// Etend la zone tactile a 44px sans grossir la pastille (24px a l'oeil).
+const HIT_AREA = "relative after:absolute after:-inset-x-1.5 after:-inset-y-2.5 after:content-['']"
 
-export function CategoryBadge({ row }: { row: TxRow }) {
-  const categorize = useCategorize()
-  const onCategorized = useContext(CategorizedContext)
-  // Micro-interaction (mobile) : la pastille s'anime quand la ligne passe de
-  // « A categoriser » a une categorie. Jamais au montage initial.
+const PILL = 'inline-flex h-6 max-w-full items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium leading-none'
+
+/** Pastille non interactive (virement neutre, compte de suivi). */
+function StaticPill({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <span className={cn(PILL, 'bg-ink/[0.05] text-soft ring-1 ring-inset ring-ink/[0.06] [&_svg]:h-3 [&_svg]:w-3', className)}>
+      {children}
+    </span>
+  )
+}
+
+/**
+ * Categorie d'une ligne : pastille coloree du groupe (ou « À catégoriser »),
+ * qui ouvre le selecteur de categorie. Virement neutre et compte de suivi :
+ * pastille informative, non categorisable. La moitie cote budget d'un
+ * virement vers un compte de suivi (serveur recent) se categorise normalement.
+ */
+export function CategoryBadge({ row, className }: { row: TxRow; className?: string }) {
+  const { categorizeRow } = useTxList()
+  // Micro-interaction : la pastille rebondit quand la ligne passe de « À
+  // categoriser » a une categorie. Jamais au montage initial.
   const prevCategoryId = useRef(row.tx.categoryId)
   const [justCategorized, setJustCategorized] = useState(false)
   useEffect(() => {
@@ -25,32 +36,30 @@ export function CategoryBadge({ row }: { row: TxRow }) {
     prevCategoryId.current = row.tx.categoryId
   }, [row.tx.categoryId])
 
-  if (row.tx.transferGroupId) {
-    return (
-      <Badge variant="neutral">
-        <ArrowLeftRight className="h-3 w-3" />
-        Transfert
-      </Badge>
-    )
+  if (!canCategorize(row)) {
+    if (row.tx.transferGroupId) {
+      return (
+        <StaticPill className={className}>
+          <ArrowLeftRight />
+          <span className="truncate">{transferLabel(row)}</span>
+        </StaticPill>
+      )
+    }
+    // Compte de suivi (hors budget) : ses mouvements ne se categorisent pas, ils
+    // n'entrent ni dans les enveloppes ni dans le Pret a assigner.
+    return <StaticPill className={className}>Hors budget</StaticPill>
   }
-
-  // Compte de suivi (hors budget) : ses mouvements ne se categorisent pas, ils
-  // n'entrent ni dans les enveloppes ni dans le Pret a assigner.
-  if (row.account && !row.account.onBudget) {
-    return <Badge variant="neutral">Hors budget</Badge>
-  }
-
-  // after:-inset-2 : etend la zone tactile sans grossir la pastille
-  const hitArea = "relative after:absolute after:-inset-2 after:content-['']"
 
   const trigger = row.category ? (
     <button
+      type="button"
       key={row.tx.categoryId}
       className={cn(
-        'inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-opacity hover:opacity-75',
-        hitArea,
-        justCategorized &&
-          'max-lg:motion-safe:animate-in max-lg:motion-safe:fade-in max-lg:motion-safe:zoom-in-95 max-lg:motion-safe:duration-200',
+        PILL,
+        HIT_AREA,
+        'shadow-highlight ring-1 ring-inset ring-ink/[0.05] transition-[filter,transform] duration-150 ease-spring hover:brightness-95 active:scale-95 dark:hover:brightness-110',
+        justCategorized && 'motion-safe:animate-pop',
+        className,
       )}
       style={{
         backgroundColor: row.group ? `var(--cat-${row.group.color}-bg)` : undefined,
@@ -58,16 +67,24 @@ export function CategoryBadge({ row }: { row: TxRow }) {
       }}
       aria-label={`Changer la catégorie (${row.category.name})`}
     >
+      <span
+        aria-hidden
+        className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-80"
+      />
       <span className="truncate">{row.category.name}</span>
     </button>
   ) : (
     <button
+      type="button"
       className={cn(
-        'inline-flex items-center gap-1 rounded-full bg-warning/10 px-2.5 py-0.5 text-[12px] font-semibold text-warning transition-opacity hover:opacity-75',
-        hitArea,
+        PILL,
+        HIT_AREA,
+        'bg-warning/10 font-semibold text-warning ring-1 ring-inset ring-warning/25 transition-[background-color,transform] duration-150 ease-spring hover:bg-warning/15 active:scale-95',
+        className,
       )}
       aria-label="Choisir une catégorie"
     >
+      <Plus className="h-3 w-3 shrink-0" strokeWidth={2.6} />
       À catégoriser
     </button>
   )
@@ -76,11 +93,8 @@ export function CategoryBadge({ row }: { row: TxRow }) {
     <CategoryPicker
       includeIncome={row.tx.amount > 0}
       label={row.tx.label}
-      onSelect={(categoryId) => {
-        haptic(10)
-        categorize.mutate({ txId: row.tx.id, categoryId })
-        onCategorized(row, categoryId)
-      }}
+      value={row.tx.categoryId}
+      onSelect={(categoryId) => categorizeRow(row, categoryId)}
     >
       {trigger}
     </CategoryPicker>

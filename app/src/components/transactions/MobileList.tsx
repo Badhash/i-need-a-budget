@@ -1,92 +1,127 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
-import { haptic } from '@/lib/haptics'
 import { useLongPress } from '@/hooks/useLongPress'
-import { fmtDayLong } from '@/lib/format'
-import { TxKindChip } from '@/components/transactions/TxKindChip'
-import { SelectionBar } from '@/components/transactions/SelectionBar'
-import { useCategorizeMany } from '@/components/transactions/useCategorizeMany'
-import { Amount } from '@/components/shared/Amount'
-import { GroupPill } from '@/components/shared/GroupPill'
+import { isFreshlyAdded } from '@/lib/transactions'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { type TxRow, MOBILE_CHUNK } from '@/components/transactions/txRow'
-import { RowMenu } from '@/components/transactions/RowMenu'
+import { canSelect, detailLine, MOBILE_CHUNK, type TxRow } from '@/components/transactions/txRow'
 import { CategoryBadge } from '@/components/transactions/CategoryBadge'
-import { AccountChip } from '@/components/transactions/AccountChip'
+import { AccountLabel } from '@/components/transactions/AccountChip'
+import { DayTitle, TxAmount, TxBubble } from '@/components/transactions/rowParts'
+import { useTxList } from '@/components/transactions/listContext'
+
+/** Mise en lumiere breve d'une ligne tout juste ajoutee (fond accent qui s'efface). */
+function useFlash(id: string): boolean {
+  const [flash, setFlash] = useState(() => isFreshlyAdded(id))
+  useEffect(() => {
+    if (!flash) return
+    const timer = window.setTimeout(() => setFlash(false), 900)
+    return () => window.clearTimeout(timer)
+  }, [flash])
+  return flash
+}
 
 interface MobileRowProps {
   row: TxRow
   selectMode: boolean
   selected: boolean
-  onLongPress: () => void
-  onToggle: () => void
+  onLongPress: (row: TxRow) => void
+  onToggle: (row: TxRow) => void
 }
 
-// Ligne mobile : appui long = entree en mode selection, tap en mode selection
-// = bascule. Les controles internes (pastille, menu) sont neutralises en mode
-// selection pour que le tap n'ouvre rien d'autre.
-function MobileRow({ row, selectMode, selected, onLongPress, onToggle }: MobileRowProps) {
-  const { handlers, firedRecently } = useLongPress(onLongPress)
+// Ligne mobile : tap = detail ; appui long = entree en mode selection ; en mode
+// selection, tout tap bascule la ligne (pastille et detail neutralises).
+const MobileRow = memo(function MobileRow({ row, selectMode, selected, onLongPress, onToggle }: MobileRowProps) {
+  const { openDetail, singleAccount } = useTxList()
+  const { handlers, firedRecently } = useLongPress(() => onLongPress(row))
+  const flash = useFlash(row.tx.id)
+  const detail = detailLine(row)
+  const selectable = canSelect(row)
+
   return (
     <div
       {...handlers}
+      role="button"
+      tabIndex={0}
       onClickCapture={(e) => {
-        // Le clic qui suit un appui long ne doit rien declencher (ni le picker,
-        // ni le menu) ; en mode selection, tout tap bascule la ligne.
+        // Le clic qui suit un appui long ne doit rien declencher ; en mode
+        // selection, tout tap bascule la ligne.
         if (firedRecently() || selectMode) {
           e.stopPropagation()
           e.preventDefault()
-          if (selectMode && !firedRecently()) onToggle()
+          if (selectMode && !firedRecently()) onToggle(row)
         }
       }}
+      onClick={() => openDetail(row)}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        if (selectMode) onToggle(row)
+        else openDetail(row)
+      }}
       aria-selected={selectMode ? selected : undefined}
+      aria-label={`${row.name}, voir le détail`}
       className={cn(
-        'flex min-h-[60px] select-none items-center gap-3 px-4 py-3 transition-colors',
-        selectMode && 'cursor-pointer',
-        selected && 'bg-accent/[0.06] ring-2 ring-inset ring-accent/60',
+        'relative flex min-h-[68px] cursor-pointer select-none items-center gap-3 px-4 py-3 outline-none transition-[background-color,opacity] duration-500 active:bg-ink/[0.04] focus-visible:bg-ink/[0.04]',
+        flash && 'bg-accent/10',
+        selected && 'bg-accent/[0.07]',
+        selectMode && !selectable && 'opacity-45',
       )}
     >
       {selectMode ? (
         <span
           className={cn(
-            'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
-            selected ? 'border-accent bg-accent text-accentfg' : 'border-line bg-surface text-transparent',
+            'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 transition-[background-color,border-color,transform] duration-200 ease-spring',
+            selected ? 'scale-100 border-accent bg-accent text-accentfg' : 'border-line bg-surface text-transparent',
           )}
           aria-hidden
         >
-          <Check className="h-4 w-4" />
+          <Check className="h-4 w-4" strokeWidth={3} />
         </span>
       ) : (
-        <GroupPill group={row.group ?? undefined} size="md" />
+        <TxBubble row={row} />
       )}
-      <div className={cn('min-w-0 flex-1', selectMode && 'pointer-events-none')}>
-        <p className="truncate font-medium" title={row.tx.label}>
-          {row.parsed.short}
-        </p>
-        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-3">
+          <p className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-tight text-ink" title={row.tx.label}>
+            {row.name}
+          </p>
+          <TxAmount row={row} className="shrink-0 text-[15px]" />
+        </div>
+        {detail && <p className="mt-0.5 truncate text-[12.5px] leading-snug text-soft">{detail}</p>}
+        <div className={cn('mt-1.5 flex min-w-0 items-center gap-2', selectMode && 'pointer-events-none')}>
           <CategoryBadge row={row} />
-          {/* Les transferts gardent leur badge dedie : pas de double chip */}
-          {!row.tx.transferGroupId && <TxKindChip kind={row.parsed.kind} />}
-          <AccountChip account={row.account} />
+          {(!singleAccount || row.cross) && (
+            <AccountLabel
+              account={row.account}
+              peer={row.cross ? row.peerAccount : null}
+              outgoing={row.tx.amount < 0}
+              className="min-w-0"
+            />
+          )}
         </div>
       </div>
-      <Amount
-        cents={row.tx.amount}
-        signed={row.tx.amount > 0}
-        className={cn('font-semibold', row.tx.amount > 0 && 'text-success')}
-      />
-      <RowMenu row={row} className={cn('-mr-1', selectMode && 'pointer-events-none opacity-0')} />
+      {selected && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-accent" />}
     </div>
   )
+})
+
+interface MobileListProps {
+  rows: TxRow[]
+  /** Change quand les filtres changent : retour a la premiere tranche. */
+  resetKey: string
+  selected: ReadonlySet<string>
+  onLongPress: (row: TxRow) => void
+  onToggle: (row: TxRow) => void
 }
 
 /**
- * Liste mobile : rendu progressif (scroll infini par tranches de 50, sentinelle
- * IntersectionObserver) et selection multiple par appui long.
+ * Liste mobile : jours en tetes collantes (sous le header) avec leur total,
+ * rendu progressif (tranches de 50, sentinelle IntersectionObserver) et
+ * selection multiple par appui long.
  */
-export function MobileList({ rows, resetKey }: { rows: TxRow[]; resetKey: string }) {
+export function MobileList({ rows, resetKey, selected, onLongPress, onToggle }: MobileListProps) {
   const [visibleCount, setVisibleCount] = useState(MOBILE_CHUNK)
   useEffect(() => {
     setVisibleCount(MOBILE_CHUNK)
@@ -102,116 +137,56 @@ export function MobileList({ rows, resetKey }: { rows: TxRow[]; resetKey: string
           setVisibleCount((n) => Math.min(rows.length, n + MOBILE_CHUNK))
         }
       },
-      { rootMargin: '400px 0px' },
+      { rootMargin: '600px 0px' },
     )
     io.observe(el)
     return () => io.disconnect()
   }, [hasMore, rows.length])
 
-  const visibleRows = useMemo(() => rows.slice(0, visibleCount), [rows, visibleCount])
-
-  const byDay = useMemo(() => {
-    const map = new Map<string, TxRow[]>()
-    for (const row of visibleRows) {
-      const list = map.get(row.tx.date) ?? []
-      list.push(row)
-      map.set(row.tx.date, list)
+  // Jours dans l'ordre des lignes (deja triees) ; total de chaque jour sur
+  // toutes ses lignes, meme celles pas encore rendues.
+  const days = useMemo(() => {
+    const totals = new Map<string, number>()
+    for (const r of rows) totals.set(r.tx.date, (totals.get(r.tx.date) ?? 0) + r.tx.amount)
+    const out: { date: string; total: number; rows: TxRow[] }[] = []
+    for (const row of rows.slice(0, visibleCount)) {
+      const last = out[out.length - 1]
+      if (last && last.date === row.tx.date) last.rows.push(row)
+      else out.push({ date: row.tx.date, total: totals.get(row.tx.date) ?? 0, rows: [row] })
     }
-    return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1))
-  }, [visibleRows])
+    return out
+  }, [rows, visibleCount])
 
-  // Mode selection : seules les lignes categorisables sont selectionnables
-  // (comptes budget, hors transfert).
-  const [selected, setSelected] = useState<Set<string> | null>(null)
-  const selectMode = selected !== null
-  const categorizeMany = useCategorizeMany()
-  const canSelect = (row: TxRow) => !row.tx.transferGroupId && row.account.onBudget
-
-  const exitSelect = useCallback(() => setSelected(null), [])
-  useEffect(() => {
-    if (!selectMode) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') exitSelect()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [selectMode, exitSelect])
-  // Les filtres changent : on sort du mode selection (les ids pourraient
-  // ne plus etre visibles).
-  useEffect(() => {
-    setSelected(null)
-  }, [resetKey])
-
-  const enterSelect = (row: TxRow) => {
-    if (!canSelect(row)) return
-    haptic(15)
-    setSelected((prev) => {
-      const next = new Set(prev ?? [])
-      next.add(row.tx.id)
-      return next
-    })
-  }
-  const toggle = (row: TxRow) => {
-    if (!canSelect(row)) return
-    setSelected((prev) => {
-      const next = new Set(prev ?? [])
-      if (next.has(row.tx.id)) next.delete(row.tx.id)
-      else next.add(row.tx.id)
-      return next
-    })
-  }
-  const firstSelectedLabel = useMemo(() => {
-    if (!selected || selected.size === 0) return undefined
-    const first = rows.find((r) => selected.has(r.tx.id))
-    return first?.tx.label ?? ''
-  }, [selected, rows])
-
-  const applyToSelection = (categoryId: string | null) => {
-    if (!selected || selected.size === 0) return
-    haptic([10, 30, 10])
-    categorizeMany.mutate({ txIds: [...selected], categoryId })
-    exitSelect()
-  }
+  const selectMode = selected.size > 0
 
   return (
-    <div className="space-y-5 lg:hidden">
-      {byDay.map(([date, dayRows]) => (
-        <div key={date}>
-          <div className="mb-2 flex items-baseline justify-between px-1">
-            <p className="text-[13px] font-semibold text-soft">{fmtDayLong(date)}</p>
-            <Amount
-              cents={dayRows.reduce((s, r) => s + r.tx.amount, 0)}
-              className="text-[12px] font-medium text-soft"
-            />
-          </div>
-          <Card className="divide-y divide-line/60 overflow-hidden">
-            {dayRows.map((row) => (
+    <div className="stagger space-y-1 lg:hidden">
+      {days.map((day) => (
+        <section key={day.date} aria-label={day.date}>
+          <DayTitle
+            date={day.date}
+            total={day.total}
+            className="sticky top-[calc(3.5rem+env(safe-area-inset-top))] z-10 -mx-4 bg-bg px-5 pb-2 pt-3"
+          />
+          <Card className="divide-y divide-edge overflow-hidden">
+            {day.rows.map((row) => (
               <MobileRow
-                key={row.tx.id}
+                key={row.key}
                 row={row}
                 selectMode={selectMode}
-                selected={selected?.has(row.tx.id) ?? false}
-                onLongPress={() => enterSelect(row)}
-                onToggle={() => toggle(row)}
+                selected={selected.has(row.tx.id)}
+                onLongPress={onLongPress}
+                onToggle={onToggle}
               />
             ))}
           </Card>
-        </div>
+        </section>
       ))}
       {hasMore && (
-        <div ref={sentinelRef} className="space-y-3 px-1 py-2" aria-hidden>
+        <div ref={sentinelRef} className="space-y-3 px-1 py-3" aria-hidden>
           <Skeleton className="h-4 w-2/3" />
           <Skeleton className="h-4 w-1/2" />
         </div>
-      )}
-      {selectMode && (
-        <SelectionBar
-          count={selected.size}
-          label={firstSelectedLabel}
-          includeIncome={rows.some((r) => selected.has(r.tx.id) && r.tx.amount > 0)}
-          onCategorize={applyToSelection}
-          onCancel={exitSelect}
-        />
       )}
     </div>
   )
