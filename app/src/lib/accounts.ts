@@ -11,7 +11,13 @@
 // en vol) ; le toast d'erreur global propose de reessayer. Apres succes, seule
 // la relecture ciblee et coalescee du budget (scheduleBudgetRefetch) part.
 
-import { useMutation, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQueryClient,
+  type QueryClient,
+  type QueryKey,
+  type UseMutationOptions,
+} from '@tanstack/react-query'
 import { apiCall } from '@/lib/api'
 import type { BudgetMonth } from '@/lib/budget'
 import {
@@ -29,6 +35,7 @@ import {
   type Bootstrap,
 } from '@/lib/data'
 import { scheduleBudgetRefetch } from '@/lib/categorize'
+import { toast } from '@/lib/toast'
 import { enqueue, newTempId, registerRealId, resolveId } from '@/lib/mutationQueue'
 import { addMonths, currentMonth, monthOf, today } from '@/lib/format'
 import type { AccountKind, Category, Transaction } from '@/types/domain'
@@ -456,11 +463,33 @@ export interface AdjustBalanceVars {
   categoryId: string | null
   date: string
   tempId: string
+  /**
+   * « Ajuster à 0 et clôturer » (accountFlags) : la cloture part dans la MEME
+   * tache de la file, juste apres l'ajustement que le serveur doit avoir vu
+   * (garde du solde nul). Ordre garanti, et « Réessayer » rejoue les deux.
+   */
+  closeAfter?: boolean
 }
 
 interface AdjustContext extends WriteContext {
   rta?: Map<string, number>
   counted?: boolean
+  closed?: boolean
+}
+
+/**
+ * Identifiant du toast « compte clôturé » d'un ajustement a 0 : en cas de
+ * refus de la cloture, le toast d'echec le REMPLACE (pas deux messages
+ * contradictoires).
+ */
+export function closedToastId(accountId: string): string {
+  return `account-closed:${accountId}`
+}
+
+interface AdjustResult {
+  id: string
+  /** Ajustement enregistre mais cloture refusee (on garde l'ajustement). */
+  closeFailed: boolean
 }
 
 /**
@@ -486,7 +515,9 @@ export function buildAdjustment(queryClient: QueryClient, accountId: string, tar
  */
 export function useAdjustBalance() {
   const queryClient = useQueryClient()
-  return useMutation<{ id: string }, Error, AdjustBalanceVars, AdjustContext>({
+  const willClose = (vars: AdjustBalanceVars) =>
+    vars.closeAfter === true && hasServerFeature(queryClient, 'accountFlags')
+  return useMutation<AdjustResult, Error, AdjustBalanceVars, AdjustContext>({
     mutationFn: (vars) =>
       enqueue(
         async () => {
@@ -498,7 +529,17 @@ export function useAdjustBalance() {
             amount: vars.delta,
           })
           registerRealId(vars.tempId, res.id)
-          return res
+          let closeFailed = false
+          if (willClose(vars)) {
+            // L'ajustement est acquis : un refus de la cloture ne doit pas le
+            // faire rejouer (doublon). Il est signale a part, sans rollback.
+            try {
+              await apiPatchAccount({ accountId: resolveId(vars.accountId), closed: true })
+            } catch {
+              closeFailed = true
+            }
+          }
+          return { id: res.id, closeFailed }
         },
         { deps: vars.categoryId ? [vars.accountId, vars.categoryId] : [vars.accountId] },
       ),
@@ -522,17 +563,32 @@ export function useAdjustBalance() {
       // Compte budget sans categorie de revenus : l'ecart reste a categoriser.
       const counted = countsAsUncategorized(queryClient, { ...vars, transferGroupId: null })
       if (counted) patchUncategorizedCount(queryClient, 1)
-      return { interrupted, rta, counted }
+      const closed = willClose(vars) && account !== undefined && account.closed !== true
+      if (closed) patchAccountFields(queryClient, [vars.accountId], { closed: true })
+      return { interrupted, rta, counted, closed }
     },
-    onSuccess: (res, vars) => {
+    onSuccess: (res, vars, ctx) => {
       mapTransactions(queryClient, (t) => (t.id === vars.tempId ? { ...t, id: res.id } : t))
       scheduleBudgetRefetch(queryClient)
+      if (res.closeFailed && ctx?.closed) {
+        const accountId = currentId(vars.accountId)
+        patchAccountFields(queryClient, [vars.accountId, accountId], { closed: false })
+        toast({
+          id: closedToastId(vars.accountId),
+          message: 'Clôture non enregistrée',
+          description: 'Le solde est bien ajusté à 0 ; seule la clôture a échoué.',
+          tone: 'danger',
+          duration: 8000,
+          action: { label: 'Réessayer', onClick: () => runAccountFlags(queryClient, { accountId, closed: true }) },
+        })
+      }
     },
     onError: (_err, vars, ctx) => {
       removeTransactions(queryClient, (t) => t.id !== vars.tempId)
       patchAccountBalances(queryClient, [{ accountId: currentId(vars.accountId), delta: -vars.delta }])
       unpatchBudgetRta(queryClient, ctx?.rta)
       if (ctx?.counted) patchUncategorizedCount(queryClient, -1)
+      if (ctx?.closed) patchAccountFields(queryClient, [vars.accountId, currentId(vars.accountId)], { closed: false })
     },
     onSettled: (_d, _e, _v, ctx) => resumeInterrupted(queryClient, ctx?.interrupted),
   })
@@ -845,12 +901,6 @@ export interface AccountFlagsVars {
   accountId: string
   onBudget?: boolean
   closed?: boolean
-  /**
-   * Ecriture a laisser passer d'abord (« Ajuster à 0 et clôturer ») : la
-   * cloture n'entre dans la file qu'apres l'ajustement, que le serveur doit
-   * avoir vu (garde du solde nul). Son echec annule aussi la cloture.
-   */
-  after?: Promise<unknown>
 }
 
 interface FlagsContext extends WriteContext {
@@ -866,13 +916,13 @@ interface FlagsContext extends WriteContext {
  * bascule touche tout le budget. Reservee aux serveurs qui annoncent
  * accountFlags (les appelants masquent les controles sinon).
  */
-export function useSetAccountFlags() {
-  const queryClient = useQueryClient()
-  return useMutation<void, Error, AccountFlagsVars, FlagsContext>({
+function flagsMutationOptions(
+  queryClient: QueryClient,
+): UseMutationOptions<void, Error, AccountFlagsVars, FlagsContext> {
+  return {
     mutationFn: async (vars) => {
       // Garde : un serveur ancien ignorerait silencieusement ces champs.
       if (!hasServerFeature(queryClient, 'accountFlags')) throw new Error('fonctionnalite accountFlags indisponible')
-      if (vars.after) await vars.after
       return enqueue(
         () => apiPatchAccount({ accountId: resolveId(vars.accountId), onBudget: vars.onBudget, closed: vars.closed }),
         { deps: [vars.accountId] },
@@ -910,5 +960,22 @@ export function useSetAccountFlags() {
       if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
     },
     onSettled: (_d, _e, _v, ctx) => resumeInterrupted(queryClient, ctx?.interrupted),
-  })
+  }
+}
+
+export function useSetAccountFlags() {
+  const queryClient = useQueryClient()
+  return useMutation(flagsMutationOptions(queryClient))
+}
+
+/**
+ * Meme mutation, lancee hors composant (action d'un toast) : elle passe par
+ * le MutationCache comme les autres (retours d'erreur, reprise hors ligne).
+ */
+function runAccountFlags(queryClient: QueryClient, vars: AccountFlagsVars): void {
+  void queryClient
+    .getMutationCache()
+    .build(queryClient, flagsMutationOptions(queryClient))
+    .execute(vars)
+    .catch(() => undefined)
 }

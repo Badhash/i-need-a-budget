@@ -25,6 +25,7 @@ import {
 import {
   ADJUSTMENT_LABEL,
   buildAdjustment,
+  closedToastId,
   inclusionEffectFromCaches,
   latestAccountId,
   openingIncomeCategory,
@@ -507,18 +508,15 @@ function AdjustView({
   onCancel,
   onDone,
   presetZero = false,
-  thenClose,
+  closeAfter = false,
 }: {
   account: AccountWithBalance
   onBack?: () => void
   onCancel: () => void
   onDone: () => void
   presetZero?: boolean
-  /**
-   * Cloture enchainee (« Ajuster à 0 et clôturer ») : recoit l'ecart et la
-   * promesse de l'ajustement, que la cloture attend avant de partir.
-   */
-  thenClose?: (delta: number, adjusted: Promise<unknown>) => void
+  /** « Ajuster à 0 et clôturer » : la cloture suit l'ajustement (meme tache). */
+  closeAfter?: boolean
 }) {
   const queryClient = useQueryClient()
   const categories = useCategoriesList()
@@ -541,27 +539,25 @@ function AdjustView({
       return
     }
     haptic(10)
-    if (thenClose) {
-      const adjusted = adjust.mutateAsync(vars)
-      // L'echec est gere par les rollbacks (et le toast global) : pas de rejet orphelin.
-      adjusted.catch(() => undefined)
-      thenClose(vars.delta, adjusted)
-      onDone()
-      return
-    }
-    adjust.mutate(vars)
+    adjust.mutate({ ...vars, closeAfter })
     const amount = fmtEUR(Math.abs(vars.delta))
-    toast({
-      message: 'Solde ajusté',
-      description: !account.onBudget
-        ? 'Compte de suivi : écart enregistré hors budget.'
-        : !vars.categoryId
-          ? 'Écart enregistré, à catégoriser.'
-          : vars.delta > 0
-            ? `${amount} ajoutés au Prêt à assigner.`
-            : `${amount} retirés du Prêt à assigner.`,
-      tone: 'success',
-    })
+    const effect = !account.onBudget
+      ? 'écart enregistré hors budget (compte de suivi).'
+      : !vars.categoryId
+        ? 'écart enregistré, à catégoriser.'
+        : vars.delta > 0
+          ? `${amount} ajoutés au Prêt à assigner.`
+          : `${amount} retirés du Prêt à assigner.`
+    toast(
+      closeAfter
+        ? {
+            id: closedToastId(account.id),
+            message: `${quoted(account.name)} clôturé`,
+            description: `Solde ajusté à 0 : ${effect}`,
+            tone: 'success',
+          }
+        : { message: 'Solde ajusté', description: effect.charAt(0).toUpperCase() + effect.slice(1), tone: 'success' },
+    )
     onDone()
   }
 
@@ -639,7 +635,7 @@ function AdjustView({
           {onBack ? 'Retour' : 'Annuler'}
         </Button>
         <Button onClick={submit} disabled={target === null || delta === 0}>
-          {thenClose ? 'Ajuster et clôturer' : 'Ajuster le solde'}
+          {closeAfter ? 'Ajuster et clôturer' : 'Ajuster le solde'}
         </Button>
       </DialogFooter>
     </>
@@ -824,17 +820,11 @@ function CloseView({
   const [adjusting, setAdjusting] = useState(false)
   const income = account.onBudget ? openingIncomeCategory(categories) : undefined
 
-  const closeNow = (delta = 0, after?: Promise<unknown>) => {
-    setFlags.mutate({ accountId: account.id, closed: true, after })
-    const amount = fmtEUR(Math.abs(delta))
+  const closeNow = () => {
+    setFlags.mutate({ accountId: account.id, closed: true })
     toast({
       message: `${quoted(account.name)} clôturé`,
-      description:
-        delta === 0
-          ? 'Rangé dans les comptes clôturés.'
-          : income
-            ? `Solde ajusté à 0 : ${amount} ${delta < 0 ? 'retirés du' : 'ajoutés au'} Prêt à assigner.`
-            : 'Solde ajusté à 0, compte rangé dans les comptes clôturés.',
+      description: 'Rangé dans les comptes clôturés.',
       tone: 'success',
     })
   }
@@ -879,7 +869,7 @@ function CloseView({
         onBack={() => setAdjusting(false)}
         onCancel={() => setAdjusting(false)}
         onDone={onDone}
-        thenClose={closeNow}
+        closeAfter
       />
     )
   }
