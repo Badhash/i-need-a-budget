@@ -10,6 +10,7 @@ import {
   Palette,
   Settings,
   Sun,
+  TriangleAlert,
 } from 'lucide-react'
 import { PAGE_TITLES } from '@/components/layout/nav'
 import { BrandMark } from '@/components/layout/BrandMark'
@@ -20,6 +21,8 @@ import { useAuthStore } from '@/stores/auth'
 import { supabase } from '@/lib/supabase'
 import { addMonths, currentMonth, fmtEUR, fmtMonthTitle, maxMonth, MIN_MONTH } from '@/lib/format'
 import { useBootstrap, useBudgetMonth } from '@/lib/data'
+import { overspendingOf } from '@/lib/budget'
+import { Amount } from '@/components/shared/Amount'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -255,49 +258,92 @@ function MobileAccountMenu() {
 
 /**
  * Resume compact du budget dans le header (DESKTOP uniquement, route /budget) :
- * remplace le gros RtaBanner masque en lg. Met en avant le Pret a assigner
- * (corail/rouge si negatif, vert sinon) et rappelle Assigne / Depense / Disponible
- * du mois. Reutilise la meme query useBudgetMonth(month) que la page Budget.
+ * remplace le heros du Pret a assigner (mobile). Met en avant le Pret a
+ * assigner (vert, coche quand chaque euro a un role, rouge si negatif), signale
+ * les depassements du mois (nombre et manque, en rouge) et rappelle Assigne /
+ * Depense / Disponible sur grand ecran. Reutilise la meme query
+ * useBudgetMonth(month) que la page Budget (aucune lecture supplementaire).
  */
 function HeaderBudgetSummary() {
   const month = useUiStore((s) => s.month)
   const { data: budget } = useBudgetMonth(month)
   if (!budget) return null
   const negative = budget.rta < 0
+  // Enveloppes masquees comprises : c'est de l'argent reel qui manque.
+  const over = overspendingOf(budget.groups.flatMap((g) => g.rows))
+  const balanced = budget.rta === 0 && over.count === 0
+  const rtaColor = negative ? 'text-danger' : 'text-success'
+  const overTitle = `${over.count === 1 ? '1 enveloppe' : `${over.count} enveloppes`} en dépassement : ${fmtEUR(over.missing)} à couvrir, sinon retirés du Prêt à assigner le mois prochain.`
+  const rtaTitle = negative
+    ? 'Vous avez assigné plus que vos revenus disponibles.'
+    : balanced
+      ? 'Chaque euro a un rôle.'
+      : undefined
 
   return (
-    <div className="hidden items-center gap-5 lg:flex">
+    <div className="hidden min-w-0 items-center gap-2.5 lg:flex xl:gap-3">
+      {/* 1024-1279px : bloc compact sur deux lignes (la place manque a cote
+          du selecteur de mois). */}
+      <div className="flex min-w-0 flex-col justify-center gap-0.5 xl:hidden" title={rtaTitle}>
+        <span className="flex items-baseline gap-2 whitespace-nowrap">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-soft">Prêt à assigner</span>
+          {balanced && <Check className="h-3.5 w-3.5 self-center text-success" strokeWidth={3} />}
+          <Amount cents={budget.rta} animate className={cn('text-[15px] font-semibold leading-none', rtaColor)} />
+        </span>
+        {over.count > 0 && (
+          <span
+            className="flex items-center gap-1 whitespace-nowrap text-[12px] font-semibold leading-none text-danger tnum"
+            title={overTitle}
+          >
+            <TriangleAlert className="h-3 w-3 shrink-0" strokeWidth={2.4} />
+            {over.count} en dépassement · {fmtEUR(over.missing)}
+          </span>
+        )}
+      </div>
+
+      {/* 1280px et plus : pastilles. */}
       <div
         className={cn(
-          'flex items-center gap-2.5 rounded-full py-1.5 pl-3.5 pr-4 ring-1 ring-inset',
+          'hidden shrink-0 items-center gap-2.5 rounded-full py-1.5 pl-3.5 pr-4 ring-1 ring-inset xl:flex',
           negative ? 'bg-danger/10 ring-danger/20' : 'bg-success/10 ring-success/20',
         )}
-        title={negative ? 'Vous avez assigné plus que vos revenus disponibles.' : undefined}
+        title={rtaTitle}
       >
-        <span className="text-[11.5px] font-medium uppercase tracking-[0.08em] text-soft">Prêt à assigner</span>
-        <span
-          className={cn(
-            'text-[15px] font-semibold tnum leading-none',
-            negative ? 'text-danger' : 'text-success',
-          )}
-        >
-          {fmtEUR(budget.rta)}
+        <span className="whitespace-nowrap text-[11.5px] font-medium uppercase tracking-[0.08em] text-soft">
+          Prêt à assigner
         </span>
+        {balanced && <Check className="-mr-1 h-3.5 w-3.5 animate-scale-in text-success" strokeWidth={3} />}
+        <Amount cents={budget.rta} animate className={cn('text-[15px] font-semibold leading-none', rtaColor)} />
       </div>
-      <dl className="hidden items-center gap-5 xl:flex">
-        <div className="flex flex-col leading-tight">
-          <dt className="label-caps text-[11px]">Assigné</dt>
-          <dd className="tnum text-[13.5px] font-medium text-ink">{fmtEUR(budget.totals.assigned)}</dd>
+      {over.count > 0 && (
+        <div
+          className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-danger/10 py-1.5 pl-2.5 pr-3.5 text-danger ring-1 ring-inset ring-danger/20 xl:flex"
+          title={overTitle}
+        >
+          <TriangleAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={2.4} />
+          <span className="text-[13px] font-semibold leading-none tnum">
+            {over.count} en dépassement
+            <span className="font-medium"> · {fmtEUR(over.missing)}</span>
+          </span>
         </div>
-        <div className="flex flex-col leading-tight">
-          <dt className="label-caps text-[11px]">Dépensé</dt>
-          <dd className="tnum text-[13.5px] font-medium text-ink">{fmtEUR(-budget.totals.activity)}</dd>
-        </div>
-        <div className="flex flex-col leading-tight">
-          <dt className="label-caps text-[11px]">Disponible</dt>
-          <dd className="tnum text-[13.5px] font-medium text-ink">{fmtEUR(budget.totals.available)}</dd>
-        </div>
-      </dl>
+      )}
+      {/* Rappel du mois sur tres grand ecran, quand rien d'autre ne reclame la place. */}
+      {over.count === 0 && (
+        <dl className="ml-2 hidden items-center gap-5 2xl:flex">
+          <div className="flex flex-col leading-tight">
+            <dt className="label-caps text-[11px]">Assigné</dt>
+            <dd className="tnum text-[13.5px] font-medium text-ink">{fmtEUR(budget.totals.assigned)}</dd>
+          </div>
+          <div className="flex flex-col leading-tight">
+            <dt className="label-caps text-[11px]">Dépensé</dt>
+            <dd className="tnum text-[13.5px] font-medium text-ink">{fmtEUR(-budget.totals.activity)}</dd>
+          </div>
+          <div className="flex flex-col leading-tight">
+            <dt className="label-caps text-[11px]">Disponible</dt>
+            <dd className="tnum text-[13.5px] font-medium text-ink">{fmtEUR(budget.totals.available)}</dd>
+          </div>
+        </dl>
+      )}
     </div>
   )
 }

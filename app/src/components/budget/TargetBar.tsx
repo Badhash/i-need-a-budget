@@ -1,6 +1,8 @@
 import { Check } from 'lucide-react'
-import type { Target } from '@/lib/targets'
+import { neededThisMonth, targetProgress, type Target } from '@/lib/targets'
 import { fmtEUR, fmtMonthLong } from '@/lib/format'
+import { useUiStore } from '@/stores/ui'
+import { ProgressBar, type ProgressTone } from '@/components/shared/ProgressBar'
 import { cn } from '@/lib/utils'
 
 interface TargetBarProps {
@@ -11,57 +13,64 @@ interface TargetBarProps {
   available: number
   /** Couleur pastel du groupe (cle des tokens --cat-<color>-fg). */
   color: string
+  /** Mois affiche (defaut : celui du selecteur de mois). */
+  month?: string
+}
+
+/** Libelle de progression d'un objectif (a gauche de la jauge). */
+function progressLabel(target: Target, funded: number, reached: boolean): string {
+  const safe = Math.max(funded, 0)
+  switch (target.type) {
+    case 'monthly':
+      return reached ? `Financé · ${fmtEUR(target.amount)}/mois` : `${fmtEUR(safe)} sur ${fmtEUR(target.amount)}/mois`
+    case 'refill':
+      return reached ? `Enveloppe pleine · ${fmtEUR(target.amount)}` : `Recharge : ${fmtEUR(safe)} sur ${fmtEUR(target.amount)}`
+    default:
+      if (reached) return `Objectif atteint · ${fmtEUR(target.amount)}`
+      return `${fmtEUR(safe)} sur ${fmtEUR(target.amount)}${target.dueMonth ? ` d'ici ${fmtMonthLong(target.dueMonth)}` : ''}`
+  }
 }
 
 /**
- * Barre de progression "finance" affichee sous une categorie qui porte un
- * objectif. Objectif mensuel : progression = assigne / montant. Objectif pour
- * une date : progression = disponible cumule / montant (epargne accumulee).
+ * Jauge d'objectif affichee sous une enveloppe (liste mobile et grille
+ * desktop). Progression : assigne du mois (mensuel), disponible cumule
+ * (echeance, recharge). Ton : vert quand le mois est finance, ambre tant
+ * qu'il manque de l'argent ce mois-ci (montant rappele a droite), rouge si
+ * l'enveloppe est dans le rouge.
  */
-export function TargetBar({ target, assigned, available }: TargetBarProps) {
-  const funded = target.type === 'monthly' ? assigned : available
-  const safeFunded = Math.max(funded, 0)
-  const ratio = target.amount > 0 ? Math.min(safeFunded / target.amount, 1) : 0
-  const done = target.amount > 0 && funded >= target.amount
-
-  const suffix =
-    target.type === 'monthly'
-      ? '/mois'
-      : target.dueMonth
-        ? ` d'ici ${fmtMonthLong(target.dueMonth)}`
-        : ''
-  const label = done
-    ? 'Objectif atteint'
-    : `${fmtEUR(safeFunded)} sur ${fmtEUR(target.amount)}${suffix}`
+export function TargetBar({ target, assigned, available, month }: TargetBarProps) {
+  const uiMonth = useUiStore((s) => s.month)
+  const m = month ?? uiMonth
+  const { funded, ratio, reached } = targetProgress(target, assigned, available)
+  const needed = neededThisMonth(target, m, assigned, available)
+  const tone: ProgressTone = available < 0 ? 'danger' : needed > 0 ? 'warning' : 'success'
 
   return (
-    // Pleine largeur, toujours affichee, sur mobile ET desktop (pas de plafond
-    // de largeur). Couleurs de l'accent du THEME (piste = accent attenue) pour
-    // rester coherent quel que soit le groupe ; vert quand l'objectif est
-    // atteint.
     <div className="mt-2 w-full">
-      <div
-        className="h-2 w-full overflow-hidden rounded-full lg:h-1.5"
-        style={{
-          backgroundColor: done ? 'rgb(var(--success) / 0.15)' : 'rgb(var(--accent) / 0.15)',
-        }}
-      >
-        <div
-          className="h-full rounded-full transition-[width] duration-300 ease-out"
-          style={{
-            width: `${Math.max(ratio * 100, safeFunded > 0 ? 3 : 0)}%`,
-            backgroundColor: done ? 'rgb(var(--success))' : 'rgb(var(--accent))',
-          }}
-        />
-      </div>
-      <p className="mt-1 flex items-baseline justify-between gap-2 text-[12px] lg:text-[11.5px]">
-        <span className={cn('flex min-w-0 items-center gap-1', done ? 'text-success' : 'text-soft')}>
-          {done && <Check className="h-3 w-3 shrink-0" />}
-          <span className="truncate tnum">{label}</span>
-        </span>
-        <span className={cn('shrink-0 font-medium tnum', done ? 'text-success' : 'text-soft')}>
-          {Math.round(ratio * 100)} %
-        </span>
+      <ProgressBar
+        value={ratio}
+        tone={tone}
+        size="sm"
+        className="h-2 lg:h-1.5"
+        label={`Objectif : ${Math.round(ratio * 100)} %`}
+      />
+      <p className="mt-1.5 flex items-baseline justify-between gap-2 text-[12px] leading-tight lg:mt-1 lg:text-[11.5px]">
+        <span className="min-w-0 truncate text-soft tnum">{progressLabel(target, funded, reached)}</span>
+        {needed > 0 ? (
+          <span className={cn('shrink-0 font-semibold tnum', tone === 'danger' ? 'text-danger' : 'text-warning')}>
+            Encore {fmtEUR(needed)}
+          </span>
+        ) : (
+          <span
+            className={cn(
+              'flex shrink-0 items-center gap-0.5 font-semibold tnum',
+              tone === 'danger' ? 'text-danger' : 'text-success',
+            )}
+          >
+            {tone !== 'danger' && <Check className="h-3 w-3" strokeWidth={3} />}
+            {Math.round(ratio * 100)} %
+          </span>
+        )}
       </p>
     </div>
   )
