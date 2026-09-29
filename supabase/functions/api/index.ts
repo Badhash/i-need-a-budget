@@ -1140,12 +1140,13 @@ async function actionBootstrap(userId: string) {
 // Reconstitue une entree moteur depuis les rollups agreges : chaque cellule
 // (categorie, mois) devient UNE transaction synthetique (montant = activity) et
 // UNE assignation (montant = assigned), sur un compte on-budget fictif. Le
-// moteur agrege lui-meme par (categorie, mois) et filtre deja transferts,
-// comptes hors budget et categoryId null — perimetre exact des rollups : le
-// resultat est identique au calcul depuis les transactions brutes (rollover,
-// overspending, RTA compris). La ligne OPENING_CATEGORY (solde de depart du
-// « Nouveau budget ») redevient UNE transaction sans categorie datee du mois
-// precedant le depart : le moteur la verse au solde de depart.
+// moteur agrege lui-meme par (categorie, mois) ; les rollups ont deja applique
+// son perimetre (hors-budget, transferts internes et categoryId null exclus,
+// moities croisees comptees, cf. aggRecompute) : le resultat est identique au
+// calcul depuis les transactions brutes (rollover, overspending, RTA compris).
+// La ligne OPENING_CATEGORY (solde de depart du « Nouveau budget ») redevient
+// UNE transaction sans categorie datee du mois precedant le depart : le moteur
+// la verse au solde de depart.
 function rollupsToEngineInput(
   categories: WithId<CategoryPayload>[],
   rollups: { categoryId: string; month: string; activity: number; assigned: number }[],

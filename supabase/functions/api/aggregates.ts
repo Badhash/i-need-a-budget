@@ -21,8 +21,8 @@
 // pas la contrepartie d'une moitie de transfert et la traite comme neutre.
 // Toute ecriture metier dont l'ancien OU le nouveau payload est une moitie
 // croisee n'utilise donc PAS la maintenance incrementale : /api invalide les
-// agregats (aggMarkStale) avant l'ecriture, et seul le recompute complet
-// (groupes de transfert vus en entier) les reconstruit.
+// agregats (aggMarkStale) avant l'ecriture puis a nouveau apres, et seul le
+// recompute complet (groupes de transfert vus en entier) les reconstruit.
 //
 // Nouveau budget (REF M, user_settings.budgetStartMonth) : les transactions
 // on-budget ANTERIEURES au mois de depart ne produisent ni activity ni uncat ;
