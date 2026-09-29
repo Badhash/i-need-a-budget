@@ -10,3 +10,4 @@ coverage/
 
 # Worktrees temporaires des agents et config locale Claude
 .claude/
+*.tsbuildinfo
