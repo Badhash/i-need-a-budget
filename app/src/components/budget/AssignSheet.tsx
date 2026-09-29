@@ -47,37 +47,52 @@ const CHIP =
  * increments et apercu du Disponible et du Pret a assigner resultants.
  * Validation optimiste via onCommit.
  */
-export function AssignSheet({ row, target, month, group, rta, onCommit, onViewActivity, onClose }: AssignSheetProps) {
-  const [draft, setDraft] = useState('')
+export function AssignSheet(props: AssignSheetProps) {
+  // Contenu monte seulement feuille ouverte : les valeurs rapides lisent le
+  // budget du mois precedent, qui ne doit pas etre charge d'office a chaque
+  // mois affiche (egress).
+  if (!props.row) return null
+  return <AssignSheetContent {...props} row={props.row} />
+}
+
+function AssignSheetContent({
+  row,
+  target,
+  month,
+  group,
+  rta,
+  onCommit,
+  onViewActivity,
+  onClose,
+}: AssignSheetProps & { row: BudgetRow }) {
+  const [draft, setDraft] = useState(() => toDraft(row.assigned))
   const inputRef = useRef<HTMLInputElement>(null)
   // iOS : le clavier recouvre les feuilles fixed bottom-0. On remonte la
   // feuille de la hauteur du clavier mesuree via visualViewport.
   const keyboardInset = useSheetKeyboardInset()
   // Valeurs rapides : objectif (part du mois), assigne / depense le mois
-  // dernier, moyenne 3 mois. Hook inconditionnel (ligne nulle -> liste vide).
+  // dernier, moyenne 3 mois.
   const suggestions = useAssignSuggestions(row, month)
 
   // (Re)initialise le brouillon a l'ouverture pour la categorie visee. La
   // ligne est relue du cache a chaque rendu (sa reference change a chaque
   // mise a jour) : seul un changement d'enveloppe reinitialise la saisie.
-  const categoryId = row?.category.id
+  const categoryId = row.category.id
   useEffect(() => {
-    if (row) {
-      setDraft(toDraft(row.assigned))
-      // Focus differe : le dialog doit etre monte avant que le clavier s'ouvre.
-      requestAnimationFrame(() => {
-        const input = inputRef.current
-        input?.focus()
-        try {
-          input?.setSelectionRange(0, input.value.length)
-        } catch {
-          input?.select()
-        }
-      })
-    }
+    setDraft(toDraft(row.assigned))
+    // Focus differe : le dialog doit etre monte avant que le clavier s'ouvre.
+    const frame = requestAnimationFrame(() => {
+      const input = inputRef.current
+      input?.focus()
+      try {
+        input?.setSelectionRange(0, input.value.length)
+      } catch {
+        input?.select()
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+    // La ligne est lue a l'ouverture seulement (voir plus haut).
   }, [categoryId])
-
-  if (!row) return null
 
   const cents = parseEuros(draft)
   const valid = cents !== null
@@ -218,14 +233,14 @@ export function AssignSheet({ row, target, month, group, rta, onCommit, onViewAc
 
           {/* Effet de l'assignation, HORS du bouton colore (le rouge d'un
               disponible negatif serait illisible sur le fond accent). */}
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl bg-line/70 ring-1 ring-inset ring-edge">
-            <div className="bg-surface px-4 py-3">
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl bg-line/60">
+            <div className="bg-surface2/60 px-4 py-3 dark:bg-surface2/80">
               <p className="text-[12px] font-medium text-soft">Disponible après</p>
               <p className={cn('mt-0.5 text-[17px] font-semibold tracking-tight tnum', availableAfter < 0 ? 'text-danger' : 'text-ink')}>
                 {fmtEUR(availableAfter)}
               </p>
             </div>
-            <div className="bg-surface px-4 py-3">
+            <div className="bg-surface2/60 px-4 py-3 dark:bg-surface2/80">
               <p className="text-[12px] font-medium text-soft">Prêt à assigner après</p>
               <p
                 className={cn(

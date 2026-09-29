@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import { fmtEUR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -29,19 +30,34 @@ export function AvailableChip({
   cents,
   underfunded = false,
   size = 'md',
+  pulse = false,
   className,
 }: {
   cents: number
   underfunded?: boolean
   size?: 'sm' | 'md'
+  /** Petit rebond quand le montant change (retour visuel d'une assignation). */
+  pulse?: boolean
   className?: string
 }) {
+  // Compteur de changements : la cle du contenu rejoue l'animation, jamais au
+  // premier rendu (seulement quand la valeur bouge ensuite).
+  const previous = useRef(cents)
+  const [bump, setBump] = useState(0)
+  useEffect(() => {
+    if (!pulse || previous.current === cents) return
+    previous.current = cents
+    setBump((b) => b + 1)
+  }, [cents, pulse])
+
   return (
     <span
+      key={bump}
       className={cn(
-        'inline-flex shrink-0 items-center rounded-full font-semibold tnum ring-1 ring-inset',
+        'inline-flex shrink-0 items-center rounded-full font-semibold tnum ring-1 ring-inset transition-colors',
         size === 'md' ? 'px-2.5 py-1 text-[13.5px]' : 'px-2 py-0.5 text-[12.5px]',
         TONES[availableTone(cents, underfunded)],
+        bump > 0 && 'animate-pop',
         className,
       )}
     >

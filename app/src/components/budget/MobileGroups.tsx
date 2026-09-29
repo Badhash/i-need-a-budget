@@ -89,7 +89,7 @@ function MobileCategoryRow({
     >
       <span className="flex w-full items-center gap-3">
         <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-ink">{row.category.name}</span>
-        <AvailableChip cents={row.available} underfunded={underfunded} />
+        <AvailableChip cents={row.available} underfunded={underfunded} pulse />
       </span>
       {target ? (
         <TargetBar
@@ -200,10 +200,7 @@ export function MobileGroups({ groups, month, targets, onOpenTarget, onViewActiv
               type="button"
               onClick={() => toggleGroup(block.group.id)}
               aria-expanded={!collapsed}
-              className={cn(
-                'flex min-h-[68px] w-full select-none flex-col justify-center px-4 py-3.5 text-left transition-colors duration-150 active:bg-surface2/70',
-                !collapsed && 'border-b border-line/70',
-              )}
+              className="flex min-h-[68px] w-full select-none flex-col justify-center px-4 py-3.5 text-left transition-colors duration-150 active:bg-surface2/70"
             >
               <span className="flex w-full items-center gap-3">
                 <GroupPill group={block.group} size="md" />
@@ -224,15 +221,14 @@ export function MobileGroups({ groups, month, targets, onOpenTarget, onViewActiv
                   </span>
                 </span>
                 <span className="shrink-0 text-right">
+                  {/* Rouge seulement si le total est negatif : un depassement
+                      masque par la somme est signale par la ligne du dessous. */}
                   <Amount
                     cents={block.totals.available}
+                    animate
                     className={cn(
                       'block text-[16px] font-semibold tracking-tight',
-                      block.totals.available < 0 || groupOverspent.count > 0
-                        ? 'text-danger'
-                        : block.totals.available > 0
-                          ? 'text-ink'
-                          : 'text-soft',
+                      block.totals.available < 0 ? 'text-danger' : block.totals.available > 0 ? 'text-ink' : 'text-soft',
                     )}
                   />
                   <span className="block text-[11.5px] text-soft">disponible</span>
@@ -249,21 +245,30 @@ export function MobileGroups({ groups, month, targets, onOpenTarget, onViewActiv
                 <SpentLine ratio={spent} color={block.group.color} over={groupOverspent.count > 0 && block.totals.available < 0} />
               )}
             </button>
-            {!collapsed && (
-              <div className="divide-y divide-line/60">
-                {shownRows.map((row) => (
-                  <MobileCategoryRow
-                    key={row.category.id}
-                    row={row}
-                    block={block}
-                    target={targets.get(row.category.id)}
-                    month={month}
-                    onTap={() => setAssignCtx({ groupId: block.group.id, categoryId: row.category.id })}
-                    onLongPress={() => setActionCtx({ groupId: block.group.id, categoryId: row.category.id })}
-                  />
-                ))}
+            {/* Repli anime (hauteur 0fr <-> 1fr) ; replie, le contenu devient
+                invisible : ni focus clavier ni lecteur d'ecran. */}
+            <div
+              className={cn(
+                'grid transition-[grid-template-rows,visibility] duration-280 ease-spring',
+                collapsed ? 'invisible grid-rows-[0fr]' : 'visible grid-rows-[1fr]',
+              )}
+            >
+              <div className="min-h-0 overflow-hidden">
+                <div className="divide-y divide-line/60 border-t border-line/70">
+                  {shownRows.map((row) => (
+                    <MobileCategoryRow
+                      key={row.category.id}
+                      row={row}
+                      block={block}
+                      target={targets.get(row.category.id)}
+                      month={month}
+                      onTap={() => setAssignCtx({ groupId: block.group.id, categoryId: row.category.id })}
+                      onLongPress={() => setActionCtx({ groupId: block.group.id, categoryId: row.category.id })}
+                    />
+                  ))}
+                </div>
               </div>
-            )}
+            </div>
           </section>
         )
       })}

@@ -126,7 +126,7 @@ export function RtaBanner({ budget, overspent, onCover }: RtaBannerProps) {
 
   return (
     <>
-      <Card variant="hero" tone={AURA[state]} auraIntensity="strong" className="p-5">
+      <Card variant="hero" tone={AURA[state]} auraIntensity="strong" className="animate-fade-up p-5">
         <div className="flex min-h-7 items-center justify-between gap-3">
           <p className="label-caps">Prêt à assigner</p>
           {state === 'balanced' && (
