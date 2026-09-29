@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { CalendarRange, EyeOff, FolderPlus, LifeBuoy, ListFilter } from 'lucide-react'
 import type { Category } from '@/types/domain'
@@ -106,7 +106,7 @@ export function BudgetPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [dialogOpen, undo, redo])
 
-  const targetMap = targets ?? new Map<string, Target>()
+  const targetMap = useMemo(() => targets ?? new Map<string, Target>(), [targets])
 
   // Enveloppes AFFICHEES vs MASQUEES. Une enveloppe masquee (ou toutes celles
   // d'un groupe masque) quitte la grille pour la section « Categories
@@ -194,7 +194,7 @@ export function BudgetPage() {
   // chaque enveloppe negative recoit le manque (nouvel assigne = assigne +
   // manque -> disponible = 0). Le recapitulatif s'ouvre ensuite avec la liste
   // figee de ce qui a ete fait (les lignes ne sont plus « en depassement »).
-  const coverOverspending = useCallback(() => {
+  const coverOverspending = () => {
     const done = overspentRows
     if (done.length === 0) return
     assignBatch.mutate({
@@ -202,7 +202,7 @@ export function BudgetPage() {
       label: COVER_LABEL,
     })
     setCoverDone(done)
-  }, [overspentRows, assignBatch])
+  }
 
   const confirmFunding = () => {
     const plan = fundPlan
@@ -221,7 +221,7 @@ export function BudgetPage() {
     toast({
       id: HISTORY_TOAST,
       tone: 'success',
-      message: plan.length === 1 ? `${plan[0]!.categoryName} financée` : `${plan.length} objectifs financés`,
+      message: plan.length === 1 ? `Objectif financé : ${plan[0]!.categoryName}` : `${plan.length} objectifs financés`,
       description: `${fmtEUR(fundTotal)} assignés`,
       action: { label: 'Annuler', onClick: () => undoLast(FUND_LABEL) },
     })

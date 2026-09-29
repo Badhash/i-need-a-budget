@@ -320,8 +320,16 @@ export function useBudgetUndo(month: string) {
         changes: step.changes.map((c) => ({ categoryId: c.categoryId, amount: direction === 'undo' ? c.prev : c.next })),
         record: false,
       },
-      // Replay echoue : rollback du cache, l'etape n'a pas ete rejouee.
-      { onError: () => dismissToast(HISTORY_TOAST) },
+      {
+        // Replay echoue : le cache revient a l'etat d'avant le replay, l'etape
+        // reprend donc sa place dans l'historique (et le toast disparait).
+        onError: () => {
+          dismissToast(HISTORY_TOAST)
+          const current = useBudgetHistory.getState()
+          if (direction === 'undo' && current.future[0]?.id === step.id) current.redo()
+          if (direction === 'redo' && current.past[current.past.length - 1]?.id === step.id) current.undo()
+        },
+      },
     )
     toast({
       id: HISTORY_TOAST,
