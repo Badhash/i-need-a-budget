@@ -1,3 +1,4 @@
+import { forwardRef, type ButtonHTMLAttributes } from 'react'
 import { fmtEUR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -78,3 +79,72 @@ export function AssignActivityPill({
     </span>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Grille desktop : pastille « Disponible » cliquable (deplacer de l'argent)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ton semantique d'un disponible : danger si negatif (depassement), warning si
+ * un objectif reste sous-finance ce mois-ci, success s'il reste de l'argent,
+ * neutre a zero.
+ */
+export type AvailableTone = 'success' | 'warning' | 'danger' | 'neutral'
+
+export function availableTone(cents: number, underfunded = false): AvailableTone {
+  if (cents < 0) return 'danger'
+  if (underfunded) return 'warning'
+  if (cents > 0) return 'success'
+  return 'neutral'
+}
+
+// Classes statiques (JIT Tailwind) : fond teinte, texte AA, filet interieur,
+// survol un cran plus dense, etat ouvert (popover) souligne par un anneau.
+const TONE_CLASSES: Record<AvailableTone, string> = {
+  success:
+    'bg-success/10 text-success ring-success/20 hover:bg-success/15 hover:ring-success/35 aria-expanded:ring-success/50',
+  warning:
+    'bg-warning/10 text-warning ring-warning/25 hover:bg-warning/15 hover:ring-warning/40 aria-expanded:ring-warning/55',
+  danger: 'bg-danger/10 text-danger ring-danger/20 hover:bg-danger/15 hover:ring-danger/35 aria-expanded:ring-danger/50',
+  neutral: 'bg-ink/[0.05] text-soft ring-line hover:bg-ink/[0.08] hover:text-ink aria-expanded:ring-soft/50',
+}
+
+interface AvailableButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
+  cents: number
+  tone: AvailableTone
+  /**
+   * Apercu pendant la saisie de l'assigne (valeur que prendrait le disponible) :
+   * affiche a la place du montant, contour pointille = pas encore valide.
+   */
+  preview?: { cents: number; tone: AvailableTone } | null
+}
+
+/**
+ * Pastille « Disponible » de la grille desktop : bouton qui ouvre le popover
+ * de deplacement d'argent. Largeur minimale commune pour que les montants
+ * s'alignent en colonne, chiffres tabulaires.
+ */
+export const AvailableButton = forwardRef<HTMLButtonElement, AvailableButtonProps>(
+  ({ cents, tone, preview, className, ...props }, ref) => {
+    const shown = preview ?? { cents, tone }
+    return (
+      <button
+        ref={ref}
+        type="button"
+        className={cn(
+          'relative inline-flex h-8 min-w-[84px] items-center justify-end rounded-full px-3 text-[13.5px] font-semibold tnum ring-1 ring-inset xl:min-w-[92px]',
+          'transition-[background-color,box-shadow,color,transform] duration-150 ease-spring active:scale-[0.97]',
+          "after:absolute after:-inset-1.5 after:content-['']",
+          'focus-visible:ring-2 focus-visible:ring-accent/70 focus-visible:ring-offset-0',
+          TONE_CLASSES[shown.tone],
+          preview && 'outline-dashed outline-1 outline-offset-2 outline-ink/30',
+          className,
+        )}
+        {...props}
+      >
+        {fmtEUR(shown.cents)}
+      </button>
+    )
+  },
+)
+AvailableButton.displayName = 'AvailableButton'
