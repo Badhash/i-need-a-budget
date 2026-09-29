@@ -504,7 +504,76 @@ export function countsAsUncategorized(queryClient: QueryClient, t: UncatCandidat
   if (account && !account.onBudget) return false
   const month = monthOf(t.date)
   const start = boot?.budgetStartMonth ?? null
-  return !t.categoryId && !t.transferGroupId && month <= monthOf(today()) && (start === null || month >= start)
+  // Moitie de virement : neutre, SAUF virement entre un compte budget et un
+  // compte de suivi (serveur recent) : elle se categorise comme une depense.
+  const categorizableTransfer = !t.transferGroupId || isCrossBudgetTransfer(queryClient, t)
+  return !t.categoryId && categorizableTransfer && month <= monthOf(today()) && (start === null || month >= start)
+}
+
+// ---------------------------------------------------------------------------
+// Virements entre un compte budget et un compte de suivi (regle YNAB)
+// ---------------------------------------------------------------------------
+//
+// Avec un serveur qui annonce crossBudgetTransfers, la moitie d'un virement
+// posee sur un compte BUDGET dont l'autre moitie est sur un compte de SUIVI
+// (PEA, assurance-vie...) sort (ou entre dans) le budget : elle se categorise
+// comme une transaction ordinaire. Les virements entre deux comptes budget
+// restent neutres. Sans le drapeau (serveur ancien), tout virement est neutre.
+
+// Comptes des moities de chaque groupe de virement, par reference de liste
+// (le cache transactions change de reference a chaque modification).
+const transferAccountsCache = new WeakMap<Transaction[], Map<string, string[]>>()
+
+function transferAccounts(txs: Transaction[]): Map<string, string[]> {
+  const cached = transferAccountsCache.get(txs)
+  if (cached) return cached
+  const map = new Map<string, string[]>()
+  for (const t of txs) {
+    if (!t.transferGroupId) continue
+    const list = map.get(t.transferGroupId)
+    if (list) list.push(t.accountId)
+    else map.set(t.transferGroupId, [t.accountId])
+  }
+  transferAccountsCache.set(txs, map)
+  return map
+}
+
+/** Regle pure : moitie sur un compte budget dont une autre moitie est hors budget. */
+export function isCrossBudgetHalf(
+  t: { accountId: string; transferGroupId?: string | null },
+  onBudget: (accountId: string) => boolean,
+  txs: Transaction[] | undefined,
+): boolean {
+  if (!t.transferGroupId || !txs || !onBudget(t.accountId)) return false
+  const accounts = transferAccounts(txs).get(t.transferGroupId) ?? []
+  return accounts.some((a) => a !== t.accountId && !onBudget(a))
+}
+
+/** Variante hors composant (mutations, compteurs) : lit les caches TanStack. */
+export function isCrossBudgetTransfer(
+  queryClient: QueryClient,
+  t: { accountId: string; transferGroupId?: string | null },
+): boolean {
+  if (!t.transferGroupId || !hasServerFeature(queryClient, 'crossBudgetTransfers')) return false
+  const boot = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)
+  const txs = queryClient.getQueryData<Transaction[]>(TRANSACTIONS_KEY)
+  const onBudgetIds = new Set((boot?.accounts ?? []).filter((a) => a.onBudget).map((a) => a.id))
+  return isCrossBudgetHalf(t, (id) => onBudgetIds.has(id), txs)
+}
+
+/**
+ * Hook : predicat « cette transaction est une moitie de virement budget <->
+ * suivi, donc categorisable ». Toujours faux avec un serveur ancien.
+ */
+export function useIsCrossBudgetTransfer(): (t: { accountId: string; transferGroupId?: string | null }) => boolean {
+  const features = useServerFeatures()
+  const accounts = useAccountsList()
+  const txs = useQuery({ queryKey: TRANSACTIONS_KEY, queryFn: fetchTransactions }).data
+  return useMemo(() => {
+    if (!features.has('crossBudgetTransfers')) return () => false
+    const onBudgetIds = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
+    return (t) => isCrossBudgetHalf(t, (id) => onBudgetIds.has(id), txs)
+  }, [features, accounts, txs])
 }
 
 /**
