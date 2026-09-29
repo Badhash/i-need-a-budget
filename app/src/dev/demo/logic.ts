@@ -4,6 +4,7 @@
 // sync-bank (categorisation a l'import, consentement), plus la semantique des
 // fonctionnalites serveur annoncees (lib/features.ts).
 
+import { currentMonth } from '@/lib/format'
 import type { BudgetInput } from '../../../../packages/engine/src/index'
 import { payeeKey } from '../../../../packages/crypto/src/payee'
 import { randomUuid, stableUuid, type DemoBankConnection, type DemoDb, type DemoTransaction } from './db'
@@ -55,6 +56,8 @@ export function engineInput(db: DemoDb, month: string, crossBudget: boolean): Bu
   return {
     month,
     startMonth: db.budgetStartMonth,
+    // Comme le serveur : un mois passe ne deduit pas les assignations suivantes.
+    currentMonth: currentMonth(),
     accounts: db.accounts.map((a) => ({ id: a.id, onBudget: a.onBudget })),
     categories: db.categories.map((c) => ({ id: c.id, isIncome: c.isIncome })),
     transactions: db.transactions.map((t) => ({

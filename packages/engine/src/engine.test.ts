@@ -770,3 +770,60 @@ describe('transferts croises (compte budget <-> compte de suivi)', () => {
     expect(r.readyToAssign + r.totals.available + uncategorized).toBe(onBudgetBalance)
   })
 })
+
+describe('RTA des mois passes (currentMonth)', () => {
+  // Janvier et fevrier : chaque salaire est entierement assigne dans son mois.
+  const txs = [salary('2026-01'), salary('2026-02')]
+  const assignments = [
+    { categoryId: FOOD.id, month: '2026-01', amount: 200_000 },
+    { categoryId: FOOD.id, month: '2026-02', amount: 200_000 },
+  ]
+
+  it('un mois passe ne deduit pas les assignations des mois suivants', () => {
+    const r = computeBudget(base({ month: '2026-01', currentMonth: '2026-02', transactions: txs, assignments }))
+    expect(r.readyToAssign).toBe(0)
+  })
+
+  it('sans mois courant, ancien comportement (assignations posterieures deduites)', () => {
+    const r = computeBudget(base({ month: '2026-01', transactions: txs, assignments }))
+    expect(r.readyToAssign).toBe(-200_000)
+  })
+
+  it('le mois courant deduit toujours les assignations futures', () => {
+    const r = computeBudget(
+      base({
+        month: '2026-02',
+        currentMonth: '2026-02',
+        transactions: txs,
+        assignments: [...assignments, { categoryId: RENT.id, month: '2026-03', amount: 50_000 }],
+      }),
+    )
+    expect(r.readyToAssign).toBe(-50_000)
+  })
+
+  it('un mois futur deduit les assignations encore posterieures', () => {
+    const r = computeBudget(
+      base({
+        month: '2026-03',
+        currentMonth: '2026-02',
+        transactions: txs,
+        assignments: [
+          ...assignments,
+          { categoryId: RENT.id, month: '2026-03', amount: 10_000 },
+          { categoryId: RENT.id, month: '2026-04', amount: 20_000 },
+        ],
+      }),
+    )
+    expect(r.readyToAssign).toBe(400_000 - 400_000 - 10_000 - 20_000)
+  })
+
+  it('les disponibles d un mois passe ne changent pas', () => {
+    const withCurrent = computeBudget(base({ month: '2026-01', currentMonth: '2026-02', transactions: txs, assignments }))
+    const legacy = computeBudget(base({ month: '2026-01', transactions: txs, assignments }))
+    expect(withCurrent.categories).toEqual(legacy.categories)
+  })
+
+  it('rejette un mois courant invalide', () => {
+    expect(() => computeBudget(base({ month: '2026-01', currentMonth: '2026-13' }))).toThrow()
+  })
+})

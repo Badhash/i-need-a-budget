@@ -871,7 +871,17 @@ function toEngineInput(data: DecryptedData, month: string) {
     month: a.month,
     amount: a.amount,
   }))
-  return { month, accounts, categories, transactions, assignments, startMonth: data.startMonth }
+  // Mois courant (Europe/Paris) : un mois passe ne deduit pas les assignations
+  // des mois suivants de son RTA (cf. BudgetInput.currentMonth du moteur).
+  return {
+    month,
+    accounts,
+    categories,
+    transactions,
+    assignments,
+    startMonth: data.startMonth,
+    currentMonth: currentMonthParis(),
+  }
 }
 
 // Une transaction compte dans le badge « A categoriser » : compte budget, sans
@@ -1199,7 +1209,15 @@ function rollupsToEngineInput(
       assignments.push({ categoryId: r.categoryId, month: r.month, amount: r.assigned })
     }
   }
-  return { month, accounts, categories: engineCategories, transactions, assignments, startMonth }
+  return {
+    month,
+    accounts,
+    categories: engineCategories,
+    transactions,
+    assignments,
+    startMonth,
+    currentMonth: currentMonthParis(),
+  }
 }
 
 // Reconstructions d'agregats en cours dans CET isolate (anti-rafale locale ;

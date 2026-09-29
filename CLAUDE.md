@@ -102,7 +102,7 @@ Transferts entre comptes : deux transactions liées (transfer_group_id). Entre d
 
 Comptes hors budget (tracking, ex. PEA) : soldes suivis, transactions sans catégorie, exclus du RTA. Flag `on_budget` sur le compte.
 
-Futur : assigner sur les mois futurs est possible, décompte du RTA courant.
+Futur : assigner sur les mois futurs est possible, décompte du RTA courant (et des mois futurs antérieurs). Un mois déjà passé ne déduit pas les assignations des mois suivants (financées par des revenus postérieurs) : le moteur reçoit le mois courant (`currentMonth`, Europe/Paris côté serveur) et, pour M < mois courant, RTA(M) = inflows ≤ M − assigned ≤ M − overspending des mois < M.
 
 Nouveau budget (`startMonth` optionnel du moteur, stocké dans `user_settings.budgetStartMonth`) : tout l'historique antérieur au mois de départ est gelé. Les transactions des comptes budget antérieures (transferts et non catégorisées compris) ne forment qu'un solde de départ versé au RTA du mois de départ ; assignations et activité antérieures sont ignorées. L'action `/api newBudget` efface TOUTES les assignations et pose ce mois : RTA(départ) = solde des comptes budget au 1er du mois. Côté agrégats, ce solde est porté par une ligne de rollup spéciale (`OPENING_CATEGORY`).
 

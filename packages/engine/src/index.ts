@@ -76,6 +76,16 @@ export interface BudgetInput {
    * anterieur est reduit a un solde de depart verse au RTA de ce mois.
    */
   startMonth?: string | null
+  /**
+   * Mois courant de l'utilisateur (YYYY-MM), optionnel. Les assignations des
+   * mois POSTERIEURS au mois cible ne se deduisent de son RTA que si le mois
+   * cible n'est pas deja passe : « le futur se decompte du RTA courant ». Pour
+   * un mois passe, RTA(M) = inflows <= M - assigned <= M - overspending < M :
+   * les assignations des mois suivants, financees par des revenus posterieurs,
+   * ne le rendent plus artificiellement negatif. Absent = ancien comportement
+   * (toujours deduites).
+   */
+  currentMonth?: string | null
   accounts: Account[]
   categories: Category[]
   transactions: Transaction[]
@@ -190,6 +200,13 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
   if (startMonth !== null && !isValidMonth(startMonth)) {
     throw new Error(`Mois de depart invalide : "${startMonth}" (attendu YYYY-MM)`)
   }
+  const currentMonth = input.currentMonth ?? null
+  if (currentMonth !== null && !isValidMonth(currentMonth)) {
+    throw new Error(`Mois courant invalide : "${currentMonth}" (attendu YYYY-MM)`)
+  }
+  // Mois cible passe (connu seulement si l'appelant fournit le mois courant) :
+  // les assignations posterieures ne pesent pas sur son RTA.
+  const deductLaterAssignments = currentMonth === null || month >= currentMonth
 
   const onBudgetAccounts = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
   const incomeCategories = new Set(categories.filter((c) => c.isIncome).map((c) => c.id))
@@ -271,7 +288,7 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
   for (const a of countedAssignments) {
     if (!envelopeIds.has(a.categoryId)) continue
     if (a.month > month) {
-      assignedFuture += a.amount
+      if (deductLaterAssignments) assignedFuture += a.amount
       continue
     }
     assignedCumulative += a.amount
