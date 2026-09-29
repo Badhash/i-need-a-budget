@@ -12,6 +12,9 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 import {
   addMonths,
   computeBudget,
+  countsForBudget,
+  isCrossBudgetHalf,
+  offBudgetTransferGroups,
   type Account as EngineAccount,
   type Assignment as EngineAssignment,
   type Category as EngineCategory,
@@ -460,6 +463,28 @@ async function aggMaintain(
   }
 }
 
+// Ecriture SANS maintenance incrementale : moitie de transfert croise (budget
+// <-> suivi, une contribution isolee ne voit pas sa contrepartie, cf.
+// aggregates.ts) ou bascule budget/suivi d'un compte. Agregats invalides AVANT
+// la premiere ecriture — echec non avale : ecrire sous un marqueur 'ready' sans
+// maintenance le laisserait faux — puis RE-invalides apres, succes ou echec
+// (meme protocole que deleteAccount) : un recompute concurrent qui aurait
+// charge un snapshot anterieur a l'ecriture voit sa bascule finale echouer.
+// Les lectures retombent sur le calcul complet (toujours juste) et
+// bootstrapFull reconstruit en arriere-plan a la prochaine ouverture.
+async function withAggregatesStale<T>(userId: string, write: () => Promise<T>): Promise<T> {
+  try {
+    await aggMarkStale(admin, userId)
+  } catch {
+    throw new ApiError(500, 'invalidation des agregats impossible, reessayez')
+  }
+  try {
+    return await write()
+  } finally {
+    await aggMarkStale(admin, userId).catch(() => {})
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Transactions : colonnes chiffrees enc_core / enc_text (REF H) sur transport
 // base64 (REF D) + fallback legacy enc_payload
@@ -595,6 +620,116 @@ async function loadTxCore(userId: string): Promise<WithId<TxCore>[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Transferts croises (budget <-> suivi) : recherche SCOPEE des miroirs
+// ---------------------------------------------------------------------------
+
+// Au-dela de ce nombre de mois distincts, la liste month_idx (passee dans
+// l'URL PostgREST) deviendrait trop longue : chargement complet direct.
+const MIRROR_SCOPE_MAX_MONTHS = 36
+
+// Lignes (enc_core seul) des mois designes par leurs index aveugles, paginees
+// (plafond PostgREST de 1000 lignes par reponse).
+async function loadTxCoreByMonthIdxs(
+  userId: string,
+  keys: CryptoKeys,
+  monthIdxs: string[],
+): Promise<WithId<TxCore>[]> {
+  const rows: TxRow[] = []
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data, error } = await admin
+      .from('transactions')
+      .select('id, enc_core:enc_core_b64, enc_payload:enc_b64')
+      .eq('user_id', userId)
+      .in('month_idx', monthIdxs)
+      .order('id', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) throw new ApiError(500, 'lecture transactions impossible')
+    if (!data || data.length === 0) break
+    rows.push(...(data as TxRow[]))
+    if (data.length < READ_PAGE) break
+  }
+  return Promise.all(rows.map(async (r) => ({ id: r.id, ...(await decodeTxCore(keys, userId, r)) })))
+}
+
+type TransferHalfRef = { id: string; bookingMonth: string; transferGroupId?: string | null }
+
+// Toutes les moities connues des groupes de transfert des `halves` fournies
+// (elles-memes comprises), par groupe. Lecture SCOPEE d'abord : lignes du mois
+// comptable de chaque moitie et des deux mois adjacents (month_idx), enc_core
+// seul — un miroir cree par /api partage la date de sa moitie, une paire liee
+// par sync-bank est a quelques jours pres. Repli sur le chargement complet
+// (enc_core) seulement si une moitie reste sans miroir (paire anormale).
+async function loadTransferGroups(
+  userId: string,
+  keys: CryptoKeys,
+  halves: TransferHalfRef[],
+): Promise<Map<string, WithId<TxCore>[]>> {
+  const wanted = new Set<string>()
+  const months = new Set<string>()
+  for (const h of halves) {
+    if (!h.transferGroupId) continue
+    wanted.add(h.transferGroupId)
+    for (const delta of [-1, 0, 1]) months.add(addMonths(h.bookingMonth, delta))
+  }
+  const groups = new Map<string, WithId<TxCore>[]>()
+  if (wanted.size === 0) return groups
+
+  const collect = (rows: WithId<TxCore>[]) => {
+    groups.clear()
+    for (const r of rows) {
+      if (!r.transferGroupId || !wanted.has(r.transferGroupId)) continue
+      const list = groups.get(r.transferGroupId)
+      if (list) list.push(r)
+      else groups.set(r.transferGroupId, [r])
+    }
+  }
+  const allMirrored = () =>
+    halves.every(
+      (h) =>
+        !h.transferGroupId ||
+        (groups.get(h.transferGroupId) ?? []).some((r) => r.id !== h.id),
+    )
+
+  if (months.size <= MIRROR_SCOPE_MAX_MONTHS) {
+    const monthIdxs = await Promise.all([...months].map((m) => txMonthIdx(keys, userId, m)))
+    collect(await loadTxCoreByMonthIdxs(userId, keys, monthIdxs))
+    if (allMirrored()) return groups
+  }
+  collect(await loadTxCore(userId))
+  return groups
+}
+
+// Moitie CROISEE : sur un compte budget, avec une AUTRE moitie du meme groupe
+// sur un compte hors budget (compte de suivi, ou compte inconnu).
+function isCrossHalfOf(
+  half: { id: string; accountId: string; transferGroupId?: string | null },
+  groups: Map<string, WithId<TxCore>[]>,
+  onBudget: Set<string>,
+): boolean {
+  if (!half.transferGroupId || !onBudget.has(half.accountId)) return false
+  return (groups.get(half.transferGroupId) ?? []).some(
+    (r) => r.id !== half.id && !onBudget.has(r.accountId),
+  )
+}
+
+// Variante unitaire : la moitie `tx` est-elle croisee ? Aucune lecture si elle
+// n'est pas une moitie de transfert ou si son compte est hors budget.
+async function isCrossBudgetTx(
+  userId: string,
+  keys: CryptoKeys,
+  tx: TransferHalfRef & { accountId: string },
+  onBudget: Set<string>,
+): Promise<boolean> {
+  if (!tx.transferGroupId || !onBudget.has(tx.accountId)) return false
+  return isCrossHalfOf(tx, await loadTransferGroups(userId, keys, [tx]), onBudget)
+}
+
+// Ids des comptes budget.
+function onBudgetIds(accounts: { id: string; onBudget: boolean }[]): Set<string> {
+  return new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
+}
+
+// ---------------------------------------------------------------------------
 // Assemblage moteur
 // ---------------------------------------------------------------------------
 
@@ -727,18 +862,21 @@ function toEngineInput(data: DecryptedData, month: string) {
 }
 
 // Une transaction compte dans le badge « A categoriser » : compte budget, sans
-// categorie, hors transfert, pas dans le futur, et pas gelee avant le depart
-// du budget. Meme regle cote front (countsAsUncategorized) et agregats.
+// categorie, hors transfert entre comptes budget (la moitie cote budget d'un
+// transfert croise budget <-> suivi compte, regle YNAB), pas dans le futur, et
+// pas gelee avant le depart du budget. Meme regle cote agregats (uncat_counts)
+// et cote front (countsAsUncategorized). `offBudgetGroups` : groupes de
+// transfert touchant un compte hors budget, calcules sur TOUTES les transactions.
 function countsAsUncategorized(
   t: { accountId: string; categoryId: string | null; transferGroupId?: string | null; bookingMonth: string },
   onBudget: Set<string>,
+  offBudgetGroups: Set<string>,
   startMonth: string | null,
   currentMonth: string,
 ): boolean {
   return (
-    onBudget.has(t.accountId) &&
+    countsForBudget(t, onBudget, offBudgetGroups) &&
     !t.categoryId &&
-    !t.transferGroupId &&
     t.bookingMonth <= currentMonth &&
     (startMonth === null || t.bookingMonth >= startMonth)
   )
@@ -758,18 +896,22 @@ function computeReports(data: FullData, month: string) {
   const onBudget = new Set(data.accounts.filter((a) => a.onBudget).map((a) => a.id))
   const income = new Set(data.categories.filter((c) => c.isIncome).map((c) => c.id))
   const catToGroup = new Map(data.categories.map((c) => [c.id, c.groupId]))
+  // Perimetre budget : comptes budget, hors transfert entre comptes budget. La
+  // moitie cote budget d'un transfert croise (budget <-> suivi) est une vraie
+  // depense ou un vrai revenu (regle YNAB) : elle compte comme une transaction
+  // ordinaire. Groupes calcules sur TOUTES les transactions chargees.
+  const offGroups = offBudgetTransferGroups(data.transactions, onBudget)
+  const counted = (t: TxPayload) => countsForBudget(t, onBudget, offGroups)
 
   const isSpending = (t: TxPayload) =>
     t.amount < 0 &&
-    !t.transferGroupId &&
-    onBudget.has(t.accountId) &&
+    counted(t) &&
     (t.categoryId === null || !income.has(t.categoryId))
 
   const isIncome = (t: TxPayload) =>
     t.categoryId !== null &&
     income.has(t.categoryId) &&
-    onBudget.has(t.accountId) &&
-    !t.transferGroupId
+    counted(t)
 
   // Un seul balayage : depense et revenu par mois comptable, memes predicats
   // qu'avant. spendingOf/incomeOf ne font plus que lire dans ces maps.
@@ -904,12 +1046,13 @@ function buildBootstrap(data: DecryptedData, payees: { key: string; categoryId: 
   }
   const currentMonth = currentMonthParis()
   const onBudget = new Set(data.accounts.filter((a) => a.onBudget).map((a) => a.id))
+  const offGroups = offBudgetTransferGroups(data.transactions, onBudget)
   return {
     accounts: data.accounts.map((a) => ({ ...a, balance: balances.get(a.id) ?? 0 })),
     groups: data.groups,
     categories: data.categories,
     uncategorizedCount: data.transactions.filter((t) =>
-      countsAsUncategorized(t, onBudget, data.startMonth, currentMonth),
+      countsAsUncategorized(t, onBudget, offGroups, data.startMonth, currentMonth),
     ).length,
     budgetStartMonth: data.startMonth,
     payees,
@@ -1214,7 +1357,24 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
 
   const keys = await getKeys()
   const payload = await decodeTx(keys, userId, data as TxRow)
-  if (payload.transferGroupId) throw new ApiError(400, 'un transfert ne se categorise pas')
+  if (payload.transferGroupId) {
+    // Transfert : seule la moitie cote budget d'un transfert CROISE (budget <->
+    // suivi) se categorise, comme une transaction ordinaire (regle YNAB). Entre
+    // deux comptes budget, ou cote compte de suivi, il reste sans categorie.
+    const accounts = await loadAll<AccountPayload>('accounts', userId)
+    const tx = { id: transactionId, ...payload }
+    if (!(await isCrossBudgetTx(userId, keys, tx, onBudgetIds(accounts)))) {
+      throw new ApiError(400, 'un transfert ne se categorise pas')
+    }
+    // Pas de maintenance incrementale (cf. withAggregatesStale) ni
+    // d'apprentissage de tiers : un transfert n'est pas un marchand.
+    if (payload.categoryId !== categoryId) {
+      await withAggregatesStale(userId, () =>
+        updateTx(userId, transactionId, { ...payload, categoryId }),
+      )
+    }
+    return { ok: true }
+  }
   await updateTx(userId, transactionId, { ...payload, categoryId })
   await aggMaintain(userId, keys, (b) => b.replaceTx(payload, { ...payload, categoryId }))
   // Memoire de tiers (REF N) : apprend le choix, best-effort.
@@ -1226,8 +1386,9 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
 }
 
 // Categorisation en lot (max 200 ids) : UNE lecture des lignes, une mise a
-// jour par ligne, UNE maintenance d'agregats. Transferts et ids inconnus
-// ignores silencieusement. Apprentissage de tiers best-effort par ligne.
+// jour par ligne, UNE maintenance d'agregats. Transferts (hors moitie cote
+// budget d'un transfert croise) et ids inconnus ignores silencieusement.
+// Apprentissage de tiers best-effort par ligne (jamais sur un transfert).
 async function actionCategorizeMany(userId: string, params: Params) {
   const ids = requireUuidArray(params.transactionIds, 'transactionIds')
   if (ids.length > 200) throw new ApiError(400, 'au plus 200 transactions par lot')
@@ -1249,31 +1410,58 @@ async function actionCategorizeMany(userId: string, params: Params) {
   if (error) throw new ApiError(500, 'lecture transactions impossible')
 
   const keys = await getKeys()
-  const aggOps: { old: AggTx; next: AggTx }[] = []
-  const learned: TxPayload[] = []
-  try {
-    for (const row of (data ?? []) as TxRow[]) {
-      const payload = await decodeTx(keys, userId, row)
-      if (payload.transferGroupId) continue
-      if (payload.categoryId === categoryId) continue
-      const next = { ...payload, categoryId }
-      await updateTx(userId, row.id, next)
-      aggOps.push({ old: payload, next })
-      learned.push(payload)
-    }
-  } catch (err) {
-    if (aggOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
-    throw err
-  }
-  if (aggOps.length > 0) {
-    await aggMaintain(userId, keys, async (b) => {
-      for (const op of aggOps) await b.replaceTx(op.old, op.next)
+  const rows = await Promise.all(
+    ((data ?? []) as TxRow[]).map(async (row) => ({
+      id: row.id,
+      payload: await decodeTx(keys, userId, row),
+    })),
+  )
+  // Moities de transfert : seule la moitie cote budget d'un transfert CROISE
+  // (budget <-> suivi) se categorise ; les autres restent ignorees.
+  const onBudget = onBudgetIds(accounts)
+  const halves = rows
+    .filter((r) => r.payload.transferGroupId && onBudget.has(r.payload.accountId))
+    .map((r) => ({ id: r.id, ...r.payload }))
+  const groups =
+    halves.length > 0
+      ? await loadTransferGroups(userId, keys, halves)
+      : new Map<string, WithId<TxCore>[]>()
+  const targets = rows.filter(
+    (r) =>
+      r.payload.categoryId !== categoryId &&
+      (!r.payload.transferGroupId || isCrossHalfOf({ id: r.id, ...r.payload }, groups, onBudget)),
+  )
+
+  if (targets.some((r) => r.payload.transferGroupId)) {
+    // Au moins une moitie croisee : pas de maintenance incrementale pour le
+    // lot (cf. withAggregatesStale), une invalidation autour des ecritures.
+    await withAggregatesStale(userId, async () => {
+      for (const r of targets) await updateTx(userId, r.id, { ...r.payload, categoryId })
     })
+  } else {
+    const aggOps: { old: AggTx; next: AggTx }[] = []
+    try {
+      for (const r of targets) {
+        const next = { ...r.payload, categoryId }
+        await updateTx(userId, r.id, next)
+        aggOps.push({ old: r.payload, next })
+      }
+    } catch (err) {
+      if (aggOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
+      throw err
+    }
+    if (aggOps.length > 0) {
+      await aggMaintain(userId, keys, async (b) => {
+        for (const op of aggOps) await b.replaceTx(op.old, op.next)
+      })
+    }
   }
-  for (const tx of learned) {
-    await learnPayeeSafe(userId, keys, tx, categoryId, accounts, categories)
+  // Memoire de tiers (REF N) : jamais depuis une moitie de transfert.
+  for (const r of targets) {
+    if (r.payload.transferGroupId) continue
+    await learnPayeeSafe(userId, keys, r.payload, categoryId, accounts, categories)
   }
-  return { ok: true, updated: aggOps.length }
+  return { ok: true, updated: targets.length }
 }
 
 // Force (ou efface, categoryId null) la categorie par defaut d'un tiers.
@@ -1312,8 +1500,19 @@ async function actionUpdateTransaction(userId: string, params: Params) {
   const existing = await decodeTx(keys, userId, data as TxRow)
   // Un transfert doit rester coherent avec son miroir (montant oppose, meme
   // date) : on ne l'edite pas ici, l'utilisateur l'annule d'abord via
-  // convertTransferToNormal.
-  if (existing.transferGroupId) throw new ApiError(400, 'un transfert ne se modifie pas, annulez-le d abord')
+  // convertTransferToNormal. Seule exception : la moitie cote budget d'un
+  // transfert CROISE (budget <-> suivi), dont la categorie, le libelle et les
+  // notes restent editables.
+  if (existing.transferGroupId) {
+    return updateCrossBudgetHalf(userId, keys, transactionId, existing, {
+      accountId,
+      bookingDate,
+      amount,
+      label,
+      categoryId,
+      notes,
+    })
+  }
 
   // Integrite referentielle verifiee en Edge Function (pas de FK SQL metier).
   const [accounts, categories] = await Promise.all([
@@ -1351,6 +1550,60 @@ async function actionUpdateTransaction(userId: string, params: Params) {
   return { ok: true }
 }
 
+// Edition d'une moitie de transfert (appelee par actionUpdateTransaction) :
+// refusee comme avant, sauf sur la moitie cote budget d'un transfert CROISE
+// dont seuls la categorie, le libelle et les notes changent (compte, date et
+// montant restent lies au miroir). Pas d'apprentissage de tiers : un
+// transfert n'est pas un marchand.
+async function updateCrossBudgetHalf(
+  userId: string,
+  keys: CryptoKeys,
+  transactionId: string,
+  existing: TxPayload,
+  input: {
+    accountId: string
+    bookingDate: string
+    amount: number
+    label: string
+    categoryId: string | null
+    notes: string | null
+  },
+) {
+  const refused = new ApiError(400, 'un transfert ne se modifie pas, annulez-le d abord')
+  if (
+    input.accountId !== existing.accountId ||
+    input.bookingDate !== existing.bookingDate ||
+    input.amount !== existing.amount
+  ) {
+    throw refused
+  }
+  const [accounts, categories] = await Promise.all([
+    loadAll<AccountPayload>('accounts', userId),
+    loadAll<CategoryPayload>('categories', userId),
+  ])
+  const tx = { id: transactionId, ...existing }
+  if (!(await isCrossBudgetTx(userId, keys, tx, onBudgetIds(accounts)))) throw refused
+  if (input.categoryId && !categories.some((c) => c.id === input.categoryId)) {
+    throw new ApiError(404, 'categorie inconnue')
+  }
+
+  const payload: TxPayload = {
+    ...existing,
+    categoryId: input.categoryId,
+    label: input.label,
+    notes: input.notes,
+  }
+  // month_idx et tx_hash intacts (mois inchange). Libelle ou notes seuls :
+  // enc_core identique, les agregats ne bougent pas. Categorie changee :
+  // ecriture hors maintenance incrementale (cf. withAggregatesStale).
+  if (input.categoryId === existing.categoryId) {
+    await updateTx(userId, transactionId, payload)
+  } else {
+    await withAggregatesStale(userId, () => updateTx(userId, transactionId, payload))
+  }
+  return { ok: true }
+}
+
 // ---------------------------------------------------------------------------
 // Transferts entre comptes (conversion d'une transaction existante)
 // ---------------------------------------------------------------------------
@@ -1380,7 +1633,19 @@ async function actionConvertToTransfer(userId: string, params: Params) {
   // Un compte clos ne recoit plus d'activite : meme regle que sync-bank.
   if (targetAccount.closed) throw new ApiError(400, 'compte cible cloture')
 
+  // Transfert CROISE (un compte budget, un compte de suivi : regle YNAB) : la
+  // moitie cote budget se categorise comme une transaction ordinaire. Elle
+  // garde la categorie de l'origine si c'est l'origine, demarre a categoriser
+  // si c'est le miroir ; la moitie cote suivi n'en porte jamais. Entre deux
+  // comptes du meme type : transfert neutre, sans categorie (historique).
+  const originOnBudget = accounts.some((a) => a.id === payload.accountId && a.onBudget)
+  const cross = originOnBudget !== targetAccount.onBudget
   const transferGroupId = crypto.randomUUID()
+  const origin: TxPayload = {
+    ...payload,
+    categoryId: cross && originOnBudget ? payload.categoryId : null,
+    transferGroupId,
+  }
   // Transaction miroir sur le compte cible : montant oppose, sans categorie.
   // tx_hash reste NULL (ecriture non bancaire), month_idx comme actionAddTransaction.
   const mirror: TxPayload = {
@@ -1399,30 +1664,34 @@ async function actionConvertToTransfer(userId: string, params: Params) {
   // l'origine ; un miroir orphelin fausserait silencieusement le solde du
   // compte cible, alors qu'un demi-transfert sur l'origine reste visible et
   // annulable via convertTransferToNormal.
-  await updateTx(userId, transactionId, {
-    ...payload,
-    categoryId: null,
-    transferGroupId,
-  })
-  try {
-    await insertTx(userId, mirror, {
-      month_idx: await txMonthIdx(keys, userId, payload.bookingMonth),
-    })
-  } catch (err) {
+  const writePair = async () => {
+    await updateTx(userId, transactionId, origin)
     try {
-      await updateTx(userId, transactionId, payload)
-    } catch {
-      // Rollback impossible : l'origine reste liee a un groupe sans miroir,
-      // etat reparable par convertTransferToNormal ou une nouvelle conversion.
-      // Les agregats ne refletent pas ce demi-etat : on les invalide.
-      await aggMarkStale(admin, userId).catch(() => {})
+      await insertTx(userId, mirror, {
+        month_idx: await txMonthIdx(keys, userId, payload.bookingMonth),
+      })
+    } catch (err) {
+      try {
+        await updateTx(userId, transactionId, payload)
+      } catch {
+        // Rollback impossible : l'origine reste liee a un groupe sans miroir,
+        // etat reparable par convertTransferToNormal ou une nouvelle conversion.
+        // Les agregats ne refletent pas ce demi-etat : on les invalide.
+        await aggMarkStale(admin, userId).catch(() => {})
+      }
+      throw err
     }
-    throw err
   }
+  if (cross) {
+    // Paire croisee : hors maintenance incrementale (cf. withAggregatesStale).
+    await withAggregatesStale(userId, writePair)
+    return { ok: true, transferGroupId }
+  }
+  await writePair()
   // Ecritures reussies : origine devenue moitie de transfert (categorie
   // retiree) + miroir ajoute. En cas d'echec plus haut, on ne passe jamais ici.
   await aggMaintain(userId, keys, async (b) => {
-    await b.replaceTx(payload, { ...payload, categoryId: null, transferGroupId })
+    await b.replaceTx(payload, origin)
     await b.applyTx(1, mirror)
   })
   return { ok: true, transferGroupId }
@@ -1457,37 +1726,57 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   const mirror = rows.find(
     (t) => t.payload.transferGroupId === kept.payload.transferGroupId && t.id !== transactionId,
   )
-  if (mirror) {
-    if (mirror.txHash === null) {
-      // Miroir systeme : suppression sans perte de donnees bancaires.
-      const { error: delErr } = await admin
-        .from('transactions')
-        .delete()
-        .eq('user_id', userId)
-        .eq('id', mirror.id)
-      if (delErr) throw new ApiError(500, 'suppression transactions impossible')
-    } else {
-      // Import bancaire reel : on delie au lieu de supprimer, la transaction
-      // redevient une ecriture normale a recategoriser.
-      await updateTx(userId, mirror.id, {
-        ...mirror.payload,
+  // Paire CROISEE (un compte budget, un compte de suivi) : sa moitie cote
+  // budget comptait comme une transaction ordinaire, que la maintenance
+  // incrementale ne sait pas retirer (cf. withAggregatesStale).
+  const accounts = await loadAll<AccountPayload>('accounts', userId)
+  const onBudget = onBudgetIds(accounts)
+  const offGroups = offBudgetTransferGroups(rows.map((t) => t.payload), onBudget)
+  const cross = rows.some(
+    (t) =>
+      t.payload.transferGroupId === kept.payload.transferGroupId &&
+      isCrossBudgetHalf(t.payload, onBudget, offGroups),
+  )
+
+  const writes = async () => {
+    if (mirror) {
+      if (mirror.txHash === null) {
+        // Miroir systeme : suppression sans perte de donnees bancaires.
+        const { error: delErr } = await admin
+          .from('transactions')
+          .delete()
+          .eq('user_id', userId)
+          .eq('id', mirror.id)
+        if (delErr) throw new ApiError(500, 'suppression transactions impossible')
+      } else {
+        // Import bancaire reel : on delie au lieu de supprimer, la transaction
+        // redevient une ecriture normale a recategoriser.
+        await updateTx(userId, mirror.id, {
+          ...mirror.payload,
+          transferGroupId: null,
+        })
+      }
+    }
+    // La transaction conservee redevient normale. Sa categorie est conservee :
+    // null en general (l'utilisateur la recategorise ensuite), celle de la
+    // moitie cote budget d'une paire croisee (meme effet sur le budget).
+    try {
+      await updateTx(userId, transactionId, {
+        ...kept.payload,
         transferGroupId: null,
       })
+    } catch (err) {
+      // Le miroir a deja pu etre supprime/delie : demi-etat non reflete par les
+      // agregats, on les invalide (fallback calcul complet).
+      if (mirror) await aggMarkStale(admin, userId).catch(() => {})
+      throw err
     }
   }
-  // La transaction conservee redevient normale ; categoryId reste null,
-  // l'utilisateur la recategorise ensuite.
-  try {
-    await updateTx(userId, transactionId, {
-      ...kept.payload,
-      transferGroupId: null,
-    })
-  } catch (err) {
-    // Le miroir a deja pu etre supprime/delie : demi-etat non reflete par les
-    // agregats, on les invalide (fallback calcul complet).
-    if (mirror) await aggMarkStale(admin, userId).catch(() => {})
-    throw err
+  if (cross) {
+    await withAggregatesStale(userId, writes)
+    return { ok: true }
   }
+  await writes()
   await aggMaintain(userId, keys, async (b) => {
     await b.replaceTx(kept.payload, { ...kept.payload, transferGroupId: null })
     if (mirror) {
@@ -1541,59 +1830,92 @@ async function actionDeleteTransaction(userId: string, params: Params) {
   // Transfert : le miroir est traite comme dans convertTransferToNormal —
   // supprime s'il est synthetique (tx_hash NULL), simplement delie s'il s'agit
   // d'un vrai import bancaire (jamais de perte de donnees bancaires implicite).
-  // Contribution du miroir a repercuter sur les agregats (calculee au fil du
-  // traitement, appliquee seulement apres la suppression reussie).
-  let mirrorAgg: ((b: AggBatch) => Promise<void>) | null = null
-  if (payload.transferGroupId) {
-    const rows = await loadAllRows<TxRow>(
-      'transactions',
-      userId,
-      'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash',
-    )
-    for (const row of rows) {
-      if (row.id === transactionId) continue
-      const other = await decodeTx(keys, userId, row)
-      if (other.transferGroupId !== payload.transferGroupId) continue
-      if ((row.tx_hash as string | null) === null) {
+  // Il est d'abord RECHERCHE (sans ecrire) pour savoir si la paire est croisee.
+  const mirror = payload.transferGroupId
+    ? await findTransferMirror(userId, keys, transactionId, payload.transferGroupId)
+    : null
+  // Paire CROISEE (un compte budget, un compte de suivi) : sa moitie cote
+  // budget comptait comme une transaction ordinaire, que la maintenance
+  // incrementale ne sait pas retirer (cf. withAggregatesStale).
+  let cross = false
+  if (mirror) {
+    const onBudget = onBudgetIds(await loadAll<AccountPayload>('accounts', userId))
+    cross = onBudget.has(payload.accountId) !== onBudget.has(mirror.payload.accountId)
+  }
+  // Contribution du miroir a repercuter sur les agregats, appliquee seulement
+  // apres la suppression reussie.
+  const mirrorAgg: ((b: AggBatch) => Promise<void>) | null = !mirror
+    ? null
+    : mirror.txHash === null
+      ? (b) => b.applyTx(-1, mirror.payload)
+      : (b) => b.replaceTx(mirror.payload, { ...mirror.payload, transferGroupId: null })
+
+  const writes = async () => {
+    if (mirror) {
+      if (mirror.txHash === null) {
         const { error: delErr } = await admin
           .from('transactions')
           .delete()
           .eq('user_id', userId)
-          .eq('id', row.id)
+          .eq('id', mirror.id)
         if (delErr) throw new ApiError(500, 'suppression transactions impossible')
-        mirrorAgg = (b) => b.applyTx(-1, other)
       } else {
-        await updateTx(userId, row.id, {
-          ...other,
+        await updateTx(userId, mirror.id, {
+          ...mirror.payload,
           transferGroupId: null,
         })
-        mirrorAgg = (b) => b.replaceTx(other, { ...other, transferGroupId: null })
       }
-      break
+    }
+
+    // Tombstone AVANT le delete : si l'enregistrement echoue, on ne supprime pas
+    // (sinon la ligne reviendrait par la sync).
+    const ownHash = data.tx_hash as string | null
+    if (ownHash !== null) await recordDeletedHashes(userId, [ownHash])
+
+    const { error: delErr } = await admin
+      .from('transactions')
+      .delete()
+      .eq('user_id', userId)
+      .eq('id', transactionId)
+    if (delErr) {
+      // Le miroir a deja pu etre supprime/delie : les agregats ne refletent pas
+      // ce demi-etat, on les invalide (fallback calcul complet).
+      if (mirror) await aggMarkStale(admin, userId).catch(() => {})
+      throw new ApiError(500, 'suppression transactions impossible')
     }
   }
-
-  // Tombstone AVANT le delete : si l'enregistrement echoue, on ne supprime pas
-  // (sinon la ligne reviendrait par la sync).
-  const ownHash = data.tx_hash as string | null
-  if (ownHash !== null) await recordDeletedHashes(userId, [ownHash])
-
-  const { error: delErr } = await admin
-    .from('transactions')
-    .delete()
-    .eq('user_id', userId)
-    .eq('id', transactionId)
-  if (delErr) {
-    // Le miroir a deja pu etre supprime/delie : les agregats ne refletent pas
-    // ce demi-etat, on les invalide (fallback calcul complet).
-    if (mirrorAgg) await aggMarkStale(admin, userId).catch(() => {})
-    throw new ApiError(500, 'suppression transactions impossible')
+  if (cross) {
+    await withAggregatesStale(userId, writes)
+    return { ok: true }
   }
+  await writes()
   await aggMaintain(userId, keys, async (b) => {
     await b.applyTx(-1, payload)
     if (mirrorAgg) await mirrorAgg(b)
   })
   return { ok: true }
+}
+
+// Premiere autre moitie du groupe de transfert (lecture complete, tx_hash en
+// clair : distingue un miroir systeme d'un import bancaire). null si orpheline.
+async function findTransferMirror(
+  userId: string,
+  keys: CryptoKeys,
+  transactionId: string,
+  transferGroupId: string,
+): Promise<{ id: string; txHash: string | null; payload: TxPayload } | null> {
+  const rows = await loadAllRows<TxRow>(
+    'transactions',
+    userId,
+    'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash',
+  )
+  for (const row of rows) {
+    if (row.id === transactionId) continue
+    const other = await decodeTx(keys, userId, row)
+    if (other.transferGroupId !== transferGroupId) continue
+    return { id: row.id, txHash: (row.tx_hash as string | null) ?? null, payload: other }
+  }
+  return null
 }
 
 async function actionSetAssigned(userId: string, params: Params) {
@@ -1963,11 +2285,12 @@ async function actionDeleteCategory(userId: string, params: Params) {
   if (!category) throw new ApiError(404, 'categorie inconnue')
   if (category.isIncome) throw new ApiError(400, 'les categories de revenus ne se suppriment pas')
 
-  const [transactions, assignments, targets, rules] = await Promise.all([
+  const [transactions, assignments, targets, rules, accounts] = await Promise.all([
     loadTxFull(userId),
     loadAll<AssignmentPayload>('assignments', userId),
     loadAll<TargetPayload>('targets', userId),
     loadAll<RulePayload>('rules', userId),
+    loadAll<AccountPayload>('accounts', userId),
   ])
 
   // Decategorise chaque transaction referencant la categorie ; pas d'extra :
@@ -1975,26 +2298,38 @@ async function actionDeleteCategory(userId: string, params: Params) {
   // laisserait un etat partiel non reflete par les agregats : on les invalide
   // avant de propager l'erreur (fallback calcul complet, jamais de chiffre faux).
   const keys = await getKeys()
+  const touched = transactions.filter((t) => t.categoryId === categoryId)
   const aggTxOps: { old: AggTx; next: AggTx }[] = []
   let uncategorized = 0
-  try {
-    for (const tx of transactions) {
-      if (tx.categoryId !== categoryId) continue
+  const decategorize = async () => {
+    for (const tx of touched) {
       const { id, ...payload } = tx
       await updateTx(userId, id, { ...payload, categoryId: null })
       aggTxOps.push({ old: payload, next: { ...payload, categoryId: null } })
       uncategorized += 1
     }
-  } catch (err) {
-    if (aggTxOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
-    throw err
   }
-  // Maintenance immediate du lot decategorise : les etapes suivantes peuvent
-  // echouer sans laisser de derive (chaque etape est refletee des qu'elle reussit).
-  if (aggTxOps.length > 0) {
-    await aggMaintain(userId, keys, async (b) => {
-      for (const op of aggTxOps) await b.replaceTx(op.old, op.next)
-    })
+  // Moitie cote budget d'un transfert croise (budget <-> suivi) portant la
+  // categorie : le lot se decategorise hors maintenance incrementale (cf.
+  // withAggregatesStale), qui ne sait pas la compter.
+  const onBudget = onBudgetIds(accounts)
+  const offGroups = offBudgetTransferGroups(transactions, onBudget)
+  if (touched.some((t) => isCrossBudgetHalf(t, onBudget, offGroups))) {
+    await withAggregatesStale(userId, decategorize)
+  } else {
+    try {
+      await decategorize()
+    } catch (err) {
+      if (aggTxOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
+      throw err
+    }
+    // Maintenance immediate du lot decategorise : les etapes suivantes peuvent
+    // echouer sans laisser de derive (chaque etape est refletee des qu'elle reussit).
+    if (aggTxOps.length > 0) {
+      await aggMaintain(userId, keys, async (b) => {
+        for (const op of aggTxOps) await b.replaceTx(op.old, op.next)
+      })
+    }
   }
 
   // Purge les assignations et objectifs orphelins (reference dans le payload,
