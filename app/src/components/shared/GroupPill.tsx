@@ -34,7 +34,11 @@ const SIZES = {
   lg: 'h-11 w-11 [&_svg]:h-5 [&_svg]:w-5',
 }
 
-/** Pastille ronde pastel avec l'icone du groupe de categories. */
+/**
+ * Pastille ronde pastel avec l'icone du groupe de categories. Filet interieur
+ * a peine visible (encre a 5 %) + reflet haut : la pastille reste nette sur
+ * une surface de la meme teinte, en clair comme en sombre.
+ */
 export function GroupPill({ group, size = 'md', className }: GroupPillProps) {
   const Icon = group ? ICONS[group.icon] : CircleHelp
   const style = group
@@ -46,14 +50,14 @@ export function GroupPill({ group, size = 'md', className }: GroupPillProps) {
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center justify-center rounded-full',
+        'inline-flex shrink-0 items-center justify-center rounded-full shadow-highlight ring-1 ring-inset ring-ink/[0.05]',
         !group && 'bg-warning/10 text-warning',
         SIZES[size],
         className,
       )}
       style={style}
     >
-      <Icon />
+      <Icon strokeWidth={2.1} />
     </span>
   )
 }
