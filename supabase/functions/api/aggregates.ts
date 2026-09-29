@@ -7,13 +7,23 @@
 //   - account_balances : solde (somme des montants) par compte, TOUS comptes,
 //     TOUTES transactions (transferts et hors-budget compris).
 //   - month_rollups     : activity + assigned par (categorie, mois), limites au
-//     perimetre "budget" (compte on-budget, hors transfert, categorie non nulle).
-//     Reproduit exactement ce que le moteur agrege depuis les transactions brutes
-//     (packages/engine filtre lui-meme : hors-budget, transferts et categoryId
-//     null n'impactent ni activity ni RTA).
+//     perimetre "budget" (compte on-budget, hors transfert entre comptes budget,
+//     categorie non nulle). Reproduit exactement ce que le moteur agrege depuis
+//     les transactions brutes (packages/engine filtre lui-meme : hors-budget,
+//     transferts internes et categoryId null n'impactent ni activity ni RTA ;
+//     la moitie cote budget d'un transfert CROISE budget <-> suivi compte comme
+//     une transaction ordinaire).
 //   - uncat_counts       : nombre de transactions "a categoriser" par mois
-//     (categoryId null, hors transfert, compte on-budget) — pour le badge de
-//     la nav. Les comptes de suivi ne se categorisent pas.
+//     (categoryId null, compte on-budget, hors transfert entre comptes budget)
+//     — pour le badge de la nav. Les comptes de suivi ne se categorisent pas.
+//
+// Transferts CROISES : une contribution isolee (applyContribution) ne connait
+// pas la contrepartie d'une moitie de transfert et la traite comme neutre.
+// Toute ecriture metier dont l'ancien OU le nouveau payload est une moitie
+// croisee n'utilise donc PAS la maintenance incrementale : /api invalide les
+// agregats (aggMarkStale) avant l'ecriture puis a nouveau apres, et seul le
+// recompute complet (groupes de transfert vus en entier) les reconstruit —
+// planifie par /api en arriere-plan des l'accalmie des ecritures.
 //
 // Nouveau budget (REF M, user_settings.budgetStartMonth) : les transactions
 // on-budget ANTERIEURES au mois de depart ne produisent ni activity ni uncat ;
@@ -39,6 +49,13 @@
 //     et ne bascule 'ready' QUE si rev n'a pas bouge (CAS). Un recompute
 //     perdant invalide le marqueur (il peut avoir insere des lignes parasites
 //     apres la bascule d'un recompute gagnant concurrent).
+//   * LIMITE CONNUE : la fence d'une action d'ecriture est posee APRES ses
+//     ecritures metier. Une action longue (lot) chevauchant un recompute peut
+//     donc avoir des lignes dans son snapshot et appliquer ses deltas apres sa
+//     bascule. Les reconstructions en arriere-plan de /api attendent pour cela
+//     l'accalmie et verifient avant la bascule (canCommit) qu'aucune action
+//     d'ecriture n'est en cours dans leur isolate. Les ecritures d'un autre
+//     processus (autre isolate, sync-bank) ne relevent que de la fence.
 //
 // Transport : lectures via computed columns base64 (REF D, enc_b64) ; ecritures
 // directes PostgREST en litteral hex bytea (les RPC enc_insert/enc_update ne
@@ -62,12 +79,15 @@ import {
   encryptJson,
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
+import { countsForBudget, offBudgetTransferGroups } from '../../../packages/engine/src/index.ts'
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { loadUserSettings } from './settings.ts'
 
 // Version de la LOGIQUE d'agregation. La bumper force un recompute : un
 // marqueur d'une version anterieure est traite comme "non pret" (fallback).
-const AGG_VERSION = 2
+// v3 : moities de transferts croises (budget <-> suivi) comptees comme des
+// transactions ordinaires dans les rollups et uncat_counts.
+const AGG_VERSION = 3
 
 /** Pseudo-categorie du rollup « solde de depart » (jamais un UUID de categorie). */
 export const OPENING_CATEGORY = '__opening__'
@@ -492,7 +512,11 @@ async function applyContribution(
     return
   }
 
-  if (tx.transferGroupId) return // transfert : neutre pour activity et uncat
+  // Transfert : neutre pour activity et uncat. PRECONDITION : jamais appele
+  // pour une moitie CROISEE (budget <-> suivi), qui compterait comme une
+  // transaction ordinaire — une contribution isolee ne voit pas sa contrepartie,
+  // les appelants invalident les agregats a la place (voir l'en-tete).
+  if (tx.transferGroupId) return
 
   if (tx.categoryId == null) {
     // A categoriser : compte pour le badge (comptes budget, cf. bootstrap).
@@ -733,12 +757,20 @@ async function setBuilding(admin: Db, keys: CryptoKeys, userId: string): Promise
  * peut avoir insere des lignes parasites apres la bascule d'un gagnant, on
  * prefere le fallback + reconstruction future). En cas d'echec au milieu, le
  * marqueur reste 'building' : non-pret, jamais de chiffre faux.
+ *
+ * `canCommit` (optionnel) : garde de l'appelant evaluee juste avant la bascule.
+ * false = abandon traite comme un recompute perdant (marqueur invalide, retour
+ * false). /api s'en sert pour ses reconstructions en arriere-plan : une action
+ * d'ecriture encore en cours dans l'isolate a pu faire entrer une partie de ses
+ * lignes dans le snapshot alors que sa maintenance (fence en fin d'action, donc
+ * apres la bascule) les recompterait.
  */
 export async function aggRecompute(
   admin: Db,
   keys: CryptoKeys,
   userId: string,
   load: () => Promise<AggSourceData>,
+  canCommit?: () => boolean,
 ): Promise<boolean> {
   // 1. Fence AVANT le snapshot.
   const guardRev = await setBuilding(admin, keys, userId)
@@ -753,6 +785,10 @@ export async function aggRecompute(
   }
 
   const onBudget = new Set(data.accounts.filter((a) => a.onBudget).map((a) => a.id))
+  // Groupes de transfert touchant un compte hors budget, sur TOUTES les
+  // transactions : leurs moities cote budget sont croisees et comptent comme
+  // des transactions ordinaires (meme regle que packages/engine).
+  const offGroups = offBudgetTransferGroups(data.transactions, onBudget)
 
   // Soldes : une ligne par compte (meme a 0), somme de TOUTES les transactions.
   const balances = new Map<string, number>()
@@ -782,7 +818,8 @@ export async function aggRecompute(
       bump(OPENING_CATEGORY, start as string).activity += t.amount
       continue
     }
-    if (t.transferGroupId) continue
+    // Transfert entre comptes budget : neutre (categorie residuelle ignoree).
+    if (!countsForBudget(t, onBudget, offGroups)) continue
     if (t.categoryId == null) continue
     bump(t.categoryId, t.bookingMonth).activity += t.amount
   }
@@ -790,13 +827,13 @@ export async function aggRecompute(
     bump(a.categoryId, a.month).assigned += a.amount
   }
 
-  // Compteur "a categoriser" par mois : comptes budget, hors transfert, a
-  // partir du depart du budget (l'anterieur est gele).
+  // Compteur "a categoriser" par mois : comptes budget, hors transfert entre
+  // comptes budget (une moitie croisee compte), a partir du depart du budget
+  // (l'anterieur est gele).
   const uncat = new Map<string, number>()
   for (const t of data.transactions) {
-    if (!onBudget.has(t.accountId)) continue
+    if (!countsForBudget(t, onBudget, offGroups)) continue
     if (frozen(t)) continue
-    if (t.transferGroupId) continue
     if (t.categoryId != null) continue
     uncat.set(t.bookingMonth, (uncat.get(t.bookingMonth) ?? 0) + 1)
   }
@@ -847,6 +884,11 @@ export async function aggRecompute(
   const readyHex = bytesToPgHex(
     await encryptJson(keys, { version: AGG_VERSION, status: 'ready' } satisfies StatePayload, STATE_CTX(userId)),
   )
+  // Garde de l'appelant, evaluee sans await avant l'envoi de la bascule.
+  if (canCommit && !canCommit()) {
+    await aggMarkStale(admin, userId).catch(() => {})
+    return false
+  }
   const { data: upd, error: updErr } = await admin
     .from('aggregate_state')
     .update({ rev: guardRev + 1, enc_payload: readyHex, built_at: new Date().toISOString() })

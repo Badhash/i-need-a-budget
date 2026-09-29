@@ -777,13 +777,21 @@ function lastSuccessfulRunDate(
 const CARD_SETTLEMENT_RE = /CARTE\s+DEPENSES|DEPENSES\s+CARTE|CARTE\s+X?\d{4}\s+AU\s+\d{2}\/\d{2}/i
 
 // Detecte les prelevements de reglement de carte a debit differe importes et
-// les transforme en transferts (sans categorie, hors activity/RTA) :
-//   1. debit sans categorie ni transfert dont le libelle matche ci-dessus ;
+// les transforme en transferts :
+//   1. debit hors transfert dont le libelle matche ci-dessus, sans categorie
+//      (ou, sur un compte budget, deja categorise a l'import par les regles ou
+//      la memoire de tiers : voir paires croisees ci-dessous) ;
 //   2. credit exactement oppose sur un AUTRE compte, sans categorie ni
 //      transfert, a +/- 5 jours -> liaison si le match est UNIQUE et non
 //      ambigu dans les deux sens ;
 //   3. sinon, s'il existe EXACTEMENT UN compte 'card_deferred', creation de la
 //      transaction miroir crediteuse sur ce compte puis liaison.
+// Paire entre deux comptes budget (ou deux comptes de suivi) : transfert
+// neutre, sans categorie, hors activity/RTA (comportement historique). Paire
+// CROISEE (un compte budget, un compte de suivi, regle YNAB) : la moitie cote
+// budget compte comme une transaction ordinaire et GARDE la categorie posee a
+// l'import ; la moitie cote suivi n'en porte jamais. Un debit categorise ne se
+// lie qu'a une contrepartie hors budget (jamais de categorie retiree).
 // Conservateur par construction : au moindre doute (plusieurs matches
 // possibles), on ne touche a rien. Renvoie le nombre de paires liees.
 
@@ -842,25 +850,36 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
   const accounts = await loadAll<AccountPayload>('accounts', userId)
   const cardAccounts = accounts.filter((a) => a.kind === 'card_deferred' && !a.closed)
   const cardAccount = cardAccounts.length === 1 ? cardAccounts[0] : null
+  const onBudget = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
 
-  // Candidats : debits sans categorie ni transfert au libelle de reglement carte.
+  // Candidats : debits hors transfert au libelle de reglement carte, sans
+  // categorie, ou categorises sur un compte budget (paire croisee seulement).
   const candidates = txs.filter(
     (t) =>
       t.payload.amount < 0 &&
-      !t.payload.categoryId &&
+      (!t.payload.categoryId || onBudget.has(t.payload.accountId)) &&
       !t.payload.transferGroupId &&
       CARD_SETTLEMENT_RE.test(normalizeLabel(t.payload.label)),
   )
 
   // Credit lie a un candidat : montant exactement oppose, autre compte, sans
-  // categorie ni transfert, a +/- 5 jours.
+  // categorie ni transfert, a +/- 5 jours. Un debit categorise ne se lie qu'a
+  // un credit hors budget (paire croisee : sa categorie est conservee).
   const isCounterpart = (credit: DecryptedTx, debit: DecryptedTx): boolean =>
     credit.id !== debit.id &&
     credit.payload.accountId !== debit.payload.accountId &&
     credit.payload.amount === -debit.payload.amount &&
     !credit.payload.categoryId &&
     !credit.payload.transferGroupId &&
-    dayDiff(credit.payload.bookingDate, debit.payload.bookingDate) <= 5
+    dayDiff(credit.payload.bookingDate, debit.payload.bookingDate) <= 5 &&
+    (!debit.payload.categoryId || !onBudget.has(credit.payload.accountId))
+
+  // Categorie d'une moitie une fois liee a une moitie du compte `otherAccountId` :
+  // conservee cote budget d'une paire croisee, retiree sinon (transfert neutre).
+  const linkedCategory = (half: DecryptedTx, otherAccountId: string): string | null =>
+    onBudget.has(half.payload.accountId) && !onBudget.has(otherAccountId)
+      ? half.payload.categoryId
+      : null
 
   const used = new Set<string>()
   let linkedPairs = 0
@@ -882,12 +901,12 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
       const transferGroupId = crypto.randomUUID()
       await updateTx(userId, candidate.id, {
         ...candidate.payload,
-        categoryId: null,
+        categoryId: linkedCategory(candidate, credit.payload.accountId),
         transferGroupId,
       })
       await updateTx(userId, credit.id, {
         ...credit.payload,
-        categoryId: null,
+        categoryId: linkedCategory(credit, candidate.payload.accountId),
         transferGroupId,
       })
       used.add(candidate.id)
@@ -901,7 +920,9 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
       // dedupliquable contre un miroir tx_hash null) : creer le miroir
       // produirait un doublon. Le repli est reserve aux comptes carte manuels.
       !cardAccount.providerAccountUid &&
-      cardAccount.id !== candidate.payload.accountId
+      cardAccount.id !== candidate.payload.accountId &&
+      // Debit categorise : miroir seulement vers un compte carte hors budget.
+      (!candidate.payload.categoryId || !onBudget.has(cardAccount.id))
     ) {
       // Aucun credit correspondant : le releve de la carte n'est pas (encore)
       // importe. On cree la transaction miroir sur l'unique compte carte
@@ -923,7 +944,7 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
       })
       await updateTx(userId, candidate.id, {
         ...candidate.payload,
-        categoryId: null,
+        categoryId: linkedCategory(candidate, cardAccount.id),
         transferGroupId,
       })
       used.add(candidate.id)
@@ -1192,9 +1213,11 @@ async function syncUser(
   // regle perimee) ne doit jamais etre ecrite sur un import.
   const knownCategories = new Set(categories.filter((c) => !c.isIncome).map((c) => c.id))
 
+  // Un compte clos (archive, solde nul) ne recoit plus d'activite : il n'est
+  // plus synchronise, comme un compte EB non lie.
   const accountByUid = new Map<string, WithId<AccountPayload>>()
   for (const acc of accounts) {
-    if (acc.providerAccountUid) accountByUid.set(acc.providerAccountUid, acc)
+    if (acc.providerAccountUid && !acc.closed) accountByUid.set(acc.providerAccountUid, acc)
   }
 
   // Marqueur incremental : on charge et dechiffre les derniers sync_logs pour
@@ -1683,9 +1706,11 @@ async function actionReconcile(userId: string) {
     loadAll<AccountPayload>('accounts', userId),
     loadAll<CategoryPayload>('categories', userId),
   ])
+  // Compte clos (archive a solde nul) : jamais rapproche, son solde doit
+  // rester nul (meme exclusion que la synchronisation).
   const accountByUid = new Map<string, WithId<AccountPayload>>()
   for (const acc of accounts) {
-    if (acc.providerAccountUid) accountByUid.set(acc.providerAccountUid, acc)
+    if (acc.providerAccountUid && !acc.closed) accountByUid.set(acc.providerAccountUid, acc)
   }
 
   // Meme choix de categorie que /api actionCreateAccount : la categorie de

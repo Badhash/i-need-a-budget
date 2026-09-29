@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   addMonths,
   computeBudget,
+  countsForBudget,
+  isCrossBudgetHalf,
   monthRange,
+  offBudgetTransferGroups,
   type BudgetInput,
   type CategoryMonth,
+  type Transaction,
 } from './index.ts'
 
 const CHECKING = { id: 'acc-checking', onBudget: true }
@@ -14,6 +18,7 @@ const PEA = { id: 'acc-pea', onBudget: false }
 const INCOME = { id: 'cat-income', isIncome: true }
 const FOOD = { id: 'cat-food', isIncome: false }
 const RENT = { id: 'cat-rent', isIncome: false }
+const INVEST = { id: 'cat-invest', isIncome: false }
 
 function base(overrides: Partial<BudgetInput>): BudgetInput {
   return {
@@ -427,5 +432,341 @@ describe('nouveau budget (startMonth)', () => {
 
   it('rejette un mois de depart mal forme', () => {
     expect(() => computeBudget(base({ month: '2026-03', startMonth: '2026-3' }))).toThrow()
+  })
+})
+
+describe('transferts croises (compte budget <-> compte de suivi)', () => {
+  const ON_BUDGET = new Set([CHECKING.id, SAVINGS.id])
+
+  // Paire de transfert : la moitie `from` porte -amount, la moitie `to` +amount.
+  function transfer(
+    group: string,
+    month: string,
+    amount: number,
+    from: { accountId: string; categoryId?: string | null },
+    to: { accountId: string; categoryId?: string | null },
+  ): Transaction[] {
+    return [
+      {
+        id: `${group}-from`,
+        accountId: from.accountId,
+        categoryId: from.categoryId ?? null,
+        month,
+        amount: -amount,
+        transferGroupId: group,
+      },
+      {
+        id: `${group}-to`,
+        accountId: to.accountId,
+        categoryId: to.categoryId ?? null,
+        month,
+        amount,
+        transferGroupId: group,
+      },
+    ]
+  }
+
+  const withInvest = (overrides: Partial<BudgetInput>) =>
+    base({ categories: [INCOME, FOOD, RENT, INVEST], ...overrides })
+
+  it('les helpers distinguent moitie croisee, transfert interne et orphelin', () => {
+    const txs = [
+      ...transfer('g-cross', '2026-02', 30_000, { accountId: CHECKING.id }, { accountId: PEA.id }),
+      ...transfer('g-inner', '2026-02', 20_000, { accountId: CHECKING.id }, { accountId: SAVINGS.id }),
+      ...transfer('g-track', '2026-02', 10_000, { accountId: PEA.id }, { accountId: 'acc-inconnu' }),
+      { id: 'orphan', accountId: CHECKING.id, categoryId: null, month: '2026-02', amount: -5_000, transferGroupId: 'g-orphan' },
+      { id: 'plain', accountId: CHECKING.id, categoryId: null, month: '2026-02', amount: -1_000 },
+    ]
+    const off = offBudgetTransferGroups(txs, ON_BUDGET)
+    expect([...off].sort()).toEqual(['g-cross', 'g-track'])
+    const byId = new Map(txs.map((t) => [t.id, t]))
+    const t = (id: string) => byId.get(id)!
+    // Moitie cote budget du transfert croise : croisee, comptee.
+    expect(isCrossBudgetHalf(t('g-cross-from'), ON_BUDGET, off)).toBe(true)
+    expect(countsForBudget(t('g-cross-from'), ON_BUDGET, off)).toBe(true)
+    // Moitie cote suivi : jamais croisee ni comptee.
+    expect(isCrossBudgetHalf(t('g-cross-to'), ON_BUDGET, off)).toBe(false)
+    expect(countsForBudget(t('g-cross-to'), ON_BUDGET, off)).toBe(false)
+    // Transfert entre comptes budget : neutre des deux cotes.
+    expect(countsForBudget(t('g-inner-from'), ON_BUDGET, off)).toBe(false)
+    expect(countsForBudget(t('g-inner-to'), ON_BUDGET, off)).toBe(false)
+    // Transfert entre comptes hors budget (ou inconnu) : hors perimetre.
+    expect(countsForBudget(t('g-track-from'), ON_BUDGET, off)).toBe(false)
+    // Demi-transfert orphelin sur un compte budget : reste neutre.
+    expect(isCrossBudgetHalf(t('orphan'), ON_BUDGET, off)).toBe(false)
+    expect(countsForBudget(t('orphan'), ON_BUDGET, off)).toBe(false)
+    // Transaction ordinaire d'un compte budget : comptee.
+    expect(countsForBudget(t('plain'), ON_BUDGET, off)).toBe(true)
+  })
+
+  it('un virement courant -> PEA categorise Investissement baisse le disponible de l enveloppe', () => {
+    const input = withInvest({
+      month: '2026-02',
+      transactions: [
+        salary('2026-02'),
+        ...transfer(
+          'g-pea',
+          '2026-02',
+          30_000,
+          { accountId: CHECKING.id, categoryId: INVEST.id },
+          { accountId: PEA.id },
+        ),
+      ],
+      assignments: [{ categoryId: INVEST.id, month: '2026-02', amount: 50_000 }],
+    })
+    const feb = computeBudget(input)
+    expect(cat(feb, INVEST.id)).toEqual({
+      categoryId: INVEST.id,
+      rollover: 0,
+      assigned: 50_000,
+      activity: -30_000,
+      available: 20_000,
+    })
+    // L'argent sorti du budget est une depense d'enveloppe, pas un revenu perdu.
+    expect(feb.readyToAssign).toBe(200_000 - 50_000)
+    // Le reliquat se reporte normalement.
+    const mar = computeBudget({ ...input, month: '2026-03' })
+    expect(cat(mar, INVEST.id)).toMatchObject({ rollover: 20_000, available: 20_000 })
+  })
+
+  it('une moitie croisee non categorisee est ignoree par activity et RTA (a categoriser)', () => {
+    const result = computeBudget(
+      withInvest({
+        month: '2026-02',
+        transactions: [
+          salary('2026-02'),
+          ...transfer('g-pea', '2026-02', 30_000, { accountId: CHECKING.id }, { accountId: PEA.id }),
+        ],
+      }),
+    )
+    expect(result.totals.activity).toBe(0)
+    expect(result.readyToAssign).toBe(200_000)
+  })
+
+  it('un depassement cause par une moitie croisee se deduit du RTA le mois suivant', () => {
+    const result = computeBudget(
+      withInvest({
+        month: '2026-03',
+        transactions: [
+          salary('2026-02'),
+          ...transfer(
+            'g-pea',
+            '2026-02',
+            30_000,
+            { accountId: CHECKING.id, categoryId: INVEST.id },
+            { accountId: PEA.id },
+          ),
+        ],
+        assignments: [{ categoryId: INVEST.id, month: '2026-02', amount: 20_000 }],
+      }),
+    )
+    expect(cat(result, INVEST.id)).toMatchObject({ rollover: 0, available: 0 })
+    expect(result.readyToAssign).toBe(200_000 - 20_000 - 10_000)
+  })
+
+  it('un transfert entre deux comptes budget reste neutre meme categorise (defensif)', () => {
+    const result = computeBudget(
+      withInvest({
+        month: '2026-02',
+        transactions: [
+          salary('2026-02'),
+          ...transfer(
+            'g-sav',
+            '2026-02',
+            20_000,
+            { accountId: CHECKING.id, categoryId: FOOD.id },
+            { accountId: SAVINGS.id, categoryId: INCOME.id },
+          ),
+        ],
+        assignments: [{ categoryId: FOOD.id, month: '2026-02', amount: 5_000 }],
+      }),
+    )
+    expect(cat(result, FOOD.id)).toMatchObject({ activity: 0, available: 5_000 })
+    expect(result.totals.activity).toBe(0)
+    expect(result.readyToAssign).toBe(200_000 - 5_000)
+  })
+
+  it('un retrait du PEA categorise en revenus alimente le Pret a assigner', () => {
+    const result = computeBudget(
+      withInvest({
+        month: '2026-02',
+        transactions: [
+          salary('2026-02'),
+          ...transfer(
+            'g-back',
+            '2026-02',
+            50_000,
+            { accountId: PEA.id },
+            { accountId: CHECKING.id, categoryId: INCOME.id },
+          ),
+        ],
+      }),
+    )
+    expect(result.readyToAssign).toBe(250_000)
+    expect(result.totals.activity).toBe(0)
+  })
+
+  it('la moitie cote suivi ne compte jamais, meme categorisee', () => {
+    const result = computeBudget(
+      withInvest({
+        month: '2026-02',
+        transactions: [
+          salary('2026-02'),
+          ...transfer(
+            'g-pea',
+            '2026-02',
+            30_000,
+            { accountId: CHECKING.id, categoryId: INVEST.id },
+            { accountId: PEA.id, categoryId: FOOD.id },
+          ),
+        ],
+      }),
+    )
+    expect(cat(result, FOOD.id).activity).toBe(0)
+    expect(cat(result, INVEST.id).activity).toBe(-30_000)
+    expect(result.readyToAssign).toBe(200_000)
+  })
+
+  it('le caractere croise se lit sur tous les mois (moities a cheval sur deux mois)', () => {
+    const out = {
+      id: 'g-late-from',
+      accountId: CHECKING.id,
+      categoryId: INVEST.id,
+      month: '2026-02',
+      amount: -30_000,
+      transferGroupId: 'g-late',
+    }
+    const into = { ...out, id: 'g-late-to', accountId: PEA.id, categoryId: null, month: '2026-03', amount: 30_000 }
+    const result = computeBudget(
+      withInvest({ month: '2026-02', transactions: [salary('2026-02'), out, into] }),
+    )
+    // La moitie cote suivi est dans un mois futur : la paire reste croisee.
+    expect(cat(result, INVEST.id).activity).toBe(-30_000)
+  })
+
+  it('nouveau budget : une moitie croisee anterieure au depart ne vaut que par son solde brut', () => {
+    const txs: Transaction[] = [
+      salary('2026-01', 300_000),
+      // Avant le depart : gelee dans le solde de depart, categorie ignoree.
+      ...transfer(
+        'g-old',
+        '2026-02',
+        40_000,
+        { accountId: CHECKING.id, categoryId: INVEST.id },
+        { accountId: PEA.id },
+      ),
+      // Apres le depart : activity de l'enveloppe.
+      ...transfer(
+        'g-new',
+        '2026-03',
+        25_000,
+        { accountId: CHECKING.id, categoryId: INVEST.id },
+        { accountId: PEA.id },
+      ),
+      // Apres le depart, non categorisee : a categoriser.
+      ...transfer('g-unc', '2026-03', 5_000, { accountId: CHECKING.id }, { accountId: PEA.id }),
+    ]
+    const r = computeBudget(
+      withInvest({
+        month: '2026-03',
+        startMonth: '2026-03',
+        transactions: txs,
+        assignments: [
+          { categoryId: INVEST.id, month: '2026-02', amount: 40_000 },
+          { categoryId: INVEST.id, month: '2026-03', amount: 30_000 },
+        ],
+      }),
+    )
+    // Solde de depart : 300 000 - 40 000 ; assignation de fevrier ignoree.
+    expect(r.readyToAssign).toBe(260_000 - 30_000)
+    expect(cat(r, INVEST.id)).toEqual({
+      categoryId: INVEST.id,
+      rollover: 0,
+      assigned: 30_000,
+      activity: -25_000,
+      available: 5_000,
+    })
+    // Identite : comptes budget = RTA + disponibles + non categorisees.
+    const balance = 300_000 - 40_000 - 25_000 - 5_000
+    expect(r.readyToAssign + r.totals.available + -5_000).toBe(balance)
+  })
+
+  it('identite comptes budget = RTA + disponibles + non categorisees sur un scenario mixte', () => {
+    const txs: Transaction[] = [
+      salary('2026-01'),
+      salary('2026-02'),
+      salary('2026-03'),
+      // Depassement de 10 000 en janvier (deduit du RTA suivant).
+      { id: 'food-01', accountId: CHECKING.id, categoryId: FOOD.id, month: '2026-01', amount: -60_000 },
+      { id: 'food-02', accountId: CHECKING.id, categoryId: FOOD.id, month: '2026-02', amount: -20_000 },
+      { id: 'rent-03', accountId: CHECKING.id, categoryId: RENT.id, month: '2026-03', amount: -90_000 },
+      // Ordinaire a categoriser.
+      { id: 'uncat-02', accountId: CHECKING.id, categoryId: null, month: '2026-02', amount: -7_000 },
+      // Transfert interne (categorie parasite ignoree).
+      ...transfer(
+        'g-inner',
+        '2026-02',
+        50_000,
+        { accountId: CHECKING.id, categoryId: FOOD.id },
+        { accountId: SAVINGS.id },
+      ),
+      // Croise categorise en enveloppe.
+      ...transfer(
+        'g-invest',
+        '2026-03',
+        30_000,
+        { accountId: CHECKING.id, categoryId: INVEST.id },
+        { accountId: PEA.id },
+      ),
+      // Croise a categoriser (depuis l'epargne).
+      ...transfer('g-unc', '2026-03', 10_000, { accountId: SAVINGS.id }, { accountId: PEA.id }),
+      // Croise entrant categorise en revenus.
+      ...transfer(
+        'g-income',
+        '2026-02',
+        15_000,
+        { accountId: PEA.id },
+        { accountId: CHECKING.id, categoryId: INCOME.id },
+      ),
+      // Croise entrant categorise en enveloppe (remboursement).
+      ...transfer(
+        'g-refund',
+        '2026-03',
+        2_000,
+        { accountId: PEA.id },
+        { accountId: CHECKING.id, categoryId: FOOD.id },
+      ),
+      // Compte de suivi seul : jamais compte.
+      { id: 'pea-div', accountId: PEA.id, categoryId: INCOME.id, month: '2026-01', amount: 1_000_000 },
+      { id: 'pea-fee', accountId: PEA.id, categoryId: FOOD.id, month: '2026-03', amount: -500 },
+      // Futur : hors du mois cible.
+      { id: 'future', accountId: CHECKING.id, categoryId: FOOD.id, month: '2026-04', amount: -3_000 },
+    ]
+    const r = computeBudget(
+      withInvest({
+        month: '2026-03',
+        transactions: txs,
+        assignments: [
+          { categoryId: FOOD.id, month: '2026-01', amount: 50_000 },
+          { categoryId: FOOD.id, month: '2026-02', amount: 30_000 },
+          { categoryId: RENT.id, month: '2026-03', amount: 90_000 },
+          { categoryId: INVEST.id, month: '2026-03', amount: 40_000 },
+        ],
+      }),
+    )
+    expect(r.readyToAssign).toBe(615_000 - 210_000 - 10_000)
+    expect(cat(r, FOOD.id).available).toBe(12_000)
+    expect(cat(r, RENT.id).available).toBe(0)
+    expect(cat(r, INVEST.id).available).toBe(10_000)
+
+    // Cote gauche calcule sans la regle des transferts : somme brute des
+    // comptes budget jusqu'au mois cible.
+    const onBudgetBalance = txs
+      .filter((t) => (t.accountId === CHECKING.id || t.accountId === SAVINGS.id) && t.month <= '2026-03')
+      .reduce((sum, t) => sum + t.amount, 0)
+    expect(onBudgetBalance).toBe(400_000)
+    // Non categorisees comptees : l'ordinaire et la moitie croisee de l'epargne.
+    const uncategorized = -7_000 + -10_000
+    expect(r.readyToAssign + r.totals.available + uncategorized).toBe(onBudgetBalance)
   })
 })

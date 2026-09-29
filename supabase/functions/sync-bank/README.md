@@ -32,10 +32,14 @@ verifie a la main l'identite. Deux modes d'appel :
   connexion ; `sinceDays` force une fenetre plus profonde pour l'import initial,
   plafonnee a ~730 jours), mapping, dedup (`tx_hash`), categorisation par regles,
   insertion chiffree, appariement des prelevements carte a debit differe,
-  journalisation dans `sync_logs`.
+  journalisation dans `sync_logs`. Appariement entre un compte budget et un
+  compte de suivi (transfert croise, regle YNAB) : la moitie cote budget garde
+  la categorie posee a l'import ; entre deux comptes budget, transfert neutre
+  sans categorie. Un compte clos n'est plus synchronise.
 - `reconcile {}` (utilisateur ou cron) -> recale le solde d'ouverture de chaque
-  compte lie pour que le solde local corresponde au solde reel Enable Banking.
-  Enchaine automatiquement apres un `sync` declenche avec `sinceDays`.
+  compte lie (hors comptes clos) pour que le solde local corresponde au solde
+  reel Enable Banking. Enchaine automatiquement apres un `sync` declenche avec
+  `sinceDays`.
 
 ## Secrets Edge a configurer (dashboard Supabase > Edge Functions > Secrets)
 
