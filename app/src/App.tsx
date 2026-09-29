@@ -20,6 +20,7 @@ import {
   reportsKey,
   type Bootstrap,
 } from '@/lib/data'
+import { markServerSync } from '@/lib/freshness'
 import { RULES_KEY, fetchRules } from '@/lib/rules'
 import { TARGETS_KEY, fetchTargets } from '@/lib/targets'
 import { maxMonth, MIN_MONTH, addMonths } from '@/lib/format'
@@ -61,6 +62,9 @@ async function preloadCritical(
     queryClient.setQueryData(budgetKey(month), full.budget)
     queryClient.setQueryData(TRANSACTIONS_KEY, full.transactions)
     queryClient.setQueryData(reportsKey(month), full.reports)
+    // Donnees fraiches du serveur (et non une mise a jour optimiste) :
+    // l'indicateur de fraicheur part de cet instant.
+    markServerSync([BOOTSTRAP_KEY, budgetKey(month), TRANSACTIONS_KEY, reportsKey(month)])
     return full.bootstrap
   } catch {
     // Demarrage consolide indisponible : on entre quand meme, les vues gerent

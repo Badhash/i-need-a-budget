@@ -2,9 +2,20 @@
 // Chaque appel joint le JWT de la session Supabase courante. Le serveur
 // dechiffre en memoire et renvoie du JSON en clair sur TLS.
 
+import { isAuthRetryableFetchError } from '@supabase/supabase-js'
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '@/lib/supabase'
 import { markLocalWrite } from '@/lib/realtimeGate'
 import { mfaSatisfied } from '@/lib/mfa'
+import {
+  NetworkError,
+  isNetworkError,
+  reportNetworkFailure,
+  reportNetworkSuccess,
+} from '@/lib/connectivity'
+
+// Erreurs reseau : definies dans lib/connectivity (sans dependance a ce module),
+// reexportees ici a cote d'ApiError pour les appelants.
+export { NetworkError, isNetworkError }
 
 const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1/api`
 const ANON_KEY = SUPABASE_ANON_KEY
@@ -58,30 +69,62 @@ export async function apiCall<T>(
   // demande. Branche morte hors demo : le module est absent du build de prod.
   if (import.meta.env.VITE_DEMO === '1') {
     const { demoApiCall } = await import('@/dev/demo')
-    return demoApiCall<T>(action, params)
+    try {
+      const result = await demoApiCall<T>(action, params)
+      reportNetworkSuccess()
+      return result
+    } catch (err) {
+      // Meme contrat que le vrai transport : coupure -> NetworkError (et sonde),
+      // erreur metier -> ApiError, preuve que le serveur a repondu.
+      if (isNetworkError(err)) {
+        reportNetworkFailure()
+        throw new NetworkError()
+      }
+      if (err instanceof ApiError) reportNetworkSuccess()
+      throw err
+    }
   }
 
   const {
     data: { session },
+    error: sessionError,
   } = await supabase.auth.getSession()
-  if (!session) throw new ApiError(401, 'Session expiree, reconnecte-toi.')
+  if (!session) {
+    // Jeton expire dont le rafraichissement a echoue FAUTE DE RESEAU : ce n'est
+    // pas une session expiree (pas de « Se reconnecter » hors ligne), la
+    // requete sera rejouee au retour du reseau.
+    if (sessionError && isAuthRetryableFetchError(sessionError)) {
+      reportNetworkFailure()
+      throw new NetworkError()
+    }
+    throw new ApiError(401, 'Session expiree, reconnecte-toi.')
+  }
 
   // Ecriture : on horodate AVANT l'envoi (le signal Realtime peut arriver via
   // websocket avant meme que ce fetch ne resolve) et de nouveau au succes.
   const isWrite = !READ_ACTION.test(action)
   if (isWrite) markLocalWrite()
 
-  const res = await fetch(FUNCTIONS_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: ANON_KEY,
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify({ action, params }),
-  })
-
-  const text = await res.text()
+  // fetch() ne rejette que sans reponse (coupure, DNS, CORS) : NetworkError,
+  // rejouable. Une reponse, meme en erreur, prouve que le reseau fonctionne.
+  let res: Response
+  let text: string
+  try {
+    res = await fetch(FUNCTIONS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: ANON_KEY,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ action, params }),
+    })
+    text = await res.text()
+  } catch {
+    reportNetworkFailure()
+    throw new NetworkError()
+  }
+  reportNetworkSuccess()
   let body: unknown = null
   try {
     body = text ? JSON.parse(text) : null

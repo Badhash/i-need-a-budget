@@ -1,7 +1,8 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { App } from '@/App'
+import { createAppQueryClient } from '@/lib/queryClient'
 import { useUiStore } from '@/stores/ui'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import '@/styles/globals.css'
@@ -13,21 +14,12 @@ for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
   document.addEventListener(type, (e) => e.preventDefault(), { passive: false })
 }
 
-// Apres le prechargement complet au lancement (cf. AuthedBootGate), on veut une
-// navigation 100 % instantanee : aucun refetch de fond ne doit se declencher au
-// changement de mois ou d'ecran pendant la session. On fige donc les donnees
-// (staleTime: Infinity). La fraicheur reste garantie autrement : reconciliation
-// par le signal Realtime et les mutations optimistes, qui appellent
-// invalidateQueries -> une invalidation force le refetch quel que soit le
-// staleTime, donc ce reglage ne casse pas les invalidations existantes.
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: Infinity,
-      retry: 1,
-    },
-  },
-})
+// Apres le prechargement au lancement (cf. AuthedBootGate), la navigation est
+// instantanee : donnees figees (staleTime: Infinity), fraicheur assuree par le
+// signal Realtime, les mutations optimistes et l'actualisation manuelle.
+// Politique d'essais (coupures reseau seulement), pause hors ligne et toasts
+// d'echec : voir lib/queryClient.
+const queryClient = createAppQueryClient()
 
 // Raccourci PWA (manifest shortcuts) « Ajouter une transaction » : l'URL de
 // lancement porte `?ajouter=1` dans le hash. Lu UNE fois au demarrage, on ouvre
