@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CircleAlert, CircleCheck, TriangleAlert, X, type LucideIcon } from 'lucide-react'
+import { useDialogOpen } from '@/components/ui/dialog'
 import { dismissToast, useToastStore, type ToastItem, type ToastTone } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 
@@ -46,6 +47,10 @@ function ToastView({ item }: { item: ToastItem }) {
       onPointerLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
+      // Un clic sur le toast ne prend pas le focus : le champ en cours de saisie
+      // (feuille ouverte, clavier iOS) le garde, et le piege de focus du
+      // dialog n'est pas sollicite.
+      onMouseDown={(e) => e.preventDefault()}
       className={cn(
         'pointer-events-auto flex w-full items-center gap-3 rounded-2xl border border-edge bg-surface3 py-2 pl-4 pr-1.5 shadow-elevated',
         item.closing ? 'animate-toast-out' : 'animate-toast-in',
@@ -85,16 +90,31 @@ function ToastView({ item }: { item: ToastItem }) {
 }
 
 /**
- * Pile de toasts globale (monte une fois dans AppShell). Mobile : au-dessus de
- * la barre de navigation ; desktop : coin bas droit. Le plus recent en bas.
+ * Pile de toasts globale (monte une fois dans AppShell). Mobile : au-dessus du
+ * bouton Ajouter (lui-meme au-dessus de la barre de navigation), jamais
+ * dessus ; desktop : coin bas droit. Le plus recent au plus pres du bord.
+ *
+ * Feuille ou modale ouverte : la pile passe en HAUT de l'ecran (coin haut
+ * droit en desktop) pour ne masquer ni le pied d'actions de la feuille ni
+ * finir sous le clavier iOS. Elle est declaree couche toleree (data-toaster) :
+ * la toucher ne ferme pas le dialog ouvert dessous.
  */
 export function Toaster() {
   const toasts = useToastStore((s) => s.toasts)
+  const dialogOpen = useDialogOpen()
   return createPortal(
     <div
+      data-toaster=""
       role="status"
       aria-live="polite"
-      className="pointer-events-none fixed inset-x-0 bottom-[calc(6.5rem+env(safe-area-inset-bottom))] z-[60] mx-auto flex w-full max-w-md flex-col gap-2 px-4 lg:inset-x-auto lg:bottom-6 lg:right-6 lg:w-[380px] lg:max-w-none lg:px-0"
+      className={cn(
+        'pointer-events-none fixed inset-x-0 z-[60] mx-auto flex w-full max-w-md gap-2 px-4 lg:inset-x-auto lg:right-6 lg:w-[380px] lg:max-w-none lg:px-0',
+        dialogOpen
+          ? // En haut : le plus recent contre le bord, entree par le haut.
+            'top-[calc(env(safe-area-inset-top)+0.5rem)] flex-col-reverse [--toast-dy:-16px] lg:top-6'
+          : // 6,5rem (bas du bouton Ajouter) + 3,5rem (sa hauteur) + 0,75rem d'air.
+            'bottom-[calc(10.75rem+env(safe-area-inset-bottom))] flex-col lg:bottom-6',
+      )}
     >
       {toasts.map((t) => (
         <ToastView key={t.id} item={t} />

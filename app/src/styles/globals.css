@@ -357,10 +357,12 @@
     transform: translate(-50%, calc(-50% + 8px)) scale(0.97);
   }
 }
+/* Sens d'entree des toasts : --toast-dy (16px = par le bas, -16px quand la
+   pile est en haut de l'ecran, voir Toaster). */
 @keyframes inab-toast-in {
   from {
     opacity: 0;
-    transform: translate3d(0, 16px, 0) scale(0.96);
+    transform: translate3d(0, var(--toast-dy, 16px), 0) scale(0.96);
   }
   to {
     opacity: 1;
@@ -374,7 +376,7 @@
   }
   to {
     opacity: 0;
-    transform: translate3d(0, 8px, 0) scale(0.96);
+    transform: translate3d(0, calc(var(--toast-dy, 16px) / 2), 0) scale(0.96);
   }
 }
 @keyframes inab-pop {

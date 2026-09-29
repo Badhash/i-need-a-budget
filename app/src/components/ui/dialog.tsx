@@ -3,7 +3,55 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const Dialog = DialogPrimitive.Root
+// Dialogs ouverts (etat logique, hors animation de sortie) : les couches
+// globales s'en ecartent. Le Toaster remonte sa pile en haut de l'ecran tant
+// qu'une feuille occupe le bas (pied d'actions, clavier iOS).
+let openDialogs = 0
+const openListeners = new Set<() => void>()
+
+function subscribeOpenDialogs(listener: () => void): () => void {
+  openListeners.add(listener)
+  return () => {
+    openListeners.delete(listener)
+  }
+}
+
+function shiftOpenDialogs(delta: number): void {
+  openDialogs += delta
+  openListeners.forEach((listener) => listener())
+}
+
+/** Vrai tant qu'au moins un Dialog (feuille ou modale) est ouvert. */
+function useDialogOpen(): boolean {
+  return React.useSyncExternalStore(subscribeOpenDialogs, () => openDialogs > 0, () => false)
+}
+
+/**
+ * Racine Radix qui declare en plus son ouverture (useDialogOpen). Controlee en
+ * interne ; le mode non controle (defaultOpen) reste supporte.
+ */
+function Dialog({ open: openProp, defaultOpen, onOpenChange, ...props }: DialogPrimitive.DialogProps) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false)
+  const open = openProp ?? uncontrolledOpen
+  // Effet de mise en page : l'etat est publie avant la peinture, les couches
+  // qui en dependent se placent dans la meme image que la feuille.
+  React.useLayoutEffect(() => {
+    if (!open) return
+    shiftOpenDialogs(1)
+    return () => shiftOpenDialogs(-1)
+  }, [open])
+  return (
+    <DialogPrimitive.Root
+      {...props}
+      open={open}
+      onOpenChange={(next) => {
+        if (openProp === undefined) setUncontrolledOpen(next)
+        onOpenChange?.(next)
+      }}
+    />
+  )
+}
+
 const DialogTrigger = DialogPrimitive.Trigger
 const DialogClose = DialogPrimitive.Close
 
@@ -68,11 +116,11 @@ const DialogContent = React.forwardRef<
       <DialogOverlay />
       <DialogPrimitive.Content
         ref={ref}
-        // Les popovers maison (CategoryPicker) sont portalises dans body, donc
-        // "dehors" pour Radix : sans cette garde, le premier tap dessus fermait le
-        // dialog qui les contient.
+        // Les popovers maison (CategoryPicker) et la pile de toasts (Toaster)
+        // sont portalises dans body, donc "dehors" pour Radix : sans cette
+        // garde, un tap dessus fermait le dialog ouvert (saisie perdue).
         onInteractOutside={(e) => {
-          if ((e.target as HTMLElement | null)?.closest?.('[data-inab-popover]')) e.preventDefault()
+          if ((e.target as HTMLElement | null)?.closest?.('[data-inab-popover],[data-toaster]')) e.preventDefault()
           onInteractOutside?.(e)
         }}
         // Remise a zero du glisse a chaque ouverture / fin de fermeture : le
@@ -165,6 +213,7 @@ DialogDescription.displayName = 'DialogDescription'
 
 export {
   Dialog,
+  useDialogOpen,
   DialogTrigger,
   DialogClose,
   DialogContent,
