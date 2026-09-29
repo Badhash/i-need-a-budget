@@ -14,7 +14,8 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      'fixed inset-0 z-50 bg-black/45 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
+      // Voile teinte (token --scrim) + leger flou : le contexte reste lisible.
+      'fixed inset-0 z-50 bg-scrim backdrop-blur-[2px] data-[state=closed]:animate-fade-out data-[state=open]:animate-fade-in',
       className,
     )}
     {...props}
@@ -22,43 +23,116 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = 'DialogOverlay'
 
+// Glisser la poignee vers le bas ferme la feuille au-dela de ce seuil (px) ou
+// d'une vitesse suffisante (px/ms) : geste natif des feuilles iOS.
+const DISMISS_DISTANCE = 110
+const DISMISS_VELOCITY = 0.6
+
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
-  <DialogPrimitive.Portal>
-    <DialogOverlay />
-    <DialogPrimitive.Content
-      ref={ref}
-      // Les popovers maison (CategoryPicker) sont portalises dans body, donc
-      // "dehors" pour Radix : sans cette garde, le premier tap dessus fermait le
-      // dialog qui les contient.
-      onInteractOutside={(e) => {
-        if ((e.target as HTMLElement | null)?.closest?.('[data-inab-popover]')) e.preventDefault()
-      }}
-      className={cn(
-        // Mobile : plein ecran depuis le bas. Desktop : modal centree.
-        'fixed inset-x-0 bottom-0 z-50 flex max-h-[92dvh] flex-col rounded-t-3xl border-t border-line bg-surface pb-safe will-change-transform transition-transform duration-150 ease-out',
-        'data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom-4 data-[state=open]:fade-in-0',
-        'data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom-4 data-[state=closed]:fade-out-0',
-        'sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-md sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border',
-        'sm:data-[state=open]:zoom-in-95 sm:data-[state=open]:slide-in-from-bottom-0',
-        className,
-      )}
-      {...props}
-    >
-      {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full p-2.5 text-soft transition-colors after:absolute after:-inset-1.5 after:content-[''] hover:bg-surface2 hover:text-ink">
-        <X className="h-4 w-4" />
-        <span className="sr-only">Fermer</span>
-      </DialogPrimitive.Close>
-    </DialogPrimitive.Content>
-  </DialogPrimitive.Portal>
-))
+>(({ className, children, style, onInteractOutside, onAnimationStart, onAnimationEnd, ...props }, ref) => {
+  const closeRef = React.useRef<HTMLButtonElement>(null)
+  const dragStart = React.useRef<{ y: number; t: number } | null>(null)
+  const [drag, setDrag] = React.useState(0)
+
+  // Le decalage de glisse se compose avec la transformation posee par
+  // l'appelant (decalage clavier iOS : translateY(-Npx) en style inline).
+  const mergedStyle: React.CSSProperties | undefined =
+    drag > 0
+      ? { ...style, transform: `${style?.transform ?? ''} translateY(${drag}px)`.trim(), transition: 'none' }
+      : style
+
+  const onHandleDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    dragStart.current = { y: e.clientY, t: performance.now() }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onHandleMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStart.current) return
+    setDrag(Math.max(0, e.clientY - dragStart.current.y))
+  }
+  const onHandleUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const start = dragStart.current
+    dragStart.current = null
+    if (!start) return
+    const dy = Math.max(0, e.clientY - start.y)
+    const velocity = dy / Math.max(1, performance.now() - start.t)
+    // Fermeture : l'animation de sortie repart de la position glissee (la
+    // keyframe n'a pas d'etat initial) ; sinon retour elastique a 0.
+    if (dy > DISMISS_DISTANCE || (dy > 24 && velocity > DISMISS_VELOCITY)) closeRef.current?.click()
+    else setDrag(0)
+  }
+
+  return (
+    <DialogPrimitive.Portal>
+      <DialogOverlay />
+      <DialogPrimitive.Content
+        ref={ref}
+        // Les popovers maison (CategoryPicker) sont portalises dans body, donc
+        // "dehors" pour Radix : sans cette garde, le premier tap dessus fermait le
+        // dialog qui les contient.
+        onInteractOutside={(e) => {
+          if ((e.target as HTMLElement | null)?.closest?.('[data-inab-popover]')) e.preventDefault()
+          onInteractOutside?.(e)
+        }}
+        // Remise a zero du glisse a chaque ouverture / fin de fermeture : le
+        // composant appelant reste monte entre deux ouvertures.
+        onAnimationStart={(e) => {
+          if (e.currentTarget.dataset.state === 'open' && e.target === e.currentTarget) setDrag(0)
+          onAnimationStart?.(e)
+        }}
+        onAnimationEnd={(e) => {
+          if (e.currentTarget.dataset.state === 'closed' && e.target === e.currentTarget) setDrag(0)
+          onAnimationEnd?.(e)
+        }}
+        style={mergedStyle}
+        className={cn(
+          // Mobile : feuille basse (poignee, glisse du bas, courbe ressort).
+          'fixed inset-x-0 bottom-0 z-50 flex max-h-[92dvh] flex-col rounded-t-[28px] outline-none focus-visible:ring-0 focus-visible:ring-offset-0 border-t border-edge bg-surface pb-safe shadow-elevated will-change-transform transition-transform duration-150 ease-out',
+          'data-[state=closed]:animate-slide-down data-[state=open]:animate-slide-up',
+          // Desktop : modale centree, apparition par mise a l'echelle.
+          'sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-md sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl sm:border',
+          'sm:data-[state=closed]:animate-modal-out sm:data-[state=open]:animate-modal-in',
+          className,
+        )}
+        {...props}
+      >
+        {/* Poignee (mobile) : zone de glisse pleine largeur en haut de la feuille. */}
+        <div
+          aria-hidden
+          onPointerDown={onHandleDown}
+          onPointerMove={onHandleMove}
+          onPointerUp={onHandleUp}
+          onPointerCancel={onHandleUp}
+          className="absolute inset-x-0 top-0 z-10 flex h-5 cursor-grab touch-none justify-center pt-2 active:cursor-grabbing sm:hidden"
+        >
+          <span className="h-1.5 w-10 rounded-full bg-ink/15" />
+        </div>
+        {children}
+        <DialogPrimitive.Close
+          ref={closeRef}
+          className="absolute right-4 top-4 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-surface2 text-soft transition-[background-color,color,transform] duration-150 ease-spring after:absolute after:-inset-1.5 after:content-[''] hover:bg-line/80 hover:text-ink active:scale-90"
+        >
+          <X className="h-4 w-4" strokeWidth={2.4} />
+          <span className="sr-only">Fermer</span>
+        </DialogPrimitive.Close>
+      </DialogPrimitive.Content>
+    </DialogPrimitive.Portal>
+  )
+})
 DialogContent.displayName = 'DialogContent'
 
 function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn('flex flex-col gap-1 p-5 pb-2', className)} {...props} />
+}
+
+function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn('flex flex-col-reverse gap-2 p-5 pt-3 sm:flex-row sm:justify-end', className)}
+      {...props}
+    />
+  )
 }
 
 const DialogTitle = React.forwardRef<
@@ -67,7 +141,7 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('text-[17px] font-semibold', className)}
+    className={cn('text-[18px] font-semibold tracking-tight', className)}
     {...props}
   />
 ))
@@ -77,7 +151,11 @@ const DialogDescription = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
 >(({ className, ...props }, ref) => (
-  <DialogPrimitive.Description ref={ref} className={cn('text-[13px] text-soft', className)} {...props} />
+  <DialogPrimitive.Description
+    ref={ref}
+    className={cn('text-[13.5px] leading-relaxed text-soft', className)}
+    {...props}
+  />
 ))
 DialogDescription.displayName = 'DialogDescription'
 
@@ -87,6 +165,7 @@ export {
   DialogClose,
   DialogContent,
   DialogHeader,
+  DialogFooter,
   DialogTitle,
   DialogDescription,
 }
