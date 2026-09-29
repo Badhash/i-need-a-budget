@@ -3148,6 +3148,7 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
     loadAll<CategoryPayload>('categories', userId),
   ])
   const accountIds = new Set(accounts.map((a) => a.id))
+  const onBudget = onBudgetIds(accounts)
   const categoryIds = new Set(categories.map((c) => c.id))
 
   const keys = await getKeys()
@@ -3162,8 +3163,8 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
     const o = requireObject(t, 'transactions[]')
     const accountId = requireUuid(o.accountId, 'accountId')
     if (!accountIds.has(accountId)) throw new ApiError(404, 'compte inconnu')
-    const categoryId = o.categoryId == null ? null : requireUuid(o.categoryId, 'categoryId')
-    if (categoryId && !categoryIds.has(categoryId)) throw new ApiError(404, 'categorie inconnue')
+    const rawCategoryId = o.categoryId == null ? null : requireUuid(o.categoryId, 'categoryId')
+    if (rawCategoryId && !categoryIds.has(rawCategoryId)) throw new ApiError(404, 'categorie inconnue')
     const bookingDate = requireDate(o.date)
     const amount = requireAmount(o.amount)
     const label = requireText(o.label, 'label', 200)
@@ -3173,8 +3174,10 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
     // Paire de virement (fonctionnalite importTransfers) : les deux moities
     // portent le meme transferGroupId. Les agregats sont deja invalides pendant
     // l'import et reconstruits ensuite sous la regle des transferts croises.
+    // La moitie cote compte de suivi ne porte jamais de categorie.
     const transferGroupId =
       o.transferGroupId == null ? null : requireUuid(o.transferGroupId, 'transferGroupId')
+    const categoryId = transferGroupId && !onBudget.has(accountId) ? null : rawCategoryId
     const bookingMonth = bookingDate.slice(0, 7)
     const payload: TxPayload = {
       accountId,
