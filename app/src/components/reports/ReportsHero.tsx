@@ -9,7 +9,7 @@ import { ProgressRing } from '@/components/shared/ProgressRing'
 import type { ProgressTone } from '@/components/shared/ProgressBar'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TrendBadge } from '@/components/reports/WidgetCard'
+import { BadgeSkeleton, InlineSkeleton, TrendBadge } from '@/components/reports/WidgetCard'
 import {
   chartMotion,
   GlassTooltip,
@@ -33,6 +33,83 @@ function rateTone(rate: number | null): ProgressTone {
   return rate < 0.2 ? 'accent' : 'success'
 }
 
+interface KpiSlots {
+  label: string
+  value: ReactNode
+  badge: ReactNode
+  caption?: ReactNode
+}
+
+interface HeroSlots {
+  spendingLabel: string
+  spendingValue: ReactNode
+  spendingBadge: ReactNode
+  subline: ReactNode
+  overPace?: boolean
+  chart: ReactNode
+  legend: ReactNode
+  saved: KpiSlots
+  rate: KpiSlots
+}
+
+/**
+ * Mise en page UNIQUE du heros, partagee par le rendu et son squelette : memes
+ * boites, memes hauteurs de ligne, donc aucun decalage a l'arrivee des
+ * donnees (la phrase sous le montant reserve deux lignes sur mobile).
+ */
+function HeroLayout({ slots, className, busy }: { slots: HeroSlots; className?: string; busy?: boolean }) {
+  return (
+    <Card variant="hero" className={cn('p-5 lg:p-7', className)} aria-busy={busy || undefined}>
+      <div className="lg:grid lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] lg:gap-8">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+            <div className="min-w-0">
+              <p className="label-caps">{slots.spendingLabel}</p>
+              <div className="mt-1.5 text-ink">{slots.spendingValue}</div>
+            </div>
+            <div className="lg:mt-1">{slots.spendingBadge}</div>
+          </div>
+
+          <p
+            className={cn(
+              'mt-2 flex min-h-[2.3rem] items-start gap-1.5 text-[13.5px] leading-snug text-soft lg:min-h-0',
+              slots.overPace && 'text-ink',
+            )}
+          >
+            {slots.overPace && <TrendingUp aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-warning" />}
+            <span>{slots.subline}</span>
+          </p>
+
+          <div className={cn('mt-4', CHART_HEIGHT)}>{slots.chart}</div>
+
+          <div className="mt-3 flex flex-wrap gap-2">{slots.legend}</div>
+        </div>
+
+        <div className="mt-5 grid gap-5 border-t border-line/70 pt-5 lg:mt-0 lg:content-center lg:gap-7 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
+          <Kpi {...slots.saved} />
+          <Kpi {...slots.rate} />
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+/** Indicateur du heros : libelle, valeur et tendance sur une ligne, precision dessous. */
+function Kpi({ label, value, badge, caption }: KpiSlots) {
+  return (
+    <div className="min-w-0">
+      <p className="label-caps">{label}</p>
+      <div className="mt-1.5 flex min-h-11 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        {value}
+        {badge}
+      </div>
+      <p className="mt-1.5 min-h-[1.1rem] text-[12.5px] leading-snug text-soft">{caption}</p>
+    </div>
+  )
+}
+
+const KPI_VALUE = 'block text-[24px] font-semibold tracking-[-0.015em] lg:text-[30px]'
+
 /**
  * Heros de la page Rapports : ce que j'ai depense (et a quel rythme, compare a
  * ma moyenne), ce que j'ai mis de cote, et mon taux d'epargne. Les chiffres
@@ -50,7 +127,6 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
   const spendDelta = spendAvg && spendAvg > 0 ? (spendRef - spendAvg) / spendAvg : null
   const netRef = a.toDate ? a.toDate.net : a.net
   const netAvg = a.toDate ? a.toDate.averageNet : (avg?.net ?? null)
-  const vsLabel = a.toDate ? 'vs moyenne à date' : 'vs moyenne'
   const rateDelta = a.savingsRate !== null && avg?.savingsRate != null ? a.savingsRate - avg.savingsRate : null
 
   const spent = useRevealNumber(a.spending)
@@ -60,152 +136,162 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
   const overPace =
     a.projectedSpending !== null && avg !== null && avg.spending > 0 && a.projectedSpending > avg.spending * 1.05
 
+  const subline =
+    a.projectedSpending !== null ? (
+      <>
+        {'À ce rythme\u00a0: '}
+        <span className="font-medium text-ink tnum">~{EUROS.format(a.projectedSpending / 100)}</span> d’ici la fin
+        du mois
+        {avg && (
+          <>
+            {' '}
+            · moyenne <span className="tnum">{EUROS.format(avg.spending / 100)}</span>
+          </>
+        )}
+      </>
+    ) : avg ? (
+      <>
+        Moyenne sur {a.averageMonths.length} mois{'\u00a0: '}
+        <span className="font-medium text-ink tnum">{fmtEUR(avg.spending)}</span>
+      </>
+    ) : (
+      'Premier mois suivi\u00a0: la moyenne viendra avec l’historique.'
+    )
+
   return (
-    <Card variant="hero" className={cn('p-5 lg:p-7', className)}>
-      <div className="lg:grid lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] lg:gap-8">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-            <div className="min-w-0">
-              <p className="label-caps">Dépensé {when}</p>
-              <Amount cents={spent} size="hero" className="mt-1.5 block text-ink" />
-            </div>
+    <HeroLayout
+      className={className}
+      slots={{
+        spendingLabel: `Dépensé ${when}`,
+        spendingValue: <Amount cents={spent} size="hero" className="block" />,
+        spendingBadge: (
+          <TrendBadge
+            delta={spendDelta}
+            downIsGood
+            label={a.toDate ? 'vs moyenne à date' : 'vs moyenne'}
+            emptyLabel="Pas encore de moyenne"
+          />
+        ),
+        subline,
+        overPace,
+        chart: <CumulativeChart a={a} className="h-full" />,
+        legend: <CumulativeLegend a={a} />,
+        saved: {
+          label: `Épargné ${when}`,
+          value: <Amount cents={saved} signed colored className={KPI_VALUE} />,
+          badge: (
             <TrendBadge
-              delta={spendDelta}
-              downIsGood
-              label={vsLabel}
+              delta={netAvg === null ? null : netRef - netAvg}
+              format="amount"
+              label="vs moyenne"
               emptyLabel="Pas encore de moyenne"
-              className="lg:mt-1"
             />
-          </div>
-
-          <p className={cn('mt-2 flex items-start gap-1.5 text-[13.5px] leading-snug text-soft', overPace && 'text-ink')}>
-            {overPace && <TrendingUp aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-warning" />}
-            <span>
-              {a.projectedSpending !== null ? (
-                <>
-                  À ce rythme : <span className="font-medium text-ink tnum">~{EUROS.format(a.projectedSpending / 100)}</span>{' '}
-                  d’ici la fin du mois
-                  {avg && (
-                    <>
-                      {' '}
-                      · moyenne <span className="tnum">{EUROS.format(avg.spending / 100)}</span>
-                    </>
-                  )}
-                </>
-              ) : avg ? (
-                <>
-                  Moyenne sur {a.averageMonths.length} mois : <span className="font-medium text-ink tnum">{fmtEUR(avg.spending)}</span>
-                </>
-              ) : (
-                'Premier mois suivi : la moyenne viendra avec l’historique.'
-              )}
-            </span>
-          </p>
-
-          <CumulativeChart a={a} className={cn('mt-4', CHART_HEIGHT)} />
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            <CumulativeLegend a={a} />
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-5 border-t border-line/70 pt-5 lg:mt-0 lg:content-center lg:gap-7 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
-          <Kpi
-            label={`Épargné ${when}`}
-            value={
-              <Amount
-                cents={saved}
-                signed
-                colored
-                className="block text-[24px] font-semibold tracking-[-0.015em] lg:text-[30px]"
-              />
-            }
-            badge={
-              <TrendBadge
-                delta={netAvg === null ? null : netRef - netAvg}
-                format="amount"
-                label={vsLabel}
-                emptyLabel="Pas encore de moyenne"
-              />
-            }
-            caption={
-              a.income > 0 ? (
-                <>
-                  sur <span className="tnum">{fmtEUR(a.income)}</span> de revenus
-                </>
-              ) : a.isCurrentMonth ? (
-                'Pas encore de revenus ce mois-ci'
-              ) : (
-                'Aucun revenu ce mois-là'
-              )
-            }
-          />
-          <Kpi
-            label="Taux d’épargne"
-            value={
-              <span className="flex items-center gap-3">
-                <ProgressRing
-                  value={Math.max(0, a.savingsRate ?? 0)}
-                  tone={rateTone(a.savingsRate)}
-                  size={44}
-                  strokeWidth={5}
-                  label="Taux d’épargne"
-                >
-                  <Sprout aria-hidden className="h-4 w-4 text-success" />
-                </ProgressRing>
-                <span
-                  className={cn(
-                    'text-[24px] font-semibold tracking-[-0.015em] tnum lg:text-[30px]',
-                    a.savingsRate !== null && a.savingsRate < 0 && 'text-danger',
-                  )}
-                >
-                  {a.savingsRate === null ? '—' : fmtPercent(ratePermille / 1000)}
-                </span>
+          ),
+          caption:
+            a.income > 0 ? (
+              <>
+                sur <span className="tnum">{fmtEUR(a.income)}</span> de revenus
+              </>
+            ) : a.isCurrentMonth ? (
+              'Pas encore de revenus ce mois-ci'
+            ) : (
+              'Aucun revenu ce mois-là'
+            ),
+        },
+        rate: {
+          label: 'Taux d’épargne',
+          value: (
+            <span className="flex items-center gap-3">
+              <ProgressRing
+                value={Math.max(0, a.savingsRate ?? 0)}
+                tone={rateTone(a.savingsRate)}
+                size={44}
+                strokeWidth={5}
+                label="Taux d’épargne"
+              >
+                <Sprout aria-hidden className="h-4 w-4 text-success" />
+              </ProgressRing>
+              <span className={cn(KPI_VALUE, 'tnum', a.savingsRate !== null && a.savingsRate < 0 && 'text-danger')}>
+                {a.savingsRate === null ? '—' : fmtPercent(ratePermille / 1000)}
               </span>
-            }
-            badge={
-              <TrendBadge
-                delta={rateDelta}
-                format="points"
-                label="vs moyenne"
-                emptyLabel={a.savingsRate === null ? 'En attente de revenus' : 'Pas encore de moyenne'}
-              />
-            }
-            caption={
-              avg?.savingsRate != null ? (
-                <>
-                  moyenne <span className="tnum">{fmtPercent(avg.savingsRate)}</span> sur {a.averageMonths.length} mois
-                </>
-              ) : undefined
-            }
-          />
-        </div>
-      </div>
-    </Card>
+            </span>
+          ),
+          badge: (
+            <TrendBadge
+              delta={rateDelta}
+              format="points"
+              label="vs moyenne"
+              emptyLabel={a.savingsRate === null ? 'En attente de revenus' : 'Pas encore de moyenne'}
+            />
+          ),
+          caption:
+            avg?.savingsRate != null ? (
+              <>
+                moyenne <span className="tnum">{fmtPercent(avg.savingsRate)}</span> sur {a.averageMonths.length} mois
+              </>
+            ) : undefined,
+        },
+      }}
+    />
   )
 }
 
-/** Indicateur du heros : libelle, valeur et tendance sur une ligne, precision dessous. */
-function Kpi({
-  label,
-  value,
-  badge,
-  caption,
+/** Squelette du heros : la MEME mise en page, des reflets a la place des chiffres. */
+export function ReportsHeroSkeleton({
+  reference,
+  currentMonth,
+  className,
 }: {
-  label: string
-  value: ReactNode
-  badge: ReactNode
-  caption?: ReactNode
+  reference: string
+  currentMonth: string
+  className?: string
 }) {
+  const when = inMonth(reference, currentMonth)
   return (
-    <div className="min-w-0">
-      <p className="label-caps">{label}</p>
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        {value}
-        {badge}
-      </div>
-      {caption && <p className="mt-1.5 text-[12.5px] leading-snug text-soft">{caption}</p>}
-    </div>
+    <HeroLayout
+      busy
+      className={className}
+      slots={{
+        spendingLabel: `Dépensé ${when}`,
+        spendingValue: (
+          <span className="num-hero block">
+            <InlineSkeleton className="h-[0.8em] w-[4.6em]" />
+          </span>
+        ),
+        spendingBadge: <BadgeSkeleton text="+00 % vs moyenne à date" />,
+        subline: <InlineSkeleton className="h-3.5 w-64 max-w-full" />,
+        chart: <Skeleton className="h-full rounded-2xl" />,
+        legend: (
+          <>
+            <Skeleton className="h-[26px] w-24 rounded-full" />
+            <Skeleton className="h-[26px] w-32 rounded-full" />
+          </>
+        ),
+        saved: {
+          label: `Épargné ${when}`,
+          value: (
+            <span className={KPI_VALUE}>
+              <InlineSkeleton className="h-[0.8em] w-[4.4em]" />
+            </span>
+          ),
+          badge: <BadgeSkeleton text="−000 € vs moyenne" />,
+          caption: <InlineSkeleton className="h-3 w-40" />,
+        },
+        rate: {
+          label: 'Taux d’épargne',
+          value: (
+            <span className="flex items-center gap-3">
+              <Skeleton className="h-11 w-11 rounded-full" />
+              <span className={KPI_VALUE}>
+                <InlineSkeleton className="h-[0.8em] w-[2.4em]" />
+              </span>
+            </span>
+          ),
+          badge: <BadgeSkeleton text="−0 pts vs moyenne" />,
+          caption: <InlineSkeleton className="h-3 w-36" />,
+        },
+      }}
+    />
   )
 }
 
@@ -352,40 +438,5 @@ function CumulativeChart({ a, className }: { a: Analytics; className?: string })
         </ComposedChart>
       </ResponsiveContainer>
     </div>
-  )
-}
-
-/** Squelette du heros, aux dimensions exactes du rendu final. */
-export function ReportsHeroSkeleton({ className }: { className?: string }) {
-  return (
-    <Card variant="hero" className={cn('p-5 lg:p-7', className)} aria-hidden>
-      <div className="lg:grid lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] lg:gap-8">
-        <div className="min-w-0">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <Skeleton className="h-4 w-40" />
-              <Skeleton className="mt-2 h-10 w-56 lg:h-11" />
-            </div>
-            <Skeleton className="h-6 w-32 rounded-full" />
-          </div>
-          <Skeleton className="mt-3 h-4 w-72 max-w-full" />
-          <Skeleton className={cn('mt-4 rounded-2xl', CHART_HEIGHT)} />
-          <div className="mt-3 flex gap-2">
-            <Skeleton className="h-6 w-24 rounded-full" />
-            <Skeleton className="h-6 w-32 rounded-full" />
-          </div>
-        </div>
-        <div className="mt-5 grid grid-cols-2 gap-x-4 gap-y-5 border-t border-line/70 pt-5 lg:mt-0 lg:grid-cols-1 lg:content-center lg:gap-y-7 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
-          {[0, 1].map((i) => (
-            <div key={i}>
-              <Skeleton className="h-4 w-28" />
-              <Skeleton className="mt-2 h-8 w-32 lg:h-9" />
-              <Skeleton className="mt-2 h-6 w-36 rounded-full" />
-              <Skeleton className="mt-2 h-4 w-24" />
-            </div>
-          ))}
-        </div>
-      </div>
-    </Card>
   )
 }

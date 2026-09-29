@@ -6,7 +6,7 @@ import { fmtEUR, fmtMonthShort, fmtMonthTitle } from '@/lib/format'
 import { useChartPalette } from '@/hooks/useTheme'
 import { Amount } from '@/components/shared/Amount'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ActionSkeleton, TrendBadge, WidgetCard } from '@/components/reports/WidgetCard'
+import { BadgeSkeleton, CaptionSkeleton, InlineSkeleton, TrendBadge, WidgetCard } from '@/components/reports/WidgetCard'
 import {
   chartMotion,
   GlassTooltip,
@@ -173,18 +173,32 @@ export function NetWorthSkeleton({ className }: { className?: string }) {
     <WidgetCard
       icon={Landmark}
       question="Comment évolue mon patrimoine ?"
-      caption={<Skeleton className="inline-block h-3 w-44 align-middle" />}
-      action={<ActionSkeleton />}
+      caption={<CaptionSkeleton className="w-44" />}
+      action={<BadgeSkeleton text="+0 000 € en 6 mois" />}
       className={className}
     >
-      <Skeleton className="h-8 w-44" />
-      <Skeleton className={cn('rounded-2xl', CHART_HEIGHT)} />
+      <span aria-hidden className="block text-[26px] font-semibold">
+        <InlineSkeleton className="h-[0.8em] w-[6em]" />
+      </span>
+      <Skeleton aria-hidden className={cn('rounded-2xl', CHART_HEIGHT)} />
       <div className="grid gap-5 border-t border-line/70 pt-4 sm:grid-cols-2" aria-hidden>
-        {[0, 1].map((i) => (
-          <div key={i} className="space-y-2">
-            <Skeleton className="h-3.5 w-28" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-4/5" />
+        {[3, 1].map((count, i) => (
+          <div key={i} className="min-w-0">
+            <p className="label-caps mb-2">
+              <InlineSkeleton className="h-3 w-28" />
+            </p>
+            <ul className="space-y-1.5">
+              {Array.from({ length: count }).map((_, j) => (
+                <li key={j} className="flex items-center justify-between gap-3 text-[13.5px]">
+                  <span>
+                    <InlineSkeleton className="h-3.5 w-28" />
+                  </span>
+                  <span>
+                    <InlineSkeleton className="h-3.5 w-20" />
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         ))}
       </div>

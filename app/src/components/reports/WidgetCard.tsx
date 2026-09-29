@@ -83,6 +83,11 @@ export function TrendBadge({
   )
 }
 
+/** Typographie francaise : espace insecable avant ? ! : ; (jamais de « ? » seul en fin de ligne). */
+export function frenchSpacing(text: string): string {
+  return text.replace(/ ([?!:;])/g, '\u00a0$1')
+}
+
 interface WidgetCardProps {
   /** La question a laquelle le widget repond. */
   question: string
@@ -112,7 +117,9 @@ export function WidgetCard({ question, icon: Icon, caption, action, children, cl
         )}
         <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-x-3 gap-y-2">
           <div className="min-w-0 flex-[1_1_13rem]">
-            <h3 className="text-[15px] font-semibold leading-snug tracking-tight text-ink">{question}</h3>
+            <h3 className="text-balance text-[15px] font-semibold leading-snug tracking-tight text-ink">
+              {frenchSpacing(question)}
+            </h3>
             {caption && <p className="mt-0.5 text-[12.5px] leading-snug text-soft">{caption}</p>}
           </div>
           {action && <div className="flex shrink-0 items-center">{action}</div>}
@@ -125,10 +132,35 @@ export function WidgetCard({ question, icon: Icon, caption, action, children, cl
 
 /** Tendance en attente (squelette de la pastille, meme hauteur de ligne). */
 export function ActionSkeleton({ className }: { className?: string }) {
-  return <Skeleton className={cn('h-6 w-28 rounded-full', className)} />
+  // 26px : hauteur exacte d'une pastille (texte 12px sur 18px de ligne + 2 x 4px).
+  return <Skeleton className={cn('h-[26px] w-28 rounded-full', className)} />
+}
+
+/**
+ * Squelette EN LIGNE (span) : se pose dans un paragraphe sans casser le HTML
+ * (un div dans un p est invalide) et garde la hauteur de ligne du texte.
+ */
+export function InlineSkeleton({ className }: { className?: string }) {
+  return <span aria-hidden className={cn('skeleton-shimmer inline-block rounded-md bg-ink/[0.06] align-middle', className)} />
 }
 
 /** Legende en attente, posee dans la ligne de texte (hauteur de ligne conservee). */
 export function CaptionSkeleton({ className }: { className?: string }) {
-  return <Skeleton className={cn('inline-block h-3 w-32 align-middle', className)} />
+  return <InlineSkeleton className={cn('h-3 w-32', className)} />
+}
+
+/**
+ * Pastille en attente a la largeur EXACTE de son texte type (pastille
+ * invisible sous le reflet) : l'en-tete se met en page comme avec la vraie.
+ */
+export function BadgeSkeleton({ text, className }: { text: string; className?: string }) {
+  return (
+    <span aria-hidden className={cn('relative inline-flex', className)}>
+      <Badge variant="neutral" className="invisible gap-1.5 py-1 font-semibold">
+        <Minus />
+        {text}
+      </Badge>
+      <Skeleton className="absolute inset-0 rounded-full" />
+    </span>
+  )
 }

@@ -9,7 +9,6 @@ import { computeAnalytics, taxonomyFrom, type Analytics } from '@/lib/analytics'
 import { fmtMonthLong, today } from '@/lib/format'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Card } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
 import { comparisonPhrase, PeriodToolbar, useReportPeriod } from '@/components/reports/PeriodToolbar'
 import { ReportsHero, ReportsHeroSkeleton } from '@/components/reports/ReportsHero'
 import { SavingsCoach, SavingsCoachSkeleton } from '@/components/reports/SavingsCoach'
@@ -22,6 +21,7 @@ import { WeekdaySkeleton, WeekdayWidget } from '@/components/reports/WeekdayWidg
 import { RecurringSkeleton, RecurringWidget } from '@/components/reports/RecurringWidget'
 import { BiggestExpenses, BiggestExpensesSkeleton } from '@/components/reports/BiggestExpenses'
 import { ZakatWidget } from '@/components/reports/ZakatWidget'
+import { InlineSkeleton } from '@/components/reports/WidgetCard'
 
 // Page Rapports : TOUT est calcule cote client depuis le cache des
 // transactions (lib/analytics.ts), sans appel reseau ni au changement de mois
@@ -36,16 +36,18 @@ interface LayoutProps {
   isDesktop: boolean
 }
 
-// DESKTOP : heros pleine largeur, coach, puis grille de widgets par paires
-// (repartition du mois, derapages, tendances, habitudes).
+// DESKTOP : heros pleine largeur, repartition du mois, coach, puis grille de
+// widgets par paires de hauteurs voisines (derapages, tendances, habitudes).
+// Tout ce qui precede le coach a une hauteur fixe : le premier ecran ne bouge
+// pas a l'arrivee des donnees.
 function DesktopReports({ a, currentMonth, isDesktop }: LayoutProps) {
   const accounts = useAccountsList()
   return (
-    <div className="stagger grid gap-5 lg:grid-cols-2">
+    <div data-reports="content" className="stagger grid gap-5 lg:grid-cols-2">
       <ReportsHero a={a} currentMonth={currentMonth} className="lg:col-span-2" />
-      <SavingsCoach a={a} className="lg:col-span-2" />
       <SpendingDonut a={a} currentMonth={currentMonth} />
       <TopMerchants a={a} currentMonth={currentMonth} />
+      <SavingsCoach a={a} className="lg:col-span-2" />
       <CategoryBreakdown a={a} currentMonth={currentMonth} isDesktop={isDesktop} className="lg:col-span-2" />
       <IncomeExpenseWidget
         monthly={a.monthly}
@@ -55,23 +57,23 @@ function DesktopReports({ a, currentMonth, isDesktop }: LayoutProps) {
         averageCount={a.averageMonths.length}
       />
       <NetWorthWidget a={a} accounts={accounts} />
-      <WeekdayWidget a={a} />
       <RecurringWidget a={a} />
-      <BiggestExpenses a={a} currentMonth={currentMonth} />
+      <BiggestExpenses a={a} currentMonth={currentMonth} limit={8} />
+      <WeekdayWidget a={a} />
       <ZakatWidget />
     </div>
   )
 }
 
-// MOBILE : un fil de cartes, de l'essentiel (heros, coach, repartition) au
+// MOBILE : un fil de cartes, de l'essentiel (heros, repartition, coach) au
 // detail (tendances, habitudes, patrimoine).
 function MobileReports({ a, currentMonth, isDesktop }: LayoutProps) {
   const accounts = useAccountsList()
   return (
-    <div className="stagger space-y-4">
+    <div data-reports="content" className="stagger space-y-4">
       <ReportsHero a={a} currentMonth={currentMonth} />
-      <SavingsCoach a={a} />
       <SpendingDonut a={a} currentMonth={currentMonth} />
+      <SavingsCoach a={a} />
       <CategoryBreakdown a={a} currentMonth={currentMonth} isDesktop={isDesktop} />
       <IncomeExpenseWidget
         monthly={a.monthly}
@@ -94,26 +96,26 @@ function MobileReports({ a, currentMonth, isDesktop }: LayoutProps) {
 function ReportsSkeleton({ reference, currentMonth, isDesktop }: { reference: string; currentMonth: string; isDesktop: boolean }) {
   if (isDesktop) {
     return (
-      <div className="grid gap-5 lg:grid-cols-2">
-        <ReportsHeroSkeleton className="lg:col-span-2" />
-        <SavingsCoachSkeleton className="lg:col-span-2" />
+      <div data-reports="skeleton" aria-busy="true" className="grid gap-5 lg:grid-cols-2">
+        <ReportsHeroSkeleton reference={reference} currentMonth={currentMonth} className="lg:col-span-2" />
         <SpendingDonutSkeleton reference={reference} currentMonth={currentMonth} />
         <TopMerchantsSkeleton reference={reference} currentMonth={currentMonth} />
-        <CategoryBreakdownSkeleton isDesktop className="lg:col-span-2" />
+        <SavingsCoachSkeleton className="lg:col-span-2" />
+        <CategoryBreakdownSkeleton reference={reference} currentMonth={currentMonth} isDesktop className="lg:col-span-2" />
         <IncomeExpenseSkeleton />
         <NetWorthSkeleton />
-        <WeekdaySkeleton />
         <RecurringSkeleton />
-        <BiggestExpensesSkeleton reference={reference} currentMonth={currentMonth} />
+        <BiggestExpensesSkeleton reference={reference} currentMonth={currentMonth} limit={8} />
+        <WeekdaySkeleton />
       </div>
     )
   }
   return (
-    <div className="space-y-4">
-      <ReportsHeroSkeleton />
-      <SavingsCoachSkeleton />
+    <div data-reports="skeleton" aria-busy="true" className="space-y-4">
+      <ReportsHeroSkeleton reference={reference} currentMonth={currentMonth} />
       <SpendingDonutSkeleton reference={reference} currentMonth={currentMonth} />
-      <CategoryBreakdownSkeleton isDesktop={false} />
+      <SavingsCoachSkeleton />
+      <CategoryBreakdownSkeleton reference={reference} currentMonth={currentMonth} isDesktop={false} />
       <IncomeExpenseSkeleton />
       <TopMerchantsSkeleton reference={reference} currentMonth={currentMonth} />
     </div>
@@ -208,7 +210,7 @@ export function ReportsPage() {
           analytics ? (
             comparisonPhrase(analytics.averageMonths, period)
           ) : (
-            <Skeleton className="inline-block h-3 w-64 max-w-full align-middle" />
+            <InlineSkeleton className="h-3 w-64 max-w-full" />
           )
         }
       />

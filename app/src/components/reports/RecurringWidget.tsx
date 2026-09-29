@@ -6,7 +6,7 @@ import { Amount } from '@/components/shared/Amount'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MerchantAvatar } from '@/components/reports/MerchantAvatar'
-import { CaptionSkeleton, WidgetCard } from '@/components/reports/WidgetCard'
+import { InlineSkeleton, WidgetCard } from '@/components/reports/WidgetCard'
 import { cn } from '@/lib/utils'
 
 const VISIBLE = 6
@@ -69,25 +69,34 @@ export function RecurringSkeleton({ className }: { className?: string }) {
     <WidgetCard
       icon={Repeat}
       question="Qu’est-ce qui part chaque mois ?"
-      caption={<CaptionSkeleton className="w-52" />}
+      caption="Prélèvements réguliers détectés sur 12 mois"
       className={className}
     >
       <div aria-hidden>
-        <Skeleton className="h-8 w-36" />
-        <Skeleton className="mt-1.5 h-3.5 w-60 max-w-full" />
+        <span className="block text-[26px] font-semibold">
+          <InlineSkeleton className="h-[0.8em] w-[4.5em]" />
+        </span>
+        <p className="mt-0.5 text-[12.5px]">
+          <InlineSkeleton className="h-3 w-60 max-w-full" />
+        </p>
       </div>
       <div aria-hidden className="-my-1 divide-y divide-line/50">
         {Array.from({ length: VISIBLE }).map((_, i) => (
           <div key={i} className="flex items-center gap-3 py-2.5">
             <Skeleton className="h-9 w-9 rounded-full" />
-            <div className="flex-1 space-y-1.5">
-              <Skeleton className="h-4 w-2/5" />
-              <Skeleton className="h-3 w-20" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[14px]">
+                <InlineSkeleton className="h-3.5 w-2/5" />
+              </p>
+              <p className="text-[12px]">
+                <InlineSkeleton className="h-3 w-20" />
+              </p>
             </div>
             <Skeleton className="h-4 w-16" />
           </div>
         ))}
       </div>
+      <Skeleton aria-hidden className="h-11 w-full rounded-xl lg:h-10" />
     </WidgetCard>
   )
 }

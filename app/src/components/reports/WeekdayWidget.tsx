@@ -5,7 +5,7 @@ import { fmtEUR, fmtMonthLong } from '@/lib/format'
 import { useChartPalette } from '@/hooks/useTheme'
 import { Amount } from '@/components/shared/Amount'
 import { Skeleton } from '@/components/ui/skeleton'
-import { CaptionSkeleton, WidgetCard } from '@/components/reports/WidgetCard'
+import { CaptionSkeleton, InlineSkeleton, WidgetCard } from '@/components/reports/WidgetCard'
 import {
   chartMotion,
   GlassTooltip,
@@ -133,9 +133,13 @@ export function WeekdaySkeleton({ className }: { className?: string }) {
       className={className}
     >
       <div aria-hidden>
-        <Skeleton className="h-3.5 w-40" />
-        <Skeleton className="mt-1.5 h-8 w-52" />
-        <Skeleton className="mt-1.5 h-3.5 w-44" />
+        <p className="text-[12.5px] text-soft">Ton jour le plus dépensier</p>
+        <p className="mt-0.5 text-[26px] font-semibold">
+          <InlineSkeleton className="h-[0.8em] w-[6em]" />
+        </p>
+        <p className="mt-1 text-[12.5px]">
+          <InlineSkeleton className="h-3 w-44" />
+        </p>
       </div>
       <div aria-hidden className={cn('flex items-end justify-around gap-3 px-2', CHART_HEIGHT)}>
         {[0.55, 0.7, 0.45, 0.6, 0.8, 1, 0.5].map((h, i) => (

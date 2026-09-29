@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Coffee, Repeat, Scissors, Sparkles, Sprout, TrendingUp, type LucideIcon } from 'lucide-react'
 import { fmtMonthLong, fmtPercent } from '@/lib/format'
 import type { Analytics, SuggestionKind } from '@/lib/analytics'
@@ -5,6 +6,7 @@ import { Amount } from '@/components/shared/Amount'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { frenchSpacing, InlineSkeleton } from '@/components/reports/WidgetCard'
 import { cn } from '@/lib/utils'
 
 const KIND_ICON: Record<SuggestionKind, LucideIcon> = {
@@ -31,6 +33,24 @@ function headline(a: Analytics): string {
   )
 }
 
+/** En-tete du coach (partage avec le squelette : memes boites, memes lignes). */
+function CoachHeader({ headline, potential }: { headline: ReactNode; potential: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <span aria-hidden className="bg-brand flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-accentfg shadow-glow">
+          <Sprout className="h-5 w-5" />
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-semibold leading-snug tracking-tight text-ink">Coach d’épargne</h3>
+          <p className="mt-0.5 text-[13px] leading-snug text-soft">{headline}</p>
+        </div>
+      </div>
+      {potential}
+    </div>
+  )
+}
+
 /**
  * Coach d'epargne : ou j'en suis, et des idees chiffrees (economie annuelle)
  * pour faire mieux. Ton encourageant, jamais culpabilisant. Mobile : idees en
@@ -40,26 +60,20 @@ export function SavingsCoach({ a, className }: { a: Analytics; className?: strin
   const potential = a.suggestions.reduce((s, x) => s + x.annual, 0)
   return (
     <Card className={cn('p-5', className)}>
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span aria-hidden className="bg-brand flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-accentfg shadow-glow">
-            <Sprout className="h-5 w-5" />
-          </span>
-          <div className="min-w-0">
-            <h3 className="text-[15px] font-semibold leading-snug tracking-tight text-ink">Coach d’épargne</h3>
-            <p className="mt-0.5 text-[13px] leading-snug text-soft">{headline(a)}</p>
-          </div>
-        </div>
-        {potential > 0 && (
-          <div className="text-left sm:text-right">
-            <p className="label-caps">Jusqu’à</p>
-            <p className="text-[20px] font-semibold leading-tight tracking-tight text-success">
-              <Amount cents={potential} animate />
-              <span className="text-[13px] font-medium text-soft"> par an</span>
-            </p>
-          </div>
-        )}
-      </div>
+      <CoachHeader
+        headline={frenchSpacing(headline(a))}
+        potential={
+          potential > 0 && (
+            <div className="text-left sm:text-right">
+              <p className="label-caps">Jusqu’à</p>
+              <p className="text-[20px] font-semibold leading-tight tracking-tight text-success">
+                <Amount cents={potential} animate />
+                <span className="text-[13px] font-medium text-soft"> par an</span>
+              </p>
+            </div>
+          )
+        }
+      />
 
       {a.suggestions.length > 0 ? (
         <ul
@@ -80,9 +94,9 @@ export function SavingsCoach({ a, className }: { a: Analytics; className?: strin
                   >
                     <Icon className="h-4 w-4" />
                   </span>
-                  <p className="min-w-0 flex-1 pt-1 text-[14px] font-semibold leading-snug text-ink">{s.title}</p>
+                  <p className="min-w-0 flex-1 pt-1 text-[14px] font-semibold leading-snug text-ink">{frenchSpacing(s.title)}</p>
                 </div>
-                <p className="flex-1 text-[13px] leading-relaxed text-soft">{s.detail}</p>
+                <p className="flex-1 text-[13px] leading-relaxed text-soft">{frenchSpacing(s.detail)}</p>
                 <Badge variant="success" className="self-start py-1 font-semibold">
                   +{EUROS.format(s.annual / 100)} par an
                 </Badge>
@@ -103,16 +117,26 @@ export function SavingsCoach({ a, className }: { a: Analytics; className?: strin
 export function SavingsCoachSkeleton({ className }: { className?: string }) {
   return (
     <Card className={cn('p-5', className)} aria-hidden>
-      <div className="flex items-center gap-3">
-        <Skeleton className="h-10 w-10 rounded-full" />
-        <div className="flex-1 space-y-1.5">
-          <Skeleton className="h-4 w-36" />
-          <Skeleton className="h-3.5 w-72 max-w-full" />
-        </div>
-      </div>
+      <CoachHeader
+        headline={<InlineSkeleton className="h-3 w-64 max-w-full" />}
+        potential={
+          <div className="text-left sm:text-right">
+            <p className="label-caps">Jusqu’à</p>
+            <p className="text-[20px] font-semibold leading-tight">
+              <InlineSkeleton className="h-[0.8em] w-[5em]" />
+            </p>
+          </div>
+        }
+      />
       <div className="-mx-5 mt-4 flex gap-3 overflow-hidden px-5 lg:mx-0 lg:grid lg:grid-cols-2 lg:px-0">
-        {[0, 1].map((i) => (
-          <Skeleton key={i} className="h-[9.5rem] w-[84%] max-w-[22rem] shrink-0 rounded-2xl lg:w-auto lg:max-w-none" />
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton
+            key={i}
+            className={cn(
+              'h-[222px] w-[84%] max-w-[22rem] shrink-0 rounded-2xl lg:h-[9.25rem] lg:w-auto lg:max-w-none',
+              i > 1 && 'hidden lg:block',
+            )}
+          />
         ))}
       </div>
     </Card>

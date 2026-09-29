@@ -6,7 +6,7 @@ import type { Averages, MonthPoint } from '@/lib/analytics'
 import { Amount } from '@/components/shared/Amount'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ActionSkeleton, CaptionSkeleton, WidgetCard } from '@/components/reports/WidgetCard'
+import { BadgeSkeleton, CaptionSkeleton, InlineSkeleton, WidgetCard } from '@/components/reports/WidgetCard'
 import {
   chartMotion,
   GlassTooltip,
@@ -94,7 +94,7 @@ export function IncomeExpenseWidget({
       action={
         best && best.net > 0 ? (
           <Badge variant="success" className="py-1 font-semibold">
-            Meilleur mois : {fmtMonthShort(best.month)}
+            Meilleur mois{'\u00a0: '}{fmtMonthShort(best.month)}
           </Badge>
         ) : undefined
       }
@@ -219,19 +219,23 @@ export function IncomeExpenseSkeleton({ className }: { className?: string }) {
       icon={ArrowLeftRight}
       question="Qu’est-ce qui rentre, qu’est-ce qui sort ?"
       caption={<CaptionSkeleton className="w-36" />}
-      action={<ActionSkeleton className="w-36" />}
+      action={<BadgeSkeleton text="Meilleur mois : juin" />}
       className={className}
     >
       <div aria-hidden>
-        <Skeleton className="h-3.5 w-48" />
-        <Skeleton className="mt-1.5 h-8 w-40" />
-        <Skeleton className="mt-1.5 h-3.5 w-56" />
+        <p className="text-[12.5px] text-soft">Mis de côté par mois, en moyenne</p>
+        <span className="mt-0.5 block text-[26px] font-semibold">
+          <InlineSkeleton className="h-[0.8em] w-[5em]" />
+        </span>
+        <p className="mt-1 text-[12.5px]">
+          <InlineSkeleton className="h-3 w-60 max-w-full" />
+        </p>
       </div>
-      <Skeleton className={cn('rounded-2xl', CHART_HEIGHT)} />
-      <div className="flex gap-2" aria-hidden>
-        <Skeleton className="h-6 w-20 rounded-full" />
-        <Skeleton className="h-6 w-24 rounded-full" />
-        <Skeleton className="h-6 w-36 rounded-full" />
+      <Skeleton aria-hidden className={cn('rounded-2xl', CHART_HEIGHT)} />
+      <div aria-hidden className="flex flex-wrap gap-2">
+        <Skeleton className="h-[26px] w-20 rounded-full" />
+        <Skeleton className="h-[26px] w-24 rounded-full" />
+        <Skeleton className="h-[26px] w-36 rounded-full" />
       </div>
     </WidgetCard>
   )

@@ -174,8 +174,9 @@ const UNKNOWN_KEY = '__unknown__'
 
 // Detection des prelevements recurrents (voir detectRecurring).
 const DETECTION_MONTHS = 12
-const MAX_AMOUNT_CV = 0.15
-const MIN_SINGLE_SHARE = 0.75
+const AMOUNT_TOLERANCE = 0.05 // montants « identiques » a 5 % pres (50 centimes au moins)
+const DAY_TOLERANCE = 3 // jours « identiques » a 3 jours pres (week-ends, jours feries)
+const MIN_AGREEMENT = 0.75 // part des passages qui doivent concorder
 // Au-dela, un prelevement est une charge fixe (loyer, credit), pas un abonnement.
 const SMALL_SUBSCRIPTION = 6_000
 // Donut : au-dela, les plus petits groupes sont regroupes en « Autres ».
@@ -344,7 +345,7 @@ export function computeAnalytics(
   const catByMonth = new Map<string, Map<string, number>>() // mois -> categorie -> depense
   const labelsByMerchant = new Map<string, Map<string, number>>() // marchand -> libelle brut -> occurrences
   const groupsByMerchant = new Map<string, Map<string, number>>() // marchand -> groupe -> depense
-  const chargesByMerchant = new Map<string, Map<string, number[]>>() // marchand -> mois -> prelevements
+  const chargesByMerchant = new Map<string, Map<string, Charge[]>>() // marchand -> mois -> passages
   const merchantsByCategory = new Map<string, Map<string, number>>() // categorie -> marchand -> depense
   const monthMerchants = new Map<string, { total: number; count: number }>()
   const monthGroups = new Map<string, number>()
@@ -392,7 +393,7 @@ export function computeAnalytics(
     bump(nested(labelsByMerchant, key, () => new Map()), t.label, 1)
     bump(nested(groupsByMerchant, key, () => new Map()), group?.id ?? UNCAT_KEY, spent)
     if (m >= detectStart) {
-      nested(nested(chargesByMerchant, key, () => new Map<string, number[]>()), m, () => []).push(spent)
+      nested(nested(chargesByMerchant, key, () => new Map<string, Charge[]>()), m, () => []).push({ spent, day })
       bump(nested(merchantsByCategory, catKey, () => new Map()), key, spent)
     }
     if (inPeriod) {
@@ -669,13 +670,37 @@ export function computeAnalytics(
 // ---------------------------------------------------------------------------
 //
 // Un marchand est un prelevement recurrent s'il revient sur au moins la moitie
-// des mois actifs (3 au minimum), UNE fois par mois (au moins 3 mois sur 4 :
-// plusieurs passages par mois = une habitude, pas un prelevement), pour un
-// montant stable (coefficient de variation <= 15 %), et s'il est toujours
-// actif (vu le mois de reference ou le precedent : sinon il a ete resilie).
+// des mois actifs (3 au minimum), UNE fois par mois, pour le meme montant
+// (a 5 % pres) le meme jour du mois (a 3 jours pres) — a chaque fois pour au
+// moins 3 passages sur 4, ce qui tolere un changement de tarif ou un
+// prelevement decale —, et s'il est toujours actif (vu le mois de reference ou
+// le precedent : sinon il a ete resilie). Des achats au hasard (un restaurant
+// une fois par mois) ne passent ni le filtre du montant ni celui du jour.
+
+interface Charge {
+  spent: number
+  day: number
+}
+
+/** Plus grande part des valeurs « proches » d'une meme valeur de la liste. */
+function bestAgreement(values: number[], close: (a: number, b: number) => boolean): number {
+  let best = 0
+  for (const center of values) {
+    const n = values.filter((v) => close(v, center)).length
+    if (n > best) best = n
+  }
+  return values.length > 0 ? best / values.length : 0
+}
+
+const sameAmount = (a: number, b: number) => Math.abs(a - b) <= Math.max(b * AMOUNT_TOLERANCE, 50)
+// Distance circulaire sur le mois : un prelevement du 30 ou du 1er reste groupe.
+const sameDay = (a: number, b: number) => {
+  const d = Math.abs(a - b)
+  return Math.min(d, 31 - d) <= DAY_TOLERANCE
+}
 
 function detectRecurring(
-  charges: Map<string, Map<string, number[]>>,
+  charges: Map<string, Map<string, Charge[]>>,
   ctx: {
     reference: string
     firstMonth: string
@@ -695,18 +720,16 @@ function detectRecurring(
     const seen = [...byMonth.keys()].sort()
     if (seen.length < minMonths || seen[seen.length - 1]! < lastAllowed) continue
     const single = seen.filter((m) => byMonth.get(m)!.length === 1).length
-    if (single / seen.length < MIN_SINGLE_SHARE) continue
-    const amounts = seen.flatMap((m) => byMonth.get(m)!)
-    const avg = mean(amounts)
-    if (avg <= 0) continue
-    const deviation = Math.sqrt(mean(amounts.map((v) => (v - avg) ** 2)))
-    if (deviation / avg > MAX_AMOUNT_CV) continue
+    if (single / seen.length < MIN_AGREEMENT) continue
+    const all = seen.flatMap((m) => byMonth.get(m)!)
+    if (bestAgreement(all.map((c) => c.spent), sameAmount) < MIN_AGREEMENT) continue
+    if (bestAgreement(all.map((c) => c.day), sameDay) < MIN_AGREEMENT) continue
     recurring.push({
       key,
       label: ctx.displayName(key),
       initial: ctx.initialOf(key),
       group: ctx.dominantGroup(key),
-      monthly: median(seen.slice(-3).flatMap((m) => byMonth.get(m)!)),
+      monthly: median(seen.slice(-3).flatMap((m) => byMonth.get(m)!.map((c) => c.spent))),
       months: seen.length,
     })
   }

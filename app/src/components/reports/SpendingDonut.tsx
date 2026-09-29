@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector } from 'recharts'
 import { PieChart as PieIcon } from 'lucide-react'
 import { inMonth, REST_KEY, type Analytics, type GroupSlice } from '@/lib/analytics'
-import { fmtEUR, fmtMonthLong, fmtMonthShort, fmtPercent } from '@/lib/format'
+import { addMonths, fmtEUR, fmtMonthLong, fmtMonthShort, fmtMonthTitle, fmtPercent } from '@/lib/format'
 import { useChartPalette } from '@/hooks/useTheme'
 import type { ChartPalette } from '@/styles/themes'
 import { Amount } from '@/components/shared/Amount'
@@ -17,6 +17,7 @@ const BODY = 'h-[168px] gap-4 lg:h-[196px] lg:gap-7'
 // Anneau : 140px sur mobile (la legende garde la place de noms entiers), toute
 // la hauteur du corps en desktop.
 const RING = 'h-[140px] w-[140px] lg:h-full lg:w-auto lg:aspect-square'
+const FOOTER = 'flex min-h-9 items-center justify-between gap-3 border-t border-line/70 pt-3 text-[12.5px] text-soft'
 const ROW = 'h-[26px] lg:h-[30px]'
 const ROWS_GAP = 'gap-[2px] lg:gap-[3px]'
 
@@ -42,26 +43,14 @@ export function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth:
   const slices = a.byGroup
   const current = active !== null ? slices[active] : undefined
 
-  // Tendance vs mois precedent (a date pour le mois courant).
+  // Tendance vs mois precedent (a la meme date pour le mois courant).
   const ref = a.toDate ? a.toDate.spending : a.spending
   const prev = a.previousSpending
   const delta = prev !== null && prev > 0 ? (ref - prev) / prev : null
-  const prevLabel = fmtMonthShort(a.months.length > 1 ? a.months[a.months.length - 2]! : a.reference)
+  const previousMonth = addMonths(a.reference, -1)
 
   return (
-    <WidgetCard
-      icon={PieIcon}
-      question={question(a.reference, currentMonth)}
-      caption={caption(a.reference, currentMonth)}
-      action={
-        <TrendBadge
-          delta={delta}
-          downIsGood
-          label={`vs ${prevLabel}${a.toDate ? ' à date' : ''}`}
-          emptyLabel="Pas de mois précédent"
-        />
-      }
-    >
+    <WidgetCard icon={PieIcon} question={question(a.reference, currentMonth)} caption={caption(a.reference, currentMonth)}>
       <div className={cn('flex items-center', BODY)}>
         <div className={cn('relative shrink-0', RING)}>
           {slices.length > 0 ? (
@@ -153,18 +142,34 @@ export function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth:
           </p>
         )}
       </div>
+      <div className={FOOTER}>
+        <span className="min-w-0 truncate">
+          {prev !== null ? (
+            <>
+              {fmtMonthTitle(previousMonth).replace(/ \d{4}$/, '')}
+              {a.toDate ? ' à la même date' : ''}
+              {'\u00a0: '}
+              <Amount cents={prev} className="font-medium text-ink" />
+            </>
+          ) : (
+            'Pas de mois précédent à comparer'
+          )}
+        </span>
+        <TrendBadge
+          delta={delta}
+          downIsGood
+          label={`vs ${fmtMonthShort(previousMonth)}`}
+          emptyLabel="Pas de comparaison"
+          className="shrink-0"
+        />
+      </div>
     </WidgetCard>
   )
 }
 
 export function SpendingDonutSkeleton({ reference, currentMonth }: { reference: string; currentMonth: string }) {
   return (
-    <WidgetCard
-      icon={PieIcon}
-      question={question(reference, currentMonth)}
-      caption={caption(reference, currentMonth)}
-      action={<ActionSkeleton />}
-    >
+    <WidgetCard icon={PieIcon} question={question(reference, currentMonth)} caption={caption(reference, currentMonth)}>
       <div aria-hidden className={cn('flex items-center', BODY)}>
         <div className={cn('relative shrink-0', RING)}>
           <Skeleton className="absolute inset-[3%] rounded-full" />
@@ -180,6 +185,10 @@ export function SpendingDonutSkeleton({ reference, currentMonth }: { reference: 
             </div>
           ))}
         </div>
+      </div>
+      <div aria-hidden className={FOOTER}>
+        <Skeleton className="h-3.5 w-44" />
+        <ActionSkeleton />
       </div>
     </WidgetCard>
   )

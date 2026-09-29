@@ -6,7 +6,7 @@ import { ProgressBar } from '@/components/shared/ProgressBar'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MerchantAvatar } from '@/components/reports/MerchantAvatar'
-import { ActionSkeleton, CaptionSkeleton, WidgetCard } from '@/components/reports/WidgetCard'
+import { BadgeSkeleton, CaptionSkeleton, WidgetCard } from '@/components/reports/WidgetCard'
 import { cn } from '@/lib/utils'
 
 const TOP = 5
@@ -82,7 +82,7 @@ export function TopMerchantsSkeleton({ reference, currentMonth }: { reference: s
       icon={Store}
       question={question(reference, currentMonth)}
       caption={<CaptionSkeleton className="w-36" />}
-      action={<ActionSkeleton className="w-40" />}
+      action={<BadgeSkeleton text="Top 5 · 00 % des dépenses" />}
     >
       <div aria-hidden className={cn('flex flex-col', LIST)}>
         {Array.from({ length: TOP }).map((_, i) => (

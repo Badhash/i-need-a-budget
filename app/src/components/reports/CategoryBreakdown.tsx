@@ -25,6 +25,9 @@ function monthTitle(month: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1)
 }
 
+const thisMonthLabel = (reference: string, currentMonth: string) =>
+  reference === currentMonth ? 'Ce mois-ci' : monthTitle(reference)
+
 /**
  * Ton d'une ligne : ambre au-dessus de la moyenne (au-dela de 10 % et 10 €),
  * vert en dessous (mois termine seulement : un mois en cours n'est pas encore
@@ -36,6 +39,31 @@ function toneOf(c: CategoryStat, inProgress: boolean): ProgressTone {
   if (c.delta > margin) return 'warning'
   if (!inProgress && c.delta < -margin) return 'success'
   return 'accent'
+}
+
+const GRID = 'grid grid-cols-[minmax(0,1.5fr)_minmax(0,2fr)_repeat(3,minmax(0,0.75fr))] items-center gap-5'
+
+/** Ligne d'en-tete du tableau desktop (partagee avec le squelette). */
+function HeaderRow({ thisLabel }: { thisLabel: string }) {
+  return (
+    <div role="row" className={cn(GRID, 'border-b border-line/70 pb-2')}>
+      <span role="columnheader" className="label-caps">
+        Catégorie
+      </span>
+      <span role="columnheader" className="label-caps" title="Le repère marque la moyenne">
+        Face à la moyenne
+      </span>
+      <span role="columnheader" className="label-caps text-right">
+        {thisLabel}
+      </span>
+      <span role="columnheader" className="label-caps text-right">
+        Moyenne
+      </span>
+      <span role="columnheader" className="label-caps text-right">
+        Écart
+      </span>
+    </div>
+  )
 }
 
 const DELTA_TEXT: Record<ProgressTone, string> = {
@@ -85,11 +113,11 @@ export function CategoryBreakdown({
   const visible = isDesktop ? VISIBLE_DESKTOP : VISIBLE_MOBILE
   const shown = expanded ? rows : rows.slice(0, visible)
   const inProgress = a.reference >= currentMonth
-  const thisLabel = a.reference === currentMonth ? 'Ce mois-ci' : monthTitle(a.reference)
+  const thisLabel = thisMonthLabel(a.reference, currentMonth)
   const caption =
     a.averageMonths.length > 0
-      ? `${thisLabel} face à ta moyenne sur ${a.averageMonths.length} mois · le repère marque la moyenne`
-      : `${thisLabel} : la moyenne apparaîtra avec l’historique`
+      ? `${thisLabel} face à ta moyenne sur ${a.averageMonths.length} mois`
+      : `${thisLabel}\u00a0: la moyenne viendra avec l’historique`
 
   return (
     <WidgetCard icon={Gauge} question="Où va l’argent, et où ça dérape ?" caption={caption} className={className}>
@@ -97,35 +125,12 @@ export function CategoryBreakdown({
         <p className="py-6 text-center text-[13.5px] text-soft">Aucune dépense à comparer.</p>
       ) : isDesktop ? (
         <div role="table" aria-label="Dépenses par catégorie face à la moyenne" className="text-[13.5px]">
-          <div
-            role="row"
-            className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,2fr)_repeat(3,minmax(0,0.75fr))] items-center gap-5 border-b border-line/70 pb-2"
-          >
-            <span role="columnheader" className="label-caps">
-              Catégorie
-            </span>
-            <span role="columnheader" className="label-caps">
-              Face à la moyenne
-            </span>
-            <span role="columnheader" className="label-caps text-right">
-              {thisLabel}
-            </span>
-            <span role="columnheader" className="label-caps text-right">
-              Moyenne
-            </span>
-            <span role="columnheader" className="label-caps text-right">
-              Écart
-            </span>
-          </div>
+          <HeaderRow thisLabel={thisLabel} />
           <div className="stagger divide-y divide-line/50">
             {shown.map((c) => {
               const tone = toneOf(c, inProgress)
               return (
-                <div
-                  key={c.id}
-                  role="row"
-                  className="grid h-12 grid-cols-[minmax(0,1.5fr)_minmax(0,2fr)_repeat(3,minmax(0,0.75fr))] items-center gap-5"
-                >
+                <div key={c.id} role="row" className={cn(GRID, 'h-12')}>
                   <span role="cell" className="flex min-w-0 items-center gap-2.5">
                     <GroupPill group={c.group ?? undefined} size="sm" />
                     <span className="truncate font-medium text-ink">{c.name}</span>
@@ -189,7 +194,18 @@ export function CategoryBreakdown({
   )
 }
 
-export function CategoryBreakdownSkeleton({ isDesktop, className }: { isDesktop: boolean; className?: string }) {
+export function CategoryBreakdownSkeleton({
+  reference,
+  currentMonth,
+  isDesktop,
+  className,
+}: {
+  reference: string
+  currentMonth: string
+  isDesktop: boolean
+  className?: string
+}) {
+  const rows = Array.from({ length: isDesktop ? VISIBLE_DESKTOP : VISIBLE_MOBILE })
   return (
     <WidgetCard
       icon={Gauge}
@@ -197,33 +213,43 @@ export function CategoryBreakdownSkeleton({ isDesktop, className }: { isDesktop:
       caption={<CaptionSkeleton className="w-56" />}
       className={className}
     >
-      <div aria-hidden>
-        {isDesktop && <Skeleton className="mb-2 h-4 w-full max-w-md" />}
-        <div className="divide-y divide-line/50">
-          {Array.from({ length: isDesktop ? VISIBLE_DESKTOP : VISIBLE_MOBILE }).map((_, i) =>
-            isDesktop ? (
-              <div key={i} className="flex h-12 items-center gap-5">
-                <Skeleton className="h-7 w-7 rounded-full" />
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-1.5 flex-1 rounded-full" />
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-4 w-14" />
-              </div>
-            ) : (
-              <div key={i} className="py-3">
-                <div className="flex items-center gap-3">
+      {isDesktop ? (
+        <div aria-hidden className="text-[13.5px]">
+          <HeaderRow thisLabel={thisMonthLabel(reference, currentMonth)} />
+          <div className="divide-y divide-line/50">
+            {rows.map((_, i) => (
+              <div key={i} className={cn(GRID, 'h-12')}>
+                <span className="flex items-center gap-2.5">
                   <Skeleton className="h-7 w-7 rounded-full" />
-                  <Skeleton className="h-4 flex-1" />
-                  <Skeleton className="h-4 w-16" />
-                </div>
-                <Skeleton className="ml-10 mt-2 h-1.5 rounded-full" />
-                <Skeleton className="ml-10 mt-2 h-3 w-40" />
+                  <Skeleton className="h-4 w-28" />
+                </span>
+                <Skeleton className="h-1.5 rounded-full" />
+                <Skeleton className="ml-auto h-4 w-20" />
+                <Skeleton className="ml-auto h-4 w-20" />
+                <Skeleton className="ml-auto h-4 w-12" />
               </div>
-            ),
-          )}
+            ))}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div aria-hidden className="-my-1 divide-y divide-line/50">
+          {rows.map((_, i) => (
+            <div key={i} className="py-3">
+              <div className="flex items-center gap-3">
+                <Skeleton className="h-7 w-7 rounded-full" />
+                <Skeleton className="h-4 flex-1" />
+                <Skeleton className="h-4 w-16" />
+              </div>
+              <Skeleton className="ml-10 mt-2 h-1.5 rounded-full" />
+              <div className="ml-10 mt-1.5 flex h-[18px] items-center justify-between">
+                <Skeleton className="h-3 w-32" />
+                <Skeleton className="h-3 w-10" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <Skeleton aria-hidden className="h-11 w-full rounded-xl lg:h-10" />
     </WidgetCard>
   )
 }
