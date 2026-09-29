@@ -44,10 +44,12 @@ export function DeleteCategoryDialog({ row, onConfirm, onClose }: DeleteCategory
             <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger ring-1 ring-inset ring-danger/15">
               <Trash2 className="h-5 w-5" />
             </span>
-            <DialogTitle>Supprimer « {row.category.name} » ?</DialogTitle>
+            <DialogTitle>
+              Supprimer «&nbsp;{row.category.name}&nbsp;»&nbsp;?
+            </DialogTitle>
             <DialogDescription>
-              Ses transactions repasseront « À catégoriser » et l'argent qui lui est assigné retournera dans le
-              Prêt à assigner. Cette action est définitive.
+              Ses transactions repasseront «&nbsp;À catégoriser&nbsp;» et l'argent qui lui est assigné
+              retournera dans le Prêt à assigner. Cette action est définitive.
             </DialogDescription>
           </DialogHeader>
           <dl className="mx-5 mt-1 divide-y divide-line/70 rounded-2xl bg-surface2/60 px-4 text-[13.5px]">

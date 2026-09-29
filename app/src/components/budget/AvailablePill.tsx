@@ -1,4 +1,4 @@
-import { forwardRef, type ButtonHTMLAttributes } from 'react'
+import { forwardRef, useEffect, useRef, useState, type ButtonHTMLAttributes } from 'react'
 import { fmtEUR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -110,23 +110,61 @@ const TONE_CLASSES: Record<AvailableTone, string> = {
 }
 
 interface AvailableButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
+  /** Montant affiche (centimes). */
   cents: number
   tone: AvailableTone
+  /** Apercu pendant la saisie de l'assigne : contour pointille = pas encore valide. */
+  draft?: boolean
   /**
-   * Apercu pendant la saisie de l'assigne (valeur que prendrait le disponible) :
-   * affiche a la place du montant, contour pointille = pas encore valide.
+   * Affichage immediat, sans compteur : apercu de saisie, ou valeur tout juste
+   * validee en attendant le cache (le compteur repartirait de l'ancienne).
    */
-  preview?: { cents: number; tone: AvailableTone } | null
+  instant?: boolean
+}
+
+// Sortie douce (ease-out quartique), comme useAnimatedNumber.
+const easeOut = (t: number) => 1 - Math.pow(1 - t, 4)
+
+/**
+ * Compteur vers la valeur cible (450 ms), qui peut aussi SAUTER directement a
+ * la cible (`instant`) : le point de depart du prochain compteur est alors la
+ * valeur affichee, jamais une valeur perimee. Coupe sous prefers-reduced-motion.
+ */
+function useCountTo(target: number, instant: boolean): number {
+  const [value, setValue] = useState(target)
+  const shownRef = useRef(target)
+  useEffect(() => {
+    const from = shownRef.current
+    if (from === target) return
+    if (instant || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      shownRef.current = target
+      setValue(target)
+      return
+    }
+    let raf = 0
+    const start = performance.now()
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / 450)
+      const current = Math.round(from + (target - from) * easeOut(t))
+      shownRef.current = current
+      setValue(current)
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, instant])
+  return instant ? target : value
 }
 
 /**
  * Pastille « Disponible » de la grille desktop : bouton qui ouvre le popover
  * de deplacement d'argent. Largeur minimale commune pour que les montants
- * s'alignent en colonne, chiffres tabulaires.
+ * s'alignent en colonne, chiffres tabulaires ; un changement de valeur (argent
+ * deplace, reconciliation) defile en compteur.
  */
 export const AvailableButton = forwardRef<HTMLButtonElement, AvailableButtonProps>(
-  ({ cents, tone, preview, className, ...props }, ref) => {
-    const shown = preview ?? { cents, tone }
+  ({ cents, tone, draft, instant = false, className, ...props }, ref) => {
+    const shown = useCountTo(cents, instant)
     return (
       <button
         ref={ref}
@@ -136,13 +174,13 @@ export const AvailableButton = forwardRef<HTMLButtonElement, AvailableButtonProp
           'transition-[background-color,box-shadow,color,transform] duration-150 ease-spring active:scale-[0.97]',
           "after:absolute after:-inset-1.5 after:content-['']",
           'focus-visible:ring-2 focus-visible:ring-accent/70 focus-visible:ring-offset-0',
-          TONE_CLASSES[shown.tone],
-          preview && 'outline-dashed outline-1 outline-offset-2 outline-ink/30',
+          TONE_CLASSES[tone],
+          draft && 'outline-dashed outline-1 outline-offset-2 outline-ink/30',
           className,
         )}
         {...props}
       >
-        {fmtEUR(shown.cents)}
+        {fmtEUR(shown)}
       </button>
     )
   },

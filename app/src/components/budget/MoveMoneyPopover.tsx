@@ -464,7 +464,9 @@ export function MoveMoneyPopover({
           </div>
         ))}
         {flat.length === 0 && (
-          <p className="px-3 py-6 text-center text-[13px] text-soft">Aucune enveloppe ne correspond à « {query.trim()} ».</p>
+          <p className="px-3 py-6 text-center text-[13px] text-soft">
+            Aucune enveloppe ne correspond à «&nbsp;{query.trim()}&nbsp;».
+          </p>
         )}
       </div>
 

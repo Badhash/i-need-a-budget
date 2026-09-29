@@ -115,7 +115,7 @@ export function AssignQuickValues({ row, month, anchor, draftCents, isExpression
         maxWidth: Math.min(box.maxWidth ?? 560, 560),
       }}
       className={cn(
-        'z-50 flex animate-scale-in flex-wrap items-center justify-end gap-0.5 rounded-2xl border border-edge bg-surface3 p-1 shadow-elevated',
+        'z-50 flex animate-scale-in flex-wrap items-center gap-0.5 rounded-2xl border border-edge bg-surface3 p-1 shadow-elevated',
         box.placement === 'below' ? 'origin-top-right' : 'origin-bottom-right',
       )}
     >

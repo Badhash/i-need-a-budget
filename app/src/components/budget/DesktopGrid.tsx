@@ -11,6 +11,7 @@ import { useBudgetMonth, useCategoriesList, useGroupsList } from '@/lib/data'
 import { useReorderCategoriesMutation, useReorderGroupsMutation } from '@/lib/taxonomy'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Amount } from '@/components/shared/Amount'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { cn } from '@/lib/utils'
@@ -652,20 +653,20 @@ function GroupHeaderRow({
           <RowMenuButton model={menu} className="ml-auto xl:ml-1" />
         </div>
       </td>
-      <td className={cn(cell, 'pl-2 pr-5 text-right text-[13.5px] font-medium text-soft tnum xl:pr-6')}>
-        {fmtEUR(totals.assigned)}
+      <td className={cn(cell, 'pl-2 pr-5 text-right text-[13.5px] font-medium text-soft xl:pr-6')}>
+        <Amount cents={totals.assigned} animate />
       </td>
-      <td className={cn(cell, 'pl-2 pr-5 text-right text-[13.5px] font-medium text-soft tnum xl:pr-6')}>
-        {fmtEUR(totals.activity)}
+      <td className={cn(cell, 'pl-2 pr-5 text-right text-[13.5px] font-medium text-soft xl:pr-6')}>
+        <Amount cents={totals.activity} animate />
       </td>
       <td
         className={cn(
           cell,
-          'pl-2 pr-7 text-right text-[14px] font-semibold tnum xl:pr-8',
+          'pl-2 pr-7 text-right text-[14px] font-semibold xl:pr-8',
           totals.available < 0 ? 'text-danger' : 'text-ink',
         )}
       >
-        {fmtEUR(totals.available)}
+        <Amount cents={totals.available} animate />
       </td>
     </tr>
   )
@@ -726,19 +727,44 @@ function EnvelopeRow({
     if (!editing) setPreview(null)
   }, [editing])
 
+  // Valeurs tout juste validees, tenues jusqu'a ce que le cache les rattrape
+  // (le patch optimiste arrive un tick apres la sortie d'edition) : ni l'assigne
+  // ni le disponible ne repassent un instant par l'ancienne valeur. Filet de
+  // 1,5 s si l'ecriture echoue (rollback : la vraie valeur revient).
+  const [hold, setHold] = useState<{ assigned: number; available: number } | null>(null)
+  useEffect(() => {
+    if (!hold) return
+    if (row.assigned === hold.assigned) {
+      setHold(null)
+      return
+    }
+    const timer = window.setTimeout(() => setHold(null), 1500)
+    return () => window.clearTimeout(timer)
+  }, [hold, row.assigned])
+
   const { category } = row
   const empty = isEmptyRow(row)
   const underfunded = (assigned: number, available: number) =>
     target !== undefined && neededThisMonth(target, month, assigned, available) > 0
-  const tone = availableTone(row.available, underfunded(row.assigned, row.available))
+  const assigned = hold?.assigned ?? row.assigned
+  const baseAvailable = hold?.available ?? row.available
   const previewAvailable =
-    editing && preview !== null && preview !== row.assigned ? row.available + (preview - row.assigned) : null
+    editing && preview !== null && preview !== assigned ? baseAvailable + (preview - assigned) : null
+  const shownAvailable = previewAvailable ?? baseAvailable
+  const tone = availableTone(shownAvailable, underfunded(previewAvailable !== null ? preview! : assigned, shownAvailable))
+  const commitAssigned = (cents: number) => {
+    setHold({ assigned: cents, available: baseAvailable + (cents - assigned) })
+    onCommit(cents)
+  }
 
   return (
     <tr
       data-editing={editing || undefined}
       className={cn(
-        'group/row transition-colors duration-150 hover:bg-ink/[0.02] focus-within:bg-accent/[0.04] data-[editing]:bg-accent/[0.06]',
+        'group/row transition-[background-color,opacity] duration-150 hover:bg-ink/[0.02] focus-within:bg-accent/[0.04] data-[editing]:bg-accent/[0.06]',
+        // Enveloppe vide (rien d'assigne, d'engage ni de disponible) : en
+        // retrait, pleine opacite au survol et au focus.
+        empty && 'opacity-60 focus-within:opacity-100 hover:opacity-100',
         dropIndicatorClass(dnd.dropTarget, category.id),
       )}
       onContextMenu={onContextMenu}
@@ -757,46 +783,41 @@ function EnvelopeRow({
           onDragEnd={dnd.onDragEnd}
           className="absolute left-1 top-2"
         />
-        <div>
-          <div className="min-w-0">
-            <div className="flex h-6 items-center gap-1">
-              {renaming ? (
-                <InlineRename
-                  initial={category.name}
-                  label="Nouveau nom de l'enveloppe"
-                  onCommit={onRenameCommit}
-                  onDone={onRenameDone}
-                  className="-ml-2.5 max-w-[320px]"
-                />
-              ) : (
-                <span
-                  className={cn('truncate text-[14.5px] font-medium', empty ? 'text-soft' : 'text-ink')}
-                  title={category.name}
-                >
-                  {category.name}
-                </span>
-              )}
-              {target && !renaming && (
-                <TargetTrigger category={category} hasTarget onOpen={onOpenTarget} variant="desktop" />
-              )}
-              <RowMenuButton model={menu} className="ml-auto" />
-            </div>
-            {target ? (
-              <TargetBar target={target} assigned={row.assigned} available={row.available} color={block.group.color} />
+        <div className="min-w-0">
+          <div className="flex h-6 items-center gap-1">
+            {renaming ? (
+              <InlineRename
+                initial={category.name}
+                label="Nouveau nom de l'enveloppe"
+                onCommit={onRenameCommit}
+                onDone={onRenameDone}
+                className="-ml-2.5 max-w-[320px]"
+              />
             ) : (
-              <SpentBar available={row.available} activity={row.activity} color={block.group.color} />
+              <span className="truncate text-[14.5px] font-medium text-ink" title={category.name}>
+                {category.name}
+              </span>
             )}
+            {target && !renaming && (
+              <TargetTrigger category={category} hasTarget onOpen={onOpenTarget} variant="desktop" />
+            )}
+            <RowMenuButton model={menu} className="ml-auto" />
           </div>
+          {target ? (
+            <TargetBar target={target} assigned={assigned} available={baseAvailable} color={block.group.color} />
+          ) : (
+            <SpentBar available={baseAvailable} activity={row.activity} color={block.group.color} />
+          )}
         </div>
       </td>
       <td className={cn(ROW_CELL, 'px-2 text-right xl:px-3')}>
         <AssignedEditor
-          value={row.assigned}
+          value={assigned}
           editing={editing}
           label={category.name}
           navKey={category.id}
           onStartEdit={onStartEdit}
-          onCommit={onCommit}
+          onCommit={commitAssigned}
           onNavigate={onNavigate}
           onFocusMove={onFocusMove}
           onExit={onExit}
@@ -833,18 +854,15 @@ function EnvelopeRow({
       </td>
       <td className={cn(ROW_CELL, 'pl-2 pr-4 text-right xl:pl-3 xl:pr-5')}>
         <AvailableButton
-          cents={row.available}
+          cents={shownAvailable}
           tone={tone}
-          preview={
-            previewAvailable !== null
-              ? { cents: previewAvailable, tone: availableTone(previewAvailable, underfunded(preview!, previewAvailable)) }
-              : null
-          }
+          draft={previewAvailable !== null}
+          instant={previewAvailable !== null || hold !== null}
           onClick={(e) => onToggleMove(category.id, e.currentTarget)}
           aria-haspopup="dialog"
           aria-expanded={moveOpen}
-          aria-label={`Disponible de ${category.name} : ${fmtEUR(row.available)}. Déplacer de l'argent`}
-          title={row.available < 0 ? 'Couvrir ce dépassement' : "Déplacer de l'argent"}
+          aria-label={`Disponible de ${category.name} : ${fmtEUR(baseAvailable)}. Déplacer de l'argent`}
+          title={baseAvailable < 0 ? 'Couvrir ce dépassement' : "Déplacer de l'argent"}
         />
       </td>
     </tr>
