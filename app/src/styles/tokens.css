@@ -1,14 +1,46 @@
 /*
- * tokens.css — source unique des design tokens.
+ * tokens.css — source unique des design tokens (langage visuel v2 « Aurore »).
  * 3 themes (corail, menthe, nuit), chacun en light et dark.
- * Les couleurs semantiques sont des triplets RGB (consommes par Tailwind
- * via rgb(var(--x) / <alpha-value>)). Les couleurs de groupes de categories
+ *
+ * Les couleurs sont des triplets RGB (consommes par Tailwind via
+ * rgb(var(--x) / <alpha-value>)). Les couleurs de groupes de categories
  * (--cat-*) sont des valeurs completes, consommees en inline style.
+ *
+ * Hierarchie des surfaces (profondeur par la lumiere, pas par les bordures) :
+ *   --bg        fond de page
+ *   --surface   cartes et feuilles (niveau 1)
+ *   --surface2  remplissage attenue / enfonce (survols, puces, pistes)
+ *   --surface3  surface SURELEVEE (popovers, cartes raised, toasts) : blanc +
+ *               ombre en light, plus claire que --surface en dark
+ *
+ * Accent : --accent (remplissages, marque), --accent-fg (texte SUR l'accent),
+ * --accent-ink (texte accentue sur fond clair, contraste AA), --accent-2
+ * (second arret des degrades de marque : FAB, badges, jauges).
+ * Aurore : --aura-1 / --aura-2 = arrets des halos radiaux des cartes heros.
+ *
+ * Ombres : --shadow-card (cartes), --shadow-raised (cartes heros/surelevees),
+ * --shadow-elevated (feuilles, popovers, toasts), --shadow-glow (halo accent),
+ * --shadow-fab. En dark : pas d'ombres portees lourdes, un filet clair en
+ * haut (--highlight) et des bordures fines.
  */
+
+/* ------------------------------------------------------------------ */
+/* Mouvement (commun a tous les themes)                               */
+/* ------------------------------------------------------------------ */
+
+:root {
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --dur-fast: 150ms;
+  --dur-base: 220ms;
+  --dur-slow: 280ms;
+  --stagger-step: 40ms;
+}
 
 /* ------------------------------------------------------------------ */
 /* Theme CORAIL — north star Copilot Money : chaleureux, blanc casse,  */
 /* accent corail. Typo : Instrument Sans.                              */
+/* Valeurs CLAUDE.md conservees (fond, surfaces, texte, corail, rouge).*/
 /* ------------------------------------------------------------------ */
 
 :root,
@@ -18,17 +50,46 @@
   --bg: 250 249 247;
   --surface: 255 255 255;
   --surface2: 244 242 238;
+  --surface3: 255 255 255;
   --ink: 26 26 26;
-  --soft: 138 132 123;
+  /* Texte attenue assombri pour le contraste AA (4,7:1 sur le fond). */
+  --soft: 117 111 102;
   --line: 235 232 226;
+  /* Contour des cartes et du chrome : plus doux que --line en clair (la
+     profondeur vient de la lumiere), filet franc en sombre. */
+  --edge: 241 239 235;
   --accent: 255 107 94;
-  --accent-fg: 255 255 255;
+  /* Texte sombre sur le corail : le blanc plafonne a 2,8:1 (AA = 4,5:1). */
+  --accent-fg: 58 18 14;
+  --accent-ink: 201 61 49;
+  --accent-2: 255 146 92;
   --success: 41 168 99;
   --warning: 214 138 13;
   --danger: 229 72 77;
 
-  --shadow-card: 0 1px 2px rgb(26 26 26 / 0.04), 0 4px 12px rgb(26 26 26 / 0.05);
-  --shadow-fab: 0 8px 24px rgb(255 107 94 / 0.35);
+  --coin: 245 166 35;
+  --coin-fg: 255 255 255;
+
+  --aura-1: 255 107 94;
+  --aura-2: 255 178 102;
+  --aura-a: 0.24;
+  --aura-b: 0.16;
+
+  --glass-alpha: 0.72;
+  --scrim: rgb(40 26 22 / 0.34);
+  --shimmer: rgb(255 255 255 / 0.7);
+  --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.8);
+
+  --shadow-card: 0 1px 2px rgb(60 36 28 / 0.04), 0 4px 16px -4px rgb(60 36 28 / 0.08);
+  --shadow-raised: 0 1px 2px rgb(60 36 28 / 0.06), 0 12px 32px -10px rgb(60 36 28 / 0.18),
+    0 28px 56px -24px rgb(60 36 28 / 0.2);
+  --shadow-elevated: 0 2px 8px -2px rgb(60 36 28 / 0.08), 0 16px 40px -12px rgb(60 36 28 / 0.2),
+    0 32px 80px -24px rgb(60 36 28 / 0.22);
+  --shadow-glow: 0 10px 28px -8px rgb(var(--accent) / 0.55);
+  --shadow-fab: 0 12px 28px -8px rgb(var(--accent) / 0.6), 0 2px 6px rgb(60 36 28 / 0.1);
+  --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(20 16 40 / 0.08),
+    0 6px 16px -8px rgb(var(--accent) / 0.6);
+  --shadow-bar: 0 10px 28px -20px rgb(60 36 28 / 0.35);
 
   --cat-blue-bg: #e8f0fa;
   --cat-blue-fg: #3b6fb5;
@@ -49,17 +110,39 @@
   --bg: 20 20 20;
   --surface: 30 30 30;
   --surface2: 40 39 37;
+  --surface3: 38 37 35;
   --ink: 242 240 237;
   --soft: 158 152 144;
   --line: 48 46 43;
+  --edge: 48 46 43;
   --accent: 255 122 110;
   --accent-fg: 46 18 15;
+  --accent-ink: 255 140 128;
+  --accent-2: 255 164 112;
   --success: 61 214 140;
   --warning: 247 184 75;
   --danger: 242 85 90;
 
-  --shadow-card: none;
-  --shadow-fab: 0 8px 24px rgb(0 0 0 / 0.5);
+  --coin: 246 180 85;
+  --coin-fg: 58 36 4;
+
+  --aura-1: 255 122 110;
+  --aura-2: 255 170 96;
+  --aura-a: 0.24;
+  --aura-b: 0.14;
+
+  --glass-alpha: 0.7;
+  --scrim: rgb(0 0 0 / 0.62);
+  --shimmer: rgb(255 255 255 / 0.05);
+  --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.04);
+
+  --shadow-card: var(--highlight);
+  --shadow-raised: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 16px 40px -16px rgb(0 0 0 / 0.55);
+  --shadow-elevated: inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 24px 64px -16px rgb(0 0 0 / 0.7);
+  --shadow-glow: 0 10px 32px -8px rgb(var(--accent) / 0.42);
+  --shadow-fab: 0 12px 30px -8px rgb(var(--accent) / 0.45), 0 4px 12px rgb(0 0 0 / 0.45);
+  --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.16), 0 8px 20px -12px rgb(var(--accent) / 0.55);
+  --shadow-bar: none;
 
   --cat-blue-bg: #22303f;
   --cat-blue-fg: #8fb8e8;
@@ -86,17 +169,43 @@
   --bg: 246 250 248;
   --surface: 255 255 255;
   --surface2: 234 243 239;
+  --surface3: 255 255 255;
   --ink: 15 31 26;
-  --soft: 104 125 117;
+  --soft: 92 112 104;
   --line: 222 235 229;
-  --accent: 13 148 118;
+  --edge: 232 241 237;
+  /* Menthe approfondie : texte blanc lisible (5:1) sur les boutons. */
+  --accent: 10 128 103;
   --accent-fg: 255 255 255;
-  --success: 22 158 90;
-  --warning: 204 122 8;
-  --danger: 224 66 76;
+  --accent-ink: 9 115 92;
+  --accent-2: 12 140 130;
+  --success: 13 132 76;
+  --warning: 176 98 0;
+  --danger: 214 48 62;
 
-  --shadow-card: 0 1px 2px rgb(15 31 26 / 0.04), 0 4px 12px rgb(15 31 26 / 0.06);
-  --shadow-fab: 0 8px 24px rgb(13 148 118 / 0.35);
+  --coin: 245 166 35;
+  --coin-fg: 255 255 255;
+
+  --aura-1: 16 185 129;
+  --aura-2: 56 189 248;
+  --aura-a: 0.24;
+  --aura-b: 0.16;
+
+  --glass-alpha: 0.72;
+  --scrim: rgb(12 30 24 / 0.34);
+  --shimmer: rgb(255 255 255 / 0.7);
+  --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.8);
+
+  --shadow-card: 0 1px 2px rgb(15 50 40 / 0.04), 0 4px 16px -4px rgb(15 50 40 / 0.08);
+  --shadow-raised: 0 1px 2px rgb(15 50 40 / 0.06), 0 12px 32px -10px rgb(15 50 40 / 0.18),
+    0 28px 56px -24px rgb(15 50 40 / 0.2);
+  --shadow-elevated: 0 2px 8px -2px rgb(15 50 40 / 0.08), 0 16px 40px -12px rgb(15 50 40 / 0.2),
+    0 32px 80px -24px rgb(15 50 40 / 0.22);
+  --shadow-glow: 0 10px 28px -8px rgb(var(--accent) / 0.5);
+  --shadow-fab: 0 12px 28px -8px rgb(var(--accent) / 0.55), 0 2px 6px rgb(15 50 40 / 0.1);
+  --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(20 16 40 / 0.08),
+    0 6px 16px -8px rgb(var(--accent) / 0.6);
+  --shadow-bar: 0 10px 28px -20px rgb(15 50 40 / 0.35);
 
   --cat-blue-bg: #e3eef9;
   --cat-blue-fg: #33689c;
@@ -116,17 +225,39 @@
   --bg: 13 20 18;
   --surface: 21 31 28;
   --surface2: 29 42 38;
+  --surface3: 27 39 35;
   --ink: 232 242 238;
   --soft: 141 161 153;
   --line: 40 55 50;
+  --edge: 40 55 50;
   --accent: 46 211 167;
   --accent-fg: 6 30 23;
+  --accent-ink: 72 224 184;
+  --accent-2: 56 196 230;
   --success: 92 214 143;
   --warning: 240 173 78;
   --danger: 240 92 97;
 
-  --shadow-card: none;
-  --shadow-fab: 0 8px 24px rgb(0 0 0 / 0.5);
+  --coin: 246 180 85;
+  --coin-fg: 58 36 4;
+
+  --aura-1: 46 211 167;
+  --aura-2: 56 170 248;
+  --aura-a: 0.22;
+  --aura-b: 0.14;
+
+  --glass-alpha: 0.7;
+  --scrim: rgb(0 0 0 / 0.62);
+  --shimmer: rgb(255 255 255 / 0.05);
+  --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.04);
+
+  --shadow-card: var(--highlight);
+  --shadow-raised: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 16px 40px -16px rgb(0 0 0 / 0.55);
+  --shadow-elevated: inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 24px 64px -16px rgb(0 0 0 / 0.7);
+  --shadow-glow: 0 10px 32px -8px rgb(var(--accent) / 0.38);
+  --shadow-fab: 0 12px 30px -8px rgb(var(--accent) / 0.4), 0 4px 12px rgb(0 0 0 / 0.45);
+  --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.16), 0 8px 20px -12px rgb(var(--accent) / 0.55);
+  --shadow-bar: none;
 
   --cat-blue-bg: #1f2f3e;
   --cat-blue-fg: #8cb6e6;
@@ -143,8 +274,8 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Theme NUIT — premium, violet electrique, contrastes profonds.       */
-/* Typo : Space Grotesk.                                               */
+/* Theme NUIT (defaut) — premium, violet electrique, contrastes        */
+/* profonds, aurore violet / azur. Typo : Space Grotesk.               */
 /* ------------------------------------------------------------------ */
 
 :root[data-theme='nuit'] {
@@ -153,17 +284,43 @@
   --bg: 247 246 251;
   --surface: 255 255 255;
   --surface2: 238 236 247;
+  --surface3: 255 255 255;
   --ink: 23 21 31;
-  --soft: 116 111 132;
+  --soft: 110 105 128;
   --line: 231 228 240;
+  --edge: 238 236 245;
   --accent: 112 78 250;
   --accent-fg: 255 255 255;
-  --success: 36 165 96;
-  --warning: 209 132 10;
-  --danger: 229 72 77;
+  --accent-ink: 99 64 238;
+  --accent-2: 77 124 254;
+  /* Semantiques approfondies en clair : texte AA (4,5:1) sur les surfaces. */
+  --success: 13 132 85;
+  --warning: 176 98 0;
+  --danger: 217 45 58;
 
-  --shadow-card: 0 1px 2px rgb(23 21 31 / 0.04), 0 4px 14px rgb(23 21 31 / 0.06);
-  --shadow-fab: 0 8px 24px rgb(112 78 250 / 0.35);
+  --coin: 245 166 35;
+  --coin-fg: 255 255 255;
+
+  --aura-1: 124 92 255;
+  --aura-2: 56 170 248;
+  --aura-a: 0.24;
+  --aura-b: 0.16;
+
+  --glass-alpha: 0.72;
+  --scrim: rgb(24 20 44 / 0.36);
+  --shimmer: rgb(255 255 255 / 0.7);
+  --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.8);
+
+  --shadow-card: 0 1px 2px rgb(36 28 84 / 0.04), 0 4px 16px -4px rgb(36 28 84 / 0.08);
+  --shadow-raised: 0 1px 2px rgb(36 28 84 / 0.06), 0 12px 32px -10px rgb(36 28 84 / 0.18),
+    0 28px 56px -24px rgb(36 28 84 / 0.2);
+  --shadow-elevated: 0 2px 8px -2px rgb(36 28 84 / 0.08), 0 16px 40px -12px rgb(36 28 84 / 0.2),
+    0 32px 80px -24px rgb(36 28 84 / 0.24);
+  --shadow-glow: 0 10px 28px -8px rgb(var(--accent) / 0.55);
+  --shadow-fab: 0 12px 28px -8px rgb(var(--accent) / 0.6), 0 2px 6px rgb(36 28 84 / 0.1);
+  --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(20 16 40 / 0.08),
+    0 6px 16px -8px rgb(var(--accent) / 0.6);
+  --shadow-bar: 0 10px 28px -20px rgb(36 28 84 / 0.35);
 
   --cat-blue-bg: #e4edfb;
   --cat-blue-fg: #3d6bc0;
@@ -183,17 +340,39 @@
   --bg: 17 16 24;
   --surface: 26 24 36;
   --surface2: 35 32 48;
+  --surface3: 33 30 46;
   --ink: 238 236 246;
   --soft: 150 145 168;
   --line: 45 42 60;
+  --edge: 45 42 60;
   --accent: 155 133 255;
   --accent-fg: 24 16 54;
+  --accent-ink: 172 155 255;
+  --accent-2: 110 150 255;
   --success: 84 214 149;
   --warning: 246 180 85;
   --danger: 242 90 100;
 
-  --shadow-card: none;
-  --shadow-fab: 0 8px 24px rgb(0 0 0 / 0.5);
+  --coin: 246 180 85;
+  --coin-fg: 58 36 4;
+
+  --aura-1: 124 92 255;
+  --aura-2: 50 150 240;
+  --aura-a: 0.26;
+  --aura-b: 0.15;
+
+  --glass-alpha: 0.68;
+  --scrim: rgb(4 3 10 / 0.64);
+  --shimmer: rgb(255 255 255 / 0.05);
+  --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.045);
+
+  --shadow-card: var(--highlight);
+  --shadow-raised: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 16px 40px -16px rgb(0 0 0 / 0.6);
+  --shadow-elevated: inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 24px 64px -16px rgb(0 0 0 / 0.75);
+  --shadow-glow: 0 10px 32px -8px rgb(var(--accent) / 0.45);
+  --shadow-fab: 0 12px 30px -8px rgb(var(--accent) / 0.5), 0 4px 12px rgb(0 0 0 / 0.45);
+  --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.16), 0 8px 20px -12px rgb(var(--accent) / 0.55);
+  --shadow-bar: none;
 
   --cat-blue-bg: #232c44;
   --cat-blue-fg: #93b4f2;

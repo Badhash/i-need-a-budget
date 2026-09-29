@@ -21,9 +21,11 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <!-- Empeche iOS de transformer les suites de chiffres (montants) en liens tel:. -->
     <meta name="format-detection" content="telephone=no" />
-    <!-- theme-color clair/sombre : la barre systeme suit le mode de l'appareil. -->
-    <meta name="theme-color" content="#FAF9F7" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#141414" media="(prefers-color-scheme: dark)" />
+    <!-- theme-color : valeurs par defaut (theme nuit) selon le mode de l'appareil ;
+         le script ci-dessous puis useThemeController les alignent sur le theme et
+         le mode EFFECTIFS de l'app (qui peut etre en sombre sur un appareil clair). -->
+    <meta name="theme-color" content="#F7F6FB" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111018" media="(prefers-color-scheme: dark)" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -31,7 +33,9 @@
       rel="stylesheet"
     />
     <script>
-      // Applique theme + mode avant le premier rendu pour eviter tout flash
+      // Applique theme + mode avant le premier rendu pour eviter tout flash, et
+      // aligne le chrome systeme (theme-color, barre d'etat iOS) sur le fond
+      // effectif. Fonds dupliques de tokens.css (--bg), comme styles/themes.ts.
       try {
         var raw = localStorage.getItem('inab-ui');
         var state = raw ? JSON.parse(raw).state : null;
@@ -40,6 +44,12 @@
         var dark = mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.dataset.theme = theme;
         document.documentElement.classList.toggle('dark', dark);
+        var bgs = { corail: ['#faf9f7', '#141414'], menthe: ['#f6faf8', '#0d1412'], nuit: ['#f7f6fb', '#111018'] };
+        var bg = (bgs[theme] || bgs.nuit)[dark ? 1 : 0];
+        var metas = document.querySelectorAll('meta[name="theme-color"]');
+        for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', bg);
+        var bar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+        if (bar) bar.setAttribute('content', dark ? 'black-translucent' : 'default');
       } catch (e) {}
     </script>
   </head>

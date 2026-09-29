@@ -84,6 +84,23 @@ Toute action utilisateur (assignation, catégorisation, ajout de transaction, ob
 * Mobile <1024px : bottom navigation 4 onglets + FAB "Ajouter une transaction", budget grid en liste de cards par groupe, montants alignés à droite, touch targets ≥44px.
 * Toute vue est conçue et validée dans les deux breakpoints avant d'être considérée terminée.
 
+### Langage visuel v2 (Aurore)
+
+Profondeur par la lumière (pas par les bordures), couleur sémantique rare, mouvement utile. Prévaut sur les tailles/ombres ci-dessus. Vitrine dev : `app/design-preview.html` (`?theme=nuit|corail|menthe&mode=light|dark&open=sheet|toasts&view=loader`). Chaque thème garde sa police (corail Instrument Sans, menthe Outfit, nuit Space Grotesk = défaut).
+
+* Surfaces : `bg` → `surface` (cartes, feuilles) → `surface3` (surélevé : popovers, toasts) ; `surface2` = remplissage atténué. Contours `border-edge` (doux en clair, filet franc en sombre). En sombre : filet + reflet haut (`shadow-highlight`, inclus dans `shadow-card`), jamais d'ombre lourde.
+* Ombres : `shadow-card` (cartes), `shadow-raised` (héros, surélevé), `shadow-elevated` (feuilles, menus, toasts), `shadow-button` / `shadow-glow` / `shadow-fab` (accent).
+* Couleurs : `accent` = interactif et marque ; texte accentué `text-accent-ink` (AA) ; `text-accentfg` sur fond accent ; `.bg-brand` = dégradé `accent → accent-2` (FAB, marque). Sémantique : `success` financé/positif, `warning` sous-financé/attention, `danger` dépassé/négatif ; gris ailleurs. `coin` = ambre décoratif, jamais sémantique. Jamais de couleur en dur : tokens uniquement (3 thèmes × clair/sombre).
+* Cartes : `<Card variant="default|raised|glass|hero|interactive">` ; `hero` = chiffre clé d'un écran sur halo (`tone="accent|success|warning|danger"`). Halo libre : `<Aura tone>` dans un parent `relative isolate overflow-hidden`, ou utilitaire `.aura`. Verre (`.glass`, `.glass-bar`) RÉSERVÉ au chrome (header, nav, menus).
+* Montants : `<Amount size="sm|md|lg|xl|hero" animate>` (`hero` = `.num-hero` 36-44px/600, centimes atténués ; `animate` = compteur). Toujours tabulaires.
+* Jauges : `<ProgressBar value tone target?>` et `<ProgressRing value tone size>` (tons `accent|success|warning|danger|neutral`, remplissage animé).
+* Titres : `<SectionHeader title description? action?>` (17-19px/600) ; labels `.label-caps`. Boutons : `default|soft|secondary|outline|ghost|danger|link`, 44px sur mobile (40 desktop) ; une hauteur passée par l'appelant (`h-12`) vaut à toutes les largeurs. Contrôle visuellement < 44px : étendre sa zone de toucher (`relative after:absolute after:-inset-1 after:content-['']`). Filtres/périodes : `<SegmentedControl options value onChange block?>` (pastille glissante).
+* États : `<EmptyState icon title description actionLabel onAction tone? compact?>` ; `<Skeleton>` à reflet ; JAMAIS de spinner.
+* Feuilles : `DialogContent` = feuille basse mobile (poignée, glisser pour fermer, retour en place si l'appelant refuse la fermeture) / modale centrée desktop ; `DialogFooter` pour les actions ; le `style` des appelants (décalage clavier) reste tel quel. Couche portalisée cliquable par-dessus un dialog : `data-inab-popover`, sinon le tap ferme le dialog.
+* Toasts : `toast({ message, description?, tone?, action?, duration?, id? })` → id, `dismissToast(id)` (`lib/toast.ts`), rendus par `<Toaster />` (AppShell) : au-dessus du FAB sur mobile, coin bas droit en desktop, en haut de l'écran tant qu'un dialog est ouvert (`useDialogOpen()`) ; les toucher ne ferme pas le dialog et ne vole pas le focus. Pour confirmer, proposer « Annuler » ou signaler un échec discret ; l'action ferme le toast.
+* Mouvement : 150-280 ms, `ease-spring` ; `animate-fade-up|fade-in|scale-in|pop`, listes `.stagger`, appui `.pressable` ou `active:scale-[0.97]`. Coupé sous `prefers-reduced-motion`. Ne pas mettre `duration-*`/`ease-*` sur un élément qui porte `animate-*` (tailwindcss-animate écraserait sa durée).
+* Chrome : `BrandMark` (marque), `FreshnessIndicator` (header, réservé au lot fiabilité). `theme-color` et barre d'état iOS suivent le thème et le mode effectifs (`useThemeController`).
+
 ## Spec du moteur d'enveloppes (règles YNAB, source de vérité)
 
 Définitions par catégorie et par mois M :

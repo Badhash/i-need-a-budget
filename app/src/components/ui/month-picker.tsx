@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
-import { fmtMonthTitle } from '@/lib/format'
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { fieldClasses } from '@/components/ui/input'
+import { currentMonth, fmtMonthTitle } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 interface MonthPickerProps {
@@ -24,6 +25,9 @@ const ALL = 'all'
 const MONTH_ABBR = Array.from({ length: 12 }, (_, i) =>
   new Date(Date.UTC(2026, i, 1)).toLocaleDateString('fr-FR', { month: 'short', timeZone: 'UTC' }),
 )
+
+const YEAR_ARROW =
+  "relative flex h-9 w-9 items-center justify-center rounded-full text-soft transition-colors after:absolute after:-inset-1 after:content-[''] hover:bg-surface2 hover:text-ink active:scale-95"
 
 function pad(m: number): string {
   return String(m).padStart(2, '0')
@@ -67,6 +71,7 @@ export function MonthPicker({
   }, [open])
 
   const label = isAll ? 'Tous les mois' : fmtMonthTitle(value)
+  const thisMonth = currentMonth()
 
   const disabledMonth = (month: string) => (min && month < min) || (max && month > max)
 
@@ -83,17 +88,27 @@ export function MonthPicker({
         aria-label={ariaLabel ?? 'Choisir un mois'}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="flex h-11 w-full items-center justify-between rounded-xl border border-line bg-surface pl-3.5 pr-3 text-[16px] text-ink outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/20 lg:h-10 lg:text-[14px]"
+        className={cn(
+          'flex items-center gap-2 pl-3 pr-3 text-left',
+          fieldClasses,
+          open && 'border-accent/70 ring-4 ring-accent/15',
+        )}
       >
-        <span className="truncate">{label}</span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-soft" />
+        <CalendarDays className="h-4 w-4 shrink-0 text-soft" />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-soft transition-transform duration-200 ease-spring',
+            open && 'rotate-180',
+          )}
+        />
       </button>
 
       {open && (
         <div
           className={cn(
-            'absolute z-50 w-64 rounded-xl border border-line bg-surface p-2 shadow-card',
-            direction === 'up' ? 'bottom-full mb-1' : 'mt-1',
+            'absolute z-50 w-64 animate-scale-in rounded-2xl border border-edge bg-surface3 p-2 shadow-elevated',
+            direction === 'up' ? 'bottom-full mb-1.5 origin-bottom' : 'mt-1.5 origin-top',
           )}
         >
           {allowAll && (
@@ -101,20 +116,21 @@ export function MonthPicker({
               type="button"
               onClick={() => pick(ALL)}
               className={cn(
-                'mb-1 flex h-9 w-full items-center justify-center rounded-lg text-[13.5px] font-medium transition-colors hover:bg-surface2',
-                isAll && 'bg-accent/10 text-accent',
+                'mb-1 flex h-11 w-full items-center justify-center rounded-xl text-[13.5px] font-medium transition-colors hover:bg-surface2 lg:h-10',
+                isAll && 'bg-accent/10 text-accent-ink',
               )}
             >
               Tous les mois
             </button>
           )}
 
+          {/* Fleches d'annee : 36px a l'oeil, zone de toucher etendue a 44px. */}
           <div className="flex items-center justify-between px-1 py-1">
             <button
               type="button"
               onClick={() => setYear((y) => y - 1)}
               aria-label="Année précédente"
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink"
+              className={YEAR_ARROW}
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -123,7 +139,7 @@ export function MonthPicker({
               type="button"
               onClick={() => setYear((y) => y + 1)}
               aria-label="Année suivante"
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink"
+              className={YEAR_ARROW}
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -133,6 +149,7 @@ export function MonthPicker({
             {MONTH_ABBR.map((abbr, i) => {
               const month = `${year}-${pad(i + 1)}`
               const selected = !isAll && month === value
+              const isCurrent = month === thisMonth
               const isDisabled = disabledMonth(month)
               return (
                 <button
@@ -140,11 +157,13 @@ export function MonthPicker({
                   type="button"
                   disabled={Boolean(isDisabled)}
                   onClick={() => pick(month)}
+                  aria-current={isCurrent ? 'date' : undefined}
                   className={cn(
-                    'h-10 rounded-lg text-[13px] font-medium capitalize transition-colors',
+                    'relative h-11 rounded-xl text-[13.5px] font-medium capitalize transition-[background-color,color,transform] duration-150 ease-spring active:scale-95 lg:h-10 lg:text-[13px]',
                     selected
-                      ? 'bg-accent text-white'
+                      ? 'bg-accent text-accentfg shadow-button'
                       : 'text-ink hover:bg-surface2 disabled:pointer-events-none disabled:opacity-30',
+                    isCurrent && !selected && 'text-accent-ink ring-1 ring-inset ring-accent/35',
                   )}
                 >
                   {abbr}

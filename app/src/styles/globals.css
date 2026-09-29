@@ -18,6 +18,7 @@
 
   body {
     @apply bg-bg font-sans text-[15px] leading-normal text-ink antialiased;
+    -moz-osx-font-smoothing: grayscale;
     /* iOS : pas de pull-to-refresh accidentel qui secoue le header sticky. */
     overscroll-behavior-y: contain;
   }
@@ -62,6 +63,32 @@
   :focus-visible {
     @apply outline-none ring-2 ring-accent/60 ring-offset-2 ring-offset-bg;
   }
+
+  /* Barres de defilement fines et discretes (desktop), teintees par l'encre. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--ink) / 0.16) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-color: rgb(var(--ink) / 0.14);
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--ink) / 0.28);
+  }
 }
 
 @layer utilities {
@@ -103,64 +130,325 @@
     min-height: 100vh;
     min-height: 100dvh;
   }
+
+  /* ---------------------------------------------------------------- */
+  /* Langage visuel v2 « Aurore »                                     */
+  /* ---------------------------------------------------------------- */
+
+  /* Montant hero : 36 a 44px selon la largeur, chiffres tabulaires serres. */
+  .num-hero {
+    font-size: clamp(2.25rem, 1.7rem + 1.6vw, 2.75rem);
+    font-weight: 600;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Verre depoli RESERVE au chrome (barre de nav, header, menus) : le contenu
+     reste sur des cartes pleines pour la lisibilite. .glass = surface
+     flottante (pilule de nav, menus), .glass-bar = barre collee au bord
+     (header, sidebar) qui se fond dans le fond de page. */
+  .glass {
+    background-color: rgb(var(--surface) / var(--glass-alpha));
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+
+  .glass-bar {
+    background-color: rgb(var(--bg) / var(--glass-alpha));
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass {
+      background-color: rgb(var(--surface) / 0.97);
+    }
+
+    .glass-bar {
+      background-color: rgb(var(--bg) / 0.97);
+    }
+  }
+
+  /* Degrade de marque (accent -> accent-2) : FAB, pastille de marque, jauges. */
+  .bg-brand {
+    background-color: rgb(var(--accent));
+    background-image: linear-gradient(135deg, rgb(var(--accent)) 0%, rgb(var(--accent-2)) 100%);
+  }
+
+  /* Halo radial en fond d'un bloc (aurore) : deux lueurs douces, coins
+     opposes, sous le contenu. Intensites --aura-a / --aura-b par theme. */
+  .aura {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .aura::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+      radial-gradient(60% 75% at 100% 0%, rgb(var(--aura-1) / var(--aura-a)), transparent 72%),
+      radial-gradient(55% 70% at 0% 100%, rgb(var(--aura-2) / var(--aura-b)), transparent 72%);
+  }
+
+  /* Retour tactile : leger enfoncement a l'appui (desactive si mouvement reduit). */
+  .pressable {
+    transition: transform var(--dur-fast) var(--ease-spring);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .pressable:active:not(:disabled):not([aria-disabled='true']) {
+    transform: scale(0.98);
+  }
+
+  /* Entree echelonnee des enfants (listes) : fondu + montee de 6px, chaque
+     enfant decale de --stagger-step (40ms). --i est calcule jusqu'au 12e
+     enfant ; un style inline --i peut le forcer. */
+  .stagger > * {
+    animation: inab-fade-up var(--dur-slow) var(--ease-spring) backwards;
+    animation-delay: calc(var(--i, 0) * var(--stagger-step));
+  }
+
+  .stagger > :nth-child(2) {
+    --i: 1;
+  }
+  .stagger > :nth-child(3) {
+    --i: 2;
+  }
+  .stagger > :nth-child(4) {
+    --i: 3;
+  }
+  .stagger > :nth-child(5) {
+    --i: 4;
+  }
+  .stagger > :nth-child(6) {
+    --i: 5;
+  }
+  .stagger > :nth-child(7) {
+    --i: 6;
+  }
+  .stagger > :nth-child(8) {
+    --i: 7;
+  }
+  .stagger > :nth-child(9) {
+    --i: 8;
+  }
+  .stagger > :nth-child(10) {
+    --i: 9;
+  }
+  .stagger > :nth-child(11) {
+    --i: 10;
+  }
+  .stagger > :nth-child(n + 12) {
+    --i: 11;
+  }
+
+  /* Reflet de chargement des squelettes (jamais de spinner). */
+  .skeleton-shimmer {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+
+  .skeleton-shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(90deg, transparent 0%, var(--shimmer) 50%, transparent 100%);
+    animation: inab-shimmer 1.6s ease-in-out infinite;
+  }
 }
 
-/* Ecran de chargement (AppLoader) : respiration du logo + points rebondissants. */
+/* ------------------------------------------------------------------ */
+/* Keyframes (source unique ; les utilitaires animate-* de Tailwind    */
+/* y font reference par leur nom inab-*).                              */
+/* ------------------------------------------------------------------ */
+
+@keyframes inab-fade-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+@keyframes inab-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes inab-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes inab-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes inab-scale-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@keyframes inab-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+/* Feuille basse : pas d'etat « to » -> elle termine sur sa transformation
+   propre (decalage clavier iOS pose en style inline par les appelants). */
+@keyframes inab-slide-up {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+@keyframes inab-slide-down {
+  to {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+/* Modale centree (>= sm) : le centrage par translate(-50%, -50%) fait partie
+   des deux etats pour ne jamais « sauter ». */
+@keyframes inab-modal-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 12px)) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes inab-modal-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px)) scale(0.97);
+  }
+}
+/* Sens d'entree des toasts : --toast-dy (16px = par le bas, -16px quand la
+   pile est en haut de l'ecran, voir Toaster). */
+@keyframes inab-toast-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, var(--toast-dy, 16px), 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+@keyframes inab-toast-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, calc(var(--toast-dy, 16px) / 2), 0) scale(0.96);
+  }
+}
+@keyframes inab-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Ecran de chargement (AppLoader) : respiration du portefeuille, halo, */
+/* pieces d'euro qui tombent dedans, aurore de fond qui derive.         */
+/* ------------------------------------------------------------------ */
+
 @keyframes inab-breathe {
   0%,
   100% {
     transform: scale(1);
   }
   50% {
-    transform: scale(1.08);
+    transform: scale(1.06);
   }
 }
 @keyframes inab-glow {
   0%,
   100% {
-    opacity: 0.35;
-    transform: scale(1);
+    opacity: 0.45;
+    transform: scale(0.96);
   }
   50% {
-    opacity: 0.65;
-    transform: scale(1.18);
+    opacity: 0.8;
+    transform: scale(1.14);
   }
 }
-@keyframes inab-dot {
+@keyframes inab-drift {
   0%,
   100% {
-    opacity: 0.3;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0) scale(1);
   }
   50% {
-    opacity: 1;
-    transform: translateY(-5px);
+    transform: translate3d(0, 18px, 0) scale(1.06);
   }
 }
 .loader-badge {
-  animation: inab-breathe 2s ease-in-out infinite;
+  animation: inab-breathe 2.4s ease-in-out infinite;
   will-change: transform;
 }
 .loader-glow {
-  animation: inab-glow 2s ease-in-out infinite;
+  animation: inab-glow 2.4s ease-in-out infinite;
   will-change: transform, opacity;
 }
-.loader-dot {
-  animation: inab-dot 1.2s ease-in-out infinite;
-  will-change: transform, opacity;
+.loader-drift {
+  animation: inab-drift 9s ease-in-out infinite;
+  will-change: transform;
 }
-/* Pieces d'or qui tombent SUR le portefeuille (rendues devant le badge) : chute
-   depuis le haut, visibles au-dessus puis ABSORBEES a l'ouverture du portefeuille
-   (fondu + reduction vers le milieu du badge). Le badge fait 80px, le portefeuille
-   ~36px centre : l'ouverture est vers y=26-30, la ou la piece disparait. */
+/* Pieces d'euro qui tombent SUR le portefeuille (rendues devant le badge) :
+   chute depuis le haut, visibles au-dessus puis ABSORBEES a l'ouverture du
+   portefeuille (fondu + reduction). Le badge fait 88px dans un cadre de 96px,
+   l'ouverture du portefeuille est vers y=36-40 : la piece y disparait. */
 @keyframes inab-coin {
   0% {
     opacity: 0;
-    transform: translateY(-24px) scale(0.8);
+    transform: translateY(-26px) scale(0.8);
   }
   22% {
     opacity: 1;
-    transform: translateY(-4px) scale(1);
+    transform: translateY(-6px) scale(1);
   }
   72% {
     opacity: 1;
@@ -168,21 +456,13 @@
   }
   100% {
     opacity: 0;
-    transform: translateY(34px) scale(0.6);
+    transform: translateY(36px) scale(0.6);
   }
 }
 .loader-coin {
   opacity: 0;
   animation: inab-coin 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   will-change: transform, opacity;
-}
-@media (prefers-reduced-motion: reduce) {
-  .loader-badge,
-  .loader-glow,
-  .loader-dot,
-  .loader-coin {
-    animation: none;
-  }
 }
 
 /* Transition douce lors du changement de theme ou de mode */
@@ -192,4 +472,34 @@ html.theme-anim * {
     background-color 200ms ease,
     border-color 200ms ease,
     color 150ms ease;
+}
+
+/* ------------------------------------------------------------------ */
+/* Mouvement reduit : TOUTE animation et transition est coupee (les     */
+/* animations de sortie finissent instantanement, Radix recoit bien     */
+/* animationend). Les boucles decoratives sont figees.                  */
+/* ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .loader-badge,
+  .loader-glow,
+  .loader-drift,
+  .loader-coin {
+    animation: none !important;
+  }
+
+  .pressable:active:not(:disabled):not([aria-disabled='true']) {
+    transform: none;
+  }
 }

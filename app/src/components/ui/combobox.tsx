@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronDown, Search } from 'lucide-react'
+import { Check, ChevronDown, Search } from 'lucide-react'
+import { fieldClasses } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 export interface ComboboxOption {
@@ -94,8 +95,8 @@ export function Combobox({
 
   return (
     <div className={cn('relative min-w-[160px]', className)}>
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-soft" />
+      <div className="group relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-soft transition-colors group-focus-within:text-accent" />
         <input
           value={open ? query : selectedLabel}
           onFocus={() => {
@@ -120,17 +121,24 @@ export function Combobox({
           disabled={disabled}
           placeholder={open ? searchPlaceholder : placeholder}
           aria-label={ariaLabel}
-          className="h-11 w-full rounded-xl border border-line bg-surface pl-9 pr-9 text-[16px] text-ink outline-none transition-colors placeholder:text-soft/70 focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 lg:h-10 lg:text-[14px]"
+          className={cn('pl-9 pr-9', fieldClasses)}
         />
-        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-soft" />
+        <ChevronDown
+          className={cn(
+            'pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-soft transition-transform duration-200 ease-spring',
+            open && 'rotate-180',
+          )}
+        />
       </div>
 
       {open && filtered.length > 0 && (
-        <ul className="absolute z-50 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-line bg-surface p-1 shadow-card">
+        <ul
+          className="absolute z-50 mt-1.5 max-h-72 w-full origin-top animate-scale-in overflow-auto rounded-2xl border border-edge bg-surface3 p-1.5 shadow-elevated"
+        >
           {grouped.map(({ group, items }) => (
             <li key={group || '__nogroup__'}>
               {group && (
-                <p className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-soft">
+                <p className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-soft">
                   {group}
                 </p>
               )}
@@ -139,15 +147,17 @@ export function Combobox({
                   <li key={o.value}>
                     <button
                       type="button"
+                      aria-pressed={o.value === value}
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => commit(o.value)}
                       className={cn(
-                        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] transition-colors hover:bg-surface2',
-                        o.value === value && 'bg-accent/10 text-accent',
+                        'flex min-h-11 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[14px] transition-colors hover:bg-surface2 lg:min-h-9 lg:text-[13.5px]',
+                        o.value === value && 'bg-accent/10 font-medium text-accent-ink hover:bg-accent/15',
                       )}
                     >
                       {o.colorVar && <Dot colorVar={o.colorVar} />}
                       <span className="min-w-0 flex-1 truncate">{o.label}</span>
+                      {o.value === value && <Check className="h-4 w-4 shrink-0" />}
                     </button>
                   </li>
                 ))}
@@ -158,7 +168,7 @@ export function Combobox({
       )}
 
       {open && filtered.length === 0 && (
-        <div className="absolute z-50 mt-1 w-full rounded-xl border border-line bg-surface p-3 text-[13px] text-soft shadow-card">
+        <div className="absolute z-50 mt-1.5 w-full origin-top animate-scale-in rounded-2xl border border-edge bg-surface3 p-3.5 text-[13px] text-soft shadow-elevated">
           Aucun résultat.
         </div>
       )}
