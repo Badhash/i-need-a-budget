@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Loader2, Wallet } from 'lucide-react'
+import { CircleAlert, ShieldCheck } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { mfaSatisfied } from '@/lib/mfa'
-import { Card, CardContent } from '@/components/ui/card'
+import { BrandMark } from '@/components/layout/BrandMark'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useThemeController } from '@/hooks/useTheme'
@@ -95,7 +95,7 @@ export function LoginPage() {
     })
     if (challengeError || !challenge) {
       setLoading(false)
-      setError('Echec de la demande de code, reessaie.')
+      setError('Échec de la demande de code, réessaie.')
       return
     }
     const { error: verifyError } = await supabase.auth.mfa.verify({
@@ -112,15 +112,22 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-app items-center justify-center bg-bg px-4 py-8">
+    <div className="relative isolate flex min-h-app items-center justify-center overflow-hidden bg-bg px-4 py-10">
+      {/* Aurore de fond : deux lueurs larges et lentes (figees si mouvement reduit). */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+        <div className="loader-drift absolute inset-x-0 -top-44 mx-auto h-[36rem] w-[36rem] rounded-full bg-aura-1/25 blur-3xl dark:bg-aura-1/30" />
+        <div
+          className="loader-drift absolute -bottom-48 -right-24 h-[28rem] w-[28rem] rounded-full bg-aura-2/20 blur-3xl"
+          style={{ animationDelay: '-4.5s' }}
+        />
+      </div>
+
       <div className="w-full max-w-sm">
-        <div className="mb-6 flex flex-col items-center gap-3 text-center">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-accentfg">
-            <Wallet className="h-6 w-6" />
-          </span>
+        <div className="mb-8 flex animate-fade-up flex-col items-center gap-5 text-center">
+          <BrandMark size="xl" />
           <div>
-            <h1 className="text-[22px] font-semibold tracking-tight">I Need A Budget</h1>
-            <p className="text-[14px] text-soft">
+            <h1 className="text-[27px] font-semibold tracking-[-0.02em] text-ink">I Need A Budget</h1>
+            <p key={step} className="mt-1.5 animate-fade-in text-[14.5px] text-soft">
               {step === 'password'
                 ? 'Connecte-toi pour accéder à ton budget.'
                 : 'Vérification en deux étapes.'}
@@ -128,81 +135,100 @@ export function LoginPage() {
           </div>
         </div>
 
-        <Card>
-          <CardContent className="pt-6">
-            {step === 'password' ? (
-              <form onSubmit={onSubmitPassword} className="flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="email" className="label-caps">
-                    Email
-                  </label>
-                  <Input
-                    id="email"
-                    type="email"
-                    autoComplete="email"
-                    autoFocus
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="toi@exemple.fr"
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="password" className="label-caps">
-                    Mot de passe
-                  </label>
-                  <Input
-                    id="password"
-                    type="password"
-                    autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                  />
-                </div>
-                {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
-                <Button type="submit" size="lg" className="w-full" disabled={loading}>
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Se connecter'}
-                </Button>
-              </form>
-            ) : (
-              <form onSubmit={onSubmitMfa} className="flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="code" className="label-caps">
-                    Code d'authentification
-                  </label>
-                  <Input
-                    id="code"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    autoFocus
-                    required
-                    maxLength={6}
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    placeholder="123456"
-                  />
-                  <p className="text-[12.5px] text-soft">
-                    Saisis le code à 6 chiffres de ton application d'authentification.
-                  </p>
-                </div>
-                {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
-                <Button type="submit" size="lg" className="w-full" disabled={loading}>
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Vérifier'}
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => void backToPassword()}
-                  className="min-h-[44px] text-[13px] font-medium text-soft transition-colors hover:text-ink"
-                >
-                  Retour à la connexion
-                </button>
-              </form>
-            )}
-          </CardContent>
-        </Card>
+        <div
+          className="glass animate-fade-up rounded-3xl border border-edge p-6 shadow-elevated"
+          style={{ animationDelay: '60ms' }}
+        >
+          {step === 'password' ? (
+            <form key="password" onSubmit={onSubmitPassword} className="flex animate-fade-in flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="email" className="label-caps">
+                  Email
+                </label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  autoFocus
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="toi@exemple.fr"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="password" className="label-caps">
+                  Mot de passe
+                </label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                />
+              </div>
+              {error && <FormError message={error} />}
+              <Button type="submit" size="lg" className="mt-1 w-full" disabled={loading}>
+                {loading ? 'Connexion…' : 'Se connecter'}
+              </Button>
+            </form>
+          ) : (
+            <form key="mfa" onSubmit={onSubmitMfa} className="flex animate-fade-in flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="code" className="label-caps">
+                  Code d'authentification
+                </label>
+                <Input
+                  id="code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  required
+                  maxLength={6}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="123456"
+                  className="h-14 text-center text-[24px] font-semibold tracking-[0.35em] tnum lg:h-14 lg:text-[24px]"
+                />
+                <p className="text-[12.5px] leading-snug text-soft">
+                  Saisis le code à 6 chiffres de ton application d'authentification.
+                </p>
+              </div>
+              {error && <FormError message={error} />}
+              <Button type="submit" size="lg" className="w-full" disabled={loading}>
+                {loading ? 'Vérification…' : 'Vérifier'}
+              </Button>
+              <button
+                type="button"
+                onClick={() => void backToPassword()}
+                className="min-h-[44px] rounded-xl text-[13px] font-medium text-soft transition-colors hover:text-ink"
+              >
+                Retour à la connexion
+              </button>
+            </form>
+          )}
+        </div>
+
+        <p className="mt-6 flex animate-fade-in items-center justify-center gap-1.5 text-[12.5px] text-soft">
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+          Budget par enveloppes, personnel et chiffré.
+        </p>
       </div>
     </div>
+  )
+}
+
+function FormError({ message }: { message: string }) {
+  return (
+    <p
+      role="alert"
+      className="flex animate-fade-in items-center gap-2 rounded-xl bg-danger/10 px-3 py-2.5 text-[13px] font-medium text-danger"
+    >
+      <CircleAlert className="h-4 w-4 shrink-0" />
+      {message}
+    </p>
   )
 }
