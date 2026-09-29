@@ -13,6 +13,7 @@ import { newTempId } from '@/lib/mutationQueue'
 import type { Category, CategoryGroup, GroupIcon } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
 import {
+  renderKey,
   useCreateGroupMutation,
   useDeleteGroupMutation,
   useReorderCategoriesMutation,
@@ -287,7 +288,7 @@ export function CategoriesSection() {
 
       {visibleGroups.map((group, i) => (
         <GroupCard
-          key={group.id}
+          key={renderKey(group.id)}
           group={group}
           categories={catsOf(group.id)}
           canUp={i > 0}
@@ -306,7 +307,7 @@ export function CategoriesSection() {
           </p>
           {hiddenGroups.map((group) => (
             <GroupCard
-              key={group.id}
+              key={renderKey(group.id)}
               group={group}
               categories={catsOf(group.id)}
               canUp={false}

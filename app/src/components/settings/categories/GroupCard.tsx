@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import type { Category, CategoryGroup } from '@/types/domain'
 import { newTempId } from '@/lib/mutationQueue'
-import { useCreateCategoryMutation, useUpdateCategoryMutation, useUpdateGroupMutation } from '@/lib/taxonomy'
+import { renderKey, useCreateCategoryMutation, useUpdateCategoryMutation, useUpdateGroupMutation } from '@/lib/taxonomy'
 import { toast } from '@/lib/toast'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { Card } from '@/components/ui/card'
@@ -294,7 +294,7 @@ function CategoryRow({
               label={hidden ? `Afficher « ${category.name} »` : `Masquer « ${category.name} »`}
               pressed={hidden}
               onClick={toggleHidden}
-              className={cn(hidden && 'text-accent-ink hover:text-accent-ink')}
+              className={cn(hidden && 'bg-ink/[0.06] text-ink')}
             >
               {hidden ? <EyeOff className="h-[17px] w-[17px]" /> : <Eye className="h-[17px] w-[17px]" />}
             </IconButton>
@@ -474,7 +474,7 @@ export function GroupCard({
                 label={groupHidden ? `Afficher le groupe « ${group.name} »` : `Masquer le groupe « ${group.name} »`}
                 pressed={groupHidden}
                 onClick={toggleHidden}
-                className={cn(groupHidden && 'text-accent-ink hover:text-accent-ink')}
+                className={cn(groupHidden && 'bg-ink/[0.06] text-ink')}
               >
                 {groupHidden ? <EyeOff className="h-[17px] w-[17px]" /> : <Eye className="h-[17px] w-[17px]" />}
               </IconButton>
@@ -544,7 +544,7 @@ export function GroupCard({
         <ul className="divide-y divide-line/50 border-t border-line/60">
           {visible.map((cat, i) => (
             <CategoryRow
-              key={cat.id}
+              key={renderKey(cat.id)}
               category={cat}
               group={group}
               canUp={i > 0}
@@ -565,7 +565,7 @@ export function GroupCard({
           <ul className="divide-y divide-line/40">
             {hiddenCats.map((cat) => (
               <CategoryRow
-                key={cat.id}
+                key={renderKey(cat.id)}
                 category={cat}
                 group={group}
                 canUp={false}

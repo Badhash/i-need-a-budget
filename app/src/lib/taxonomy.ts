@@ -263,6 +263,16 @@ function settle(queryClient: QueryClient) {
   void queryClient.invalidateQueries({ queryKey: BUDGET_PREFIX })
 }
 
+// Cle de rendu stable d'un groupe ou d'une categorie cree en optimiste : quand
+// l'id serveur remplace l'id temporaire, la cle React ne change pas (pas de
+// remontage, une saisie en cours dans la carte est preservee).
+const renderKeys = new Map<string, string>()
+
+/** Cle React stable d'un element de la taxonomie (id temporaire d'origine si cree localement). */
+export function renderKey(id: string): string {
+  return renderKeys.get(id) ?? id
+}
+
 /** Rang de fin de liste (le serveur place les nouveaux elements apres le dernier). */
 function nextSortOrder(rows: { sortOrder: number }[]): number {
   return rows.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 1
@@ -311,6 +321,7 @@ export function useCreateCategoryMutation() {
     // mutations suivantes (renommer, supprimer, reordonner, categoriser)
     // manipulent alors un vrai uuid accepte par /api.
     onSuccess: ({ id }, { tempId }) => {
+      renderKeys.set(id, tempId)
       queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) => {
         if (!old || old.categories.some((c) => c.id === id)) return old
         return {
@@ -383,7 +394,6 @@ export function useUpdateCategoryMutation() {
 
 interface DeleteContext extends OptimisticContext {
   transactions: Transaction[] | undefined
-  countDelta: number
   targets: unknown
   rules: unknown
 }
@@ -431,13 +441,13 @@ export function useDeleteCategoryMutation() {
         (month) => removeRow(month, categoryId),
       )
       patchUncategorizedCount(queryClient, countDelta)
-      return { ...ctx, transactions, countDelta, targets, rules }
+      return { ...ctx, transactions, targets, rules }
     },
     onError: (_e, _v, ctx) => {
+      // Le bootstrap restaure (rollback) porte deja le compteur d'origine.
       rollback(queryClient, ctx)
       if (!ctx) return
       if (ctx.transactions) queryClient.setQueryData(TRANSACTIONS_KEY, ctx.transactions)
-      patchUncategorizedCount(queryClient, -ctx.countDelta)
       if (ctx.targets !== undefined) queryClient.setQueryData(TARGETS_KEY, ctx.targets)
       if (ctx.rules !== undefined) queryClient.setQueryData(RULES_KEY, ctx.rules)
     },
@@ -469,6 +479,7 @@ export function useCreateGroupMutation() {
     // Meme principe que useCreateCategoryMutation : id serveur des onSuccess,
     // y compris pour les categories deja creees dans ce groupe.
     onSuccess: ({ id }, { tempId }) => {
+      renderKeys.set(id, tempId)
       queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) => {
         if (!old || old.groups.some((g) => g.id === id)) return old
         return {

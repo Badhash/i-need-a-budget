@@ -195,7 +195,7 @@ export function YnabImportCard() {
                       role="checkbox"
                       aria-checked={choice.selected}
                       onClick={() => setChoice(a.key, { selected: !choice.selected })}
-                      className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-1.5 text-left transition-colors hover:bg-ink/[0.03]"
+                      className="flex min-h-11 min-w-0 flex-1 basis-52 items-center gap-3 rounded-xl px-1.5 text-left transition-colors hover:bg-ink/[0.03]"
                     >
                       <CheckMark checked={choice.selected} />
                       <span className="min-w-0 flex-1">
@@ -219,7 +219,7 @@ export function YnabImportCard() {
                           { value: 'budget', label: 'Budget' },
                           { value: 'tracking', label: 'Suivi' },
                         ]}
-                        className="ml-auto"
+                        className="mb-1 ml-auto sm:mb-0"
                       />
                     )}
                   </li>

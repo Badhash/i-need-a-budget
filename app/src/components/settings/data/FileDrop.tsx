@@ -72,7 +72,7 @@ export function FileDrop({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[14px] font-medium text-ink">{file ? file.name : label}</span>
-          <span className="block truncate text-[12.5px] text-soft">
+          <span className="line-clamp-2 block text-[12.5px] leading-snug text-soft">
             {file ? `${fmtSize(file.size)} · toucher pour changer` : hint}
           </span>
         </span>
