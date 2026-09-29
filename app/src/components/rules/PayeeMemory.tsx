@@ -11,6 +11,7 @@ import { CategoryPicker } from '@/components/transactions/CategoryPicker'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { countLabel } from '@/components/rules/RulePreviewPanel'
+import { focusCategorySearch } from '@/components/rules/focusCategorySearch'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -149,6 +150,7 @@ export function PayeeMemory({ className }: { className?: string }) {
                   <Button
                     variant="soft"
                     size="sm"
+                    onClick={focusCategorySearch}
                     className="after:absolute after:-inset-y-1 after:inset-x-0 after:content-[''] lg:after:hidden"
                   >
                     Changer

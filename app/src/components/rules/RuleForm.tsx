@@ -6,6 +6,7 @@ import { useRulePreview, type RulePreview } from '@/lib/ruleInsights'
 import { CategoryPicker } from '@/components/transactions/CategoryPicker'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { RulePreviewPanel } from '@/components/rules/RulePreviewPanel'
+import { focusCategorySearch } from '@/components/rules/focusCategorySearch'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SegmentedControl } from '@/components/ui/segmented'
@@ -137,6 +138,7 @@ export function RuleForm({
           <CategoryPicker onSelect={(id) => id && setCategoryId(id)}>
             <button
               type="button"
+              onClick={focusCategorySearch}
               className={cn(
                 'flex h-11 w-full items-center gap-2.5 rounded-xl border border-line bg-surface px-2 text-left text-[15px] text-ink transition-[border-color,background-color] duration-150 hover:border-soft/40 hover:bg-surface2/60 lg:h-10 lg:text-[14px]',
                 !category && 'pl-3.5',
