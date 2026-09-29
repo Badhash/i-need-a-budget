@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { SheetForm, txFormFrom, type TxFormResult } from './TransactionForm'
+import { keepSheetOnFieldEscape, SheetForm, txFormFrom, type TxFormResult } from './TransactionForm'
 
 export function EditTransactionDialog() {
   const editTx = useUiStore((s) => s.editTx)
@@ -68,7 +68,7 @@ export function EditTransactionDialog() {
 
   return (
     <Dialog open={editTx !== null} onOpenChange={(o) => !o && close()}>
-      <DialogContent>
+      <DialogContent onEscapeKeyDown={keepSheetOnFieldEscape}>
         <DialogHeader>
           <DialogTitle>Modifier la transaction</DialogTitle>
           <DialogDescription>

@@ -42,6 +42,7 @@ import { TxBubble } from './rowParts'
 import { canCategorize, toRow, transferLabel, type TxRow } from './txRow'
 import { useTxList } from './listContext'
 import { useTxRowActions } from './useTxRowActions'
+import { keepSheetOnFieldEscape } from './TransactionForm'
 
 function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
@@ -362,7 +363,10 @@ export function TransactionDetail({ txId, onClose }: { txId: string | null; onCl
 
   return (
     <Dialog open={Boolean(txId && row)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-[440px]">{shown && <DetailBody row={shown} onClose={onClose} />}</DialogContent>
+      {/* Echap dans la recherche du selecteur de categorie : ferme le selecteur, pas la feuille. */}
+      <DialogContent className="sm:max-w-[440px]" onEscapeKeyDown={keepSheetOnFieldEscape}>
+        {shown && <DetailBody row={shown} onClose={onClose} />}
+      </DialogContent>
     </Dialog>
   )
 }

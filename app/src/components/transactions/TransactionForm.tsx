@@ -496,6 +496,22 @@ export function TransactionForm({
 }
 
 /**
+ * Echap dans une feuille de saisie : un champ texte actif (liste deroulante
+ * d'un combobox, recherche du selecteur de categorie) est d'abord quitte, la
+ * feuille reste ouverte ; un second Echap la ferme. Radix ecoute Echap en
+ * capture sur le document : sans cette garde, refermer une liste fermait toute
+ * la feuille et la saisie etait perdue. A passer a DialogContent.onEscapeKeyDown.
+ */
+export function keepSheetOnFieldEscape(event: KeyboardEvent): void {
+  const active = document.activeElement
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+    event.preventDefault()
+    // Apres les gestionnaires du champ (fermeture de sa liste).
+    window.setTimeout(() => active.blur(), 0)
+  }
+}
+
+/**
  * Formulaire pose dans une feuille : la hauteur du clavier iOS (qui recouvrait
  * le pied Ajouter / Annuler) n'est mesuree que tant que la feuille est
  * ouverte. Monte dans les dialogues toujours presents (ajout, edition), la

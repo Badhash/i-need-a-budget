@@ -20,7 +20,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { emptyTxForm, SheetForm, txFormFrom, type TxFormInitial, type TxFormResult } from './TransactionForm'
+import {
+  emptyTxForm,
+  keepSheetOnFieldEscape,
+  SheetForm,
+  txFormFrom,
+  type TxFormInitial,
+  type TxFormResult,
+} from './TransactionForm'
 
 const FAILURE_MESSAGE = "L'ajout n'a pas abouti. Vérifie ta connexion et réessaie : ta saisie est conservée."
 
@@ -109,7 +116,7 @@ export function AddTransactionDialog() {
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent>
+      <DialogContent onEscapeKeyDown={keepSheetOnFieldEscape}>
         <DialogHeader>
           <DialogTitle>Nouvelle transaction</DialogTitle>
           <DialogDescription>Saisie manuelle, en attendant la synchronisation bancaire.</DialogDescription>
