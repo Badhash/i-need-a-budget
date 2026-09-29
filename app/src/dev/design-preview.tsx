@@ -55,6 +55,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { MonthPicker } from '@/components/ui/month-picker'
+import { SegmentedControl } from '@/components/ui/segmented'
 import { Select } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -323,6 +324,7 @@ const COMBO_OPTIONS = CATEGORIES.filter((c) => !c.isIncome).map((c) => ({
 function Gallery() {
   const [combo, setCombo] = useState('c-food')
   const [pickMonth, setPickMonth] = useState(month)
+  const [filter, setFilter] = useState<'all' | 'uncat' | 'income'>('all')
   const budget = budgetFor(month, rtaParam)
 
   useEffect(() => {
@@ -472,9 +474,23 @@ function Gallery() {
               <span className="label-caps">Mois</span>
               <MonthPicker value={pickMonth} onChange={setPickMonth} min={MIN_MONTH} max={maxMonth()} />
             </div>
-            <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <div className="flex flex-col gap-1.5">
               <span className="label-caps">Montant</span>
               <SignedAmountInput value="-42,90" onChange={() => undefined} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <span className="label-caps">Filtre</span>
+              <SegmentedControl
+                block
+                aria-label="Filtre"
+                value={filter}
+                onChange={setFilter}
+                options={[
+                  { value: 'all', label: 'Toutes' },
+                  { value: 'uncat', label: 'À trier' },
+                  { value: 'income', label: 'Revenus' },
+                ]}
+              />
             </div>
           </CardContent>
         </Card>

@@ -94,7 +94,7 @@ Profondeur par la lumière (pas par les bordures), couleur sémantique rare, mou
 * Cartes : `<Card variant="default|raised|glass|hero|interactive">` ; `hero` = chiffre clé d'un écran sur halo (`tone="accent|success|warning|danger"`). Halo libre : `<Aura tone>` dans un parent `relative isolate overflow-hidden`, ou utilitaire `.aura`. Verre (`.glass`, `.glass-bar`) RÉSERVÉ au chrome (header, nav, menus).
 * Montants : `<Amount size="sm|md|lg|xl|hero" animate>` (`hero` = `.num-hero` 36-44px/600, centimes atténués ; `animate` = compteur). Toujours tabulaires.
 * Jauges : `<ProgressBar value tone target?>` et `<ProgressRing value tone size>` (tons `accent|success|warning|danger|neutral`, remplissage animé).
-* Titres : `<SectionHeader title description? action?>` (17-19px/600) ; labels `.label-caps`. Boutons : `default|soft|secondary|outline|ghost|danger|link`, 44px sur mobile.
+* Titres : `<SectionHeader title description? action?>` (17-19px/600) ; labels `.label-caps`. Boutons : `default|soft|secondary|outline|ghost|danger|link`, 44px sur mobile. Filtres/périodes : `<SegmentedControl options value onChange block?>` (pastille glissante).
 * États : `<EmptyState icon title description actionLabel onAction tone? compact?>` ; `<Skeleton>` à reflet ; JAMAIS de spinner.
 * Feuilles : `DialogContent` = feuille basse mobile (poignée, glisser pour fermer) / modale centrée desktop ; `DialogFooter` pour les actions ; le `style` des appelants (décalage clavier) reste tel quel.
 * Toasts : `toast({ message, description?, tone?, action?, duration?, id? })` → id, `dismissToast(id)` (`lib/toast.ts`), rendus par `<Toaster />` (AppShell). Pour confirmer, proposer « Annuler » ou signaler un échec discret ; l'action ferme le toast.

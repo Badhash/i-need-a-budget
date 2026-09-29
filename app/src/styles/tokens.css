@@ -81,8 +81,8 @@
   --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.8);
 
   --shadow-card: 0 1px 2px rgb(60 36 28 / 0.04), 0 4px 16px -4px rgb(60 36 28 / 0.08);
-  --shadow-raised: 0 1px 2px rgb(60 36 28 / 0.05), 0 8px 24px -8px rgb(60 36 28 / 0.14),
-    0 20px 48px -20px rgb(60 36 28 / 0.18);
+  --shadow-raised: 0 1px 2px rgb(60 36 28 / 0.06), 0 12px 32px -10px rgb(60 36 28 / 0.18),
+    0 28px 56px -24px rgb(60 36 28 / 0.2);
   --shadow-elevated: 0 2px 8px -2px rgb(60 36 28 / 0.08), 0 16px 40px -12px rgb(60 36 28 / 0.2),
     0 32px 80px -24px rgb(60 36 28 / 0.22);
   --shadow-glow: 0 10px 28px -8px rgb(var(--accent) / 0.55);
@@ -197,8 +197,8 @@
   --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.8);
 
   --shadow-card: 0 1px 2px rgb(15 50 40 / 0.04), 0 4px 16px -4px rgb(15 50 40 / 0.08);
-  --shadow-raised: 0 1px 2px rgb(15 50 40 / 0.05), 0 8px 24px -8px rgb(15 50 40 / 0.14),
-    0 20px 48px -20px rgb(15 50 40 / 0.18);
+  --shadow-raised: 0 1px 2px rgb(15 50 40 / 0.06), 0 12px 32px -10px rgb(15 50 40 / 0.18),
+    0 28px 56px -24px rgb(15 50 40 / 0.2);
   --shadow-elevated: 0 2px 8px -2px rgb(15 50 40 / 0.08), 0 16px 40px -12px rgb(15 50 40 / 0.2),
     0 32px 80px -24px rgb(15 50 40 / 0.22);
   --shadow-glow: 0 10px 28px -8px rgb(var(--accent) / 0.5);
@@ -312,8 +312,8 @@
   --highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.8);
 
   --shadow-card: 0 1px 2px rgb(36 28 84 / 0.04), 0 4px 16px -4px rgb(36 28 84 / 0.08);
-  --shadow-raised: 0 1px 2px rgb(36 28 84 / 0.05), 0 8px 24px -8px rgb(36 28 84 / 0.14),
-    0 20px 48px -20px rgb(36 28 84 / 0.18);
+  --shadow-raised: 0 1px 2px rgb(36 28 84 / 0.06), 0 12px 32px -10px rgb(36 28 84 / 0.18),
+    0 28px 56px -24px rgb(36 28 84 / 0.2);
   --shadow-elevated: 0 2px 8px -2px rgb(36 28 84 / 0.08), 0 16px 40px -12px rgb(36 28 84 / 0.2),
     0 32px 80px -24px rgb(36 28 84 / 0.24);
   --shadow-glow: 0 10px 28px -8px rgb(var(--accent) / 0.55);

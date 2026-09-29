@@ -103,7 +103,11 @@ const DialogContent = React.forwardRef<
           onPointerDown={onHandleDown}
           onPointerMove={onHandleMove}
           onPointerUp={onHandleUp}
-          onPointerCancel={onHandleUp}
+          onPointerCancel={() => {
+            // Geste repris par le systeme : jamais de fermeture, retour a 0.
+            dragStart.current = null
+            setDrag(0)
+          }}
           className="absolute inset-x-0 top-0 z-10 flex h-5 cursor-grab touch-none justify-center pt-2 active:cursor-grabbing sm:hidden"
         >
           <span className="h-1.5 w-10 rounded-full bg-ink/15" />
