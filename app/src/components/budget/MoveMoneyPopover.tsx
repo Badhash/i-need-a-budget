@@ -155,6 +155,12 @@ export function MoveMoneyPopover({
     if (h && h !== layerHeight) setLayerHeight(h)
   })
   useDismissOnOutsidePointer(layerRef, anchor, onClose)
+  // Pastille sortie de l'ecran au defilement : le popover se ferme plutot que
+  // de flotter loin de son enveloppe.
+  const anchorVisible = box?.anchorVisible ?? true
+  useEffect(() => {
+    if (!anchorVisible) onClose()
+  }, [anchorVisible, onClose])
 
   // Ouverture : focus sur la recherche (le montant est deja propose) ;
   // fermeture : focus rendu a la pastille si elle existe encore.

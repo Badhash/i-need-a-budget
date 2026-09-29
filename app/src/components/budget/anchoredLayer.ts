@@ -22,7 +22,15 @@ export interface AnchoredBox {
   placement: 'below' | 'above' | 'left'
   /** Placement lateral : ordonnee du centre de l'ancre dans la couche (fleche). */
   arrowY?: number
+  /**
+   * L'ancre est dans la zone visible (sous le header de l'app) : sinon la couche
+   * flotterait detachee de son ancre, son proprietaire la ferme ou la cache.
+   */
+  anchorVisible: boolean
 }
+
+/** Hauteur du header collant de l'app (desktop) : une ancre dessous est cachee. */
+const HEADER_OFFSET = 72
 
 interface AnchoredOptions {
   /** Largeur fixe ; absente = largeur du contenu, alignee sur le bord droit de l'ancre. */
@@ -51,6 +59,7 @@ function measure(
   const vh = window.innerHeight
   const below = vh - r.bottom - gap - VIEWPORT_MARGIN
   const above = r.top - gap - VIEWPORT_MARGIN
+  const anchorVisible = r.bottom > HEADER_OFFSET && r.top < vh
 
   if (side === 'left' && width !== undefined) {
     const w = Math.min(width, vw - 2 * VIEWPORT_MARGIN)
@@ -60,7 +69,7 @@ function measure(
       const h = Math.min(layerHeight ?? preferHeight, maxHeight)
       const anchorY = r.top + r.height / 2
       const top = Math.min(Math.max(anchorY - alignOffset, VIEWPORT_MARGIN), vh - VIEWPORT_MARGIN - h)
-      return { left, top, width: w, maxHeight, placement: 'left', arrowY: anchorY - top }
+      return { left, top, width: w, maxHeight, placement: 'left', arrowY: anchorY - top, anchorVisible }
     }
   }
 
@@ -79,12 +88,12 @@ function measure(
   // Ni dessous ni dessus : la couche occupe la hauteur du viewport (elle
   // recouvre alors son ancre plutot que d'etre coupee).
   if (Math.max(below, above) < 200) {
-    return { ...horizontal, top: VIEWPORT_MARGIN, maxHeight: vh - 2 * VIEWPORT_MARGIN, placement: 'below' }
+    return { ...horizontal, top: VIEWPORT_MARGIN, maxHeight: vh - 2 * VIEWPORT_MARGIN, placement: 'below', anchorVisible }
   }
   if (below >= preferHeight || below >= above) {
-    return { ...horizontal, top: r.bottom + gap, maxHeight: below, placement: 'below' }
+    return { ...horizontal, top: r.bottom + gap, maxHeight: below, placement: 'below', anchorVisible }
   }
-  return { ...horizontal, bottom: vh - r.top + gap, maxHeight: above, placement: 'above' }
+  return { ...horizontal, bottom: vh - r.top + gap, maxHeight: above, placement: 'above', anchorVisible }
 }
 
 /**

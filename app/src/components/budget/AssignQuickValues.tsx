@@ -99,7 +99,8 @@ export function AssignQuickValues({ row, month, anchor, draftCents, isExpression
   }
 
   const showResult = isExpression && draftCents !== null
-  if (!box || (chips.length === 0 && !showResult)) return null
+  // Champ sorti de la zone visible (defilement) : les puces se cachent.
+  if (!box || !box.anchorVisible || (chips.length === 0 && !showResult)) return null
 
   return createPortal(
     <div
