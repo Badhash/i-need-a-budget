@@ -7,6 +7,7 @@
 // header (HeaderBudgetSummary).
 
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import { ArrowUp, Check, Sparkles, TriangleAlert } from 'lucide-react'
 import type { BudgetMonth } from '@/lib/budget'
 import { Amount } from '@/components/shared/Amount'
@@ -215,7 +216,9 @@ function RtaCompactBar({
   visible: boolean
   top: number | undefined
 }) {
-  return (
+  // Portail dans body : hors du flux de la page (ses marges d'espacement ne
+  // decalent pas la barre fixe) et au-dessus de son contenu.
+  return createPortal(
     <div
       aria-hidden={!visible}
       // Repli avant mesure : header de 56px + filet sous la safe-area haute.
@@ -230,7 +233,7 @@ function RtaCompactBar({
         onClick={scrollToTop}
         tabIndex={visible ? 0 : -1}
         aria-label={`Prêt à assigner : ${fmtEUR(budget.rta)}${overspent ? ', dépassements à couvrir' : ''}. Revenir en haut`}
-        className="pressable pointer-events-auto relative mx-auto flex h-11 w-full max-w-content items-center gap-2.5 overflow-hidden rounded-2xl border border-edge bg-surface3/95 pl-3.5 pr-3 shadow-elevated backdrop-blur-xl"
+        className="pressable pointer-events-auto relative mx-auto flex h-11 w-full max-w-content items-center gap-2.5 overflow-hidden rounded-2xl border border-edge bg-surface3 pl-3.5 pr-3 shadow-elevated"
       >
         {/* Point d'etat ; rouge des qu'une enveloppe est en depassement. */}
         <span
@@ -257,6 +260,7 @@ function RtaCompactBar({
           />
         </span>
       </button>
-    </div>
+    </div>,
+    document.body,
   )
 }
