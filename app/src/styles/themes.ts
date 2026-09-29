@@ -47,7 +47,7 @@ export const THEMES: ThemeMeta[] = [
     preview: {
       bg: '#f6faf8',
       surface: '#ffffff',
-      accent: '#0d9476',
+      accent: '#0a8067',
       text: '#0f1f1a',
       darkBg: '#0d1412',
       darkSurface: '#151f1c',
@@ -95,7 +95,7 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
       accent: '#ff6b5e',
       success: '#29a863',
       danger: '#e5484d',
-      soft: '#8a847b',
+      soft: '#756f66',
       grid: '#ebe8e2',
       flowIn: '#217C4E',
       flowOut: '#FF8A7A',
@@ -128,10 +128,10 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
   },
   menthe: {
     light: {
-      accent: '#0d9476',
-      success: '#169e5a',
-      danger: '#e0424c',
-      soft: '#687d75',
+      accent: '#0a8067',
+      success: '#0d844c',
+      danger: '#d6303e',
+      soft: '#5c7068',
       grid: '#deebe5',
       flowIn: '#217C4E',
       flowOut: '#FF8A7A',
@@ -165,9 +165,9 @@ export const CHART_PALETTES: Record<ThemeId, Record<'light' | 'dark', ChartPalet
   nuit: {
     light: {
       accent: '#704efa',
-      success: '#24a560',
-      danger: '#e5484d',
-      soft: '#746f84',
+      success: '#0d8455',
+      danger: '#d92d3a',
+      soft: '#6e6980',
       grid: '#e7e4f0',
       flowIn: '#217C4E',
       flowOut: '#FF8A7A',
