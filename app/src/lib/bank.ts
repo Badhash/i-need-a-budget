@@ -185,3 +185,17 @@ interface BankReconcileResult {
 export async function bankReconcile(): Promise<BankReconcileResult> {
   return syncBankCall<BankReconcileResult>('reconcile')
 }
+
+/**
+ * App lancee depuis l'ecran d'accueil (PWA) : le consentement PSD2 s'ouvre
+ * alors hors de l'app (Safari sur iPhone, le navigateur ailleurs) et
+ * l'utilisateur doit revenir dans l'app ensuite. null dans un onglet.
+ */
+export function standaloneConsent(): 'ios' | 'other' | null {
+  if (typeof window === 'undefined') return null
+  const nav = window.navigator as Navigator & { standalone?: boolean }
+  const standalone = nav.standalone === true || window.matchMedia?.('(display-mode: standalone)').matches === true
+  if (!standalone) return null
+  // navigator.standalone n'existe que dans Safari iOS / iPadOS.
+  return nav.standalone !== undefined || /iPhone|iPad|iPod/.test(nav.userAgent) ? 'ios' : 'other'
+}
