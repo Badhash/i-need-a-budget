@@ -216,22 +216,28 @@ function MobileAccountMenu() {
         ))}
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Apparence</DropdownMenuLabel>
-        {/* Selecteur segmente clair / sombre / systeme (reste ouvert au choix). */}
+        {/* Selecteur segmente clair / sombre / systeme : de vrais items du menu
+            (navigation clavier), qui laissent le menu ouvert apres le choix. */}
         <div className="grid grid-cols-3 gap-1 p-1">
           {MODES.map(({ id, label, icon: Icon }) => (
-            <button
+            <DropdownMenuItem
               key={id}
-              type="button"
-              onClick={() => setMode(id)}
-              aria-pressed={mode === id}
+              onSelect={(e) => {
+                e.preventDefault()
+                setMode(id)
+              }}
+              aria-checked={mode === id}
+              role="menuitemradio"
               className={cn(
-                'flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl text-[11.5px] font-medium transition-colors',
-                mode === id ? 'bg-accent/10 text-accent-ink' : 'text-soft hover:bg-ink/[0.05] hover:text-ink',
+                'min-h-11 flex-col justify-center gap-1 px-1 text-[11.5px] font-medium',
+                mode === id
+                  ? 'bg-accent/10 text-accent-ink data-[highlighted]:bg-accent/15'
+                  : 'text-soft data-[highlighted]:text-ink',
               )}
             >
               <Icon className="h-4 w-4" />
               {label}
-            </button>
+            </DropdownMenuItem>
           ))}
         </div>
         <DropdownMenuSeparator />
