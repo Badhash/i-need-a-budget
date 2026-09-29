@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector } from 'recharts'
 import { PieChart as PieIcon } from 'lucide-react'
-import { inMonth, REST_KEY, type Analytics, type GroupSlice } from '@/lib/analytics'
+import { REST_KEY, type Analytics, type GroupSlice } from '@/lib/analytics'
 import { addMonths, fmtEUR, fmtMonthLong, fmtMonthShort, fmtMonthTitle, fmtPercent } from '@/lib/format'
 import { useChartPalette } from '@/hooks/useTheme'
 import type { ChartPalette } from '@/styles/themes'
@@ -16,8 +16,11 @@ import { cn } from '@/lib/utils'
 const BODY = 'h-[168px] gap-4 lg:h-[196px] lg:gap-7'
 // Anneau : 140px sur mobile (la legende garde la place de noms entiers), toute
 // la hauteur du corps en desktop.
-const RING = 'h-[140px] w-[140px] lg:h-full lg:w-auto lg:aspect-square'
-const FOOTER = 'flex min-h-9 items-center justify-between gap-3 border-t border-line/70 pt-3 text-[12.5px] text-soft'
+const RING = 'h-[140px] w-[140px] lg:h-[184px] lg:w-[184px]'
+// Pied colle au bas de la carte : si la carte voisine est plus haute, l'espace
+// libre s'ouvre entre le graphe et la comparaison, jamais sous le pied.
+const FOOTER =
+  'mt-auto flex min-h-9 items-center justify-between gap-3 border-t border-line/70 pt-3 text-[12.5px] text-soft'
 const ROW = 'h-[26px] lg:h-[30px]'
 const ROWS_GAP = 'gap-[2px] lg:gap-[3px]'
 
@@ -32,8 +35,8 @@ function question(reference: string, currentMonth: string): string {
     : `Où partira mon argent en ${fmtMonthLong(reference)} ?`
 }
 
-const caption = (reference: string, currentMonth: string) =>
-  `Par groupe de catégories, ${inMonth(reference, currentMonth)}`
+// Le mois est deja dans la question : la legende dit seulement le decoupage.
+const CAPTION = 'Par groupe de catégories'
 
 /** Repartition des depenses du mois par groupe de categories (donut + legende chiffree). */
 export function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth: string }) {
@@ -50,7 +53,7 @@ export function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth:
   const previousMonth = addMonths(a.reference, -1)
 
   return (
-    <WidgetCard icon={PieIcon} question={question(a.reference, currentMonth)} caption={caption(a.reference, currentMonth)}>
+    <WidgetCard icon={PieIcon} question={question(a.reference, currentMonth)} caption={CAPTION}>
       <div className={cn('flex items-center', BODY)}>
         <div className={cn('relative shrink-0', RING)}>
           {slices.length > 0 ? (
@@ -130,7 +133,7 @@ export function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth:
                 <SeriesKey color={sliceColor(s, palette)} className={cn('h-2.5 w-2.5', s.key === REST_KEY && 'opacity-50')} />
                 <span className="min-w-0 flex-1 truncate text-ink">{s.label}</span>
                 <span className="shrink-0 text-soft tnum">{fmtPercent(s.share)}</span>
-                <span className="hidden w-[5.5rem] shrink-0 text-right font-semibold text-ink tnum sm:inline">
+                <span className="hidden w-[4.75rem] shrink-0 text-right font-semibold text-ink tnum sm:inline">
                   {fmtEUR(s.total)}
                 </span>
               </li>
@@ -169,7 +172,7 @@ export function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth:
 
 export function SpendingDonutSkeleton({ reference, currentMonth }: { reference: string; currentMonth: string }) {
   return (
-    <WidgetCard icon={PieIcon} question={question(reference, currentMonth)} caption={caption(reference, currentMonth)}>
+    <WidgetCard icon={PieIcon} question={question(reference, currentMonth)} caption={CAPTION}>
       <div aria-hidden className={cn('flex items-center', BODY)}>
         <div className={cn('relative shrink-0', RING)}>
           <Skeleton className="absolute inset-[3%] rounded-full" />
@@ -181,7 +184,7 @@ export function SpendingDonutSkeleton({ reference, currentMonth }: { reference: 
               <Skeleton className="h-2.5 w-2.5 rounded-full" />
               <Skeleton className="h-3.5 flex-1" />
               <Skeleton className="h-3.5 w-9" />
-              <Skeleton className="hidden h-3.5 w-[5.5rem] sm:block" />
+              <Skeleton className="hidden h-3.5 w-[4.75rem] sm:block" />
             </div>
           ))}
         </div>

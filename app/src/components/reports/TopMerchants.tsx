@@ -1,5 +1,5 @@
 import { Store } from 'lucide-react'
-import { inMonth, type Analytics } from '@/lib/analytics'
+import type { Analytics } from '@/lib/analytics'
 import { fmtMonthLong, fmtPercent } from '@/lib/format'
 import { Amount } from '@/components/shared/Amount'
 import { ProgressBar } from '@/components/shared/ProgressBar'
@@ -36,7 +36,7 @@ export function TopMerchants({ a, currentMonth }: { a: Analytics; currentMonth: 
     <WidgetCard
       icon={Store}
       question={question(a.reference, currentMonth)}
-      caption={`${count} marchand${count > 1 ? 's' : ''} ${inMonth(a.reference, currentMonth)}`}
+      caption={`${count} marchand${count > 1 ? 's' : ''} ${a.reference === currentMonth ? 'ce mois-ci' : 'ce mois-là'}`}
       action={
         top.length > 0 ? (
           <Badge variant="accent" className="py-1 font-semibold">

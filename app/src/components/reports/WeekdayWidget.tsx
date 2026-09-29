@@ -29,14 +29,25 @@ export function WeekdayWidget({ a, className }: { a: Analytics; className?: stri
   const reduced = usePrefersReducedMotion()
   const ids = useChartIds('peak', 'rest')
   const { average, peak, peakMerchant } = a.weekday
-  const data = average.map((value, i) => ({ name: SHORT[i]!, day: LONG[i]!, value }))
+  const data = average.map((value, i) => ({ name: SHORT[i]!, day: LONG[i]!, value, index: i }))
 
-  const renderTooltip = ({ active, payload }: { active?: boolean; payload?: { payload?: { day: string; value: number } }[] }) => {
+  const renderTooltip = ({
+    active,
+    payload,
+  }: {
+    active?: boolean
+    payload?: { payload?: { day: string; value: number; index: number } }[]
+  }) => {
     const p = payload?.[0]?.payload
     if (!active || !p) return null
     return (
       <GlassTooltip title={p.day.charAt(0).toUpperCase() + p.day.slice(1)}>
-        <TooltipRow color={palette.accent} shape="bar" value={fmtEUR(p.value)} label="en moyenne" />
+        <TooltipRow
+          color={p.index === peak ? palette.accent : palette.soft}
+          shape="bar"
+          value={fmtEUR(p.value)}
+          label="en moyenne"
+        />
       </GlassTooltip>
     )
   }
