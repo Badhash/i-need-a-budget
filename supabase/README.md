@@ -35,16 +35,38 @@ sign up" = OFF (compte unique cree a la main).
 ## Edge Function /api
 
 Endpoint unique a actions typees (POST JSON `{ action, params }`, JWT obligatoire).
-Actions : bootstrap, getBudgetMonth, getTransactions, listTransactions, getReports,
-addTransaction, categorizeTransaction, updateTransaction, deleteTransaction,
-convertToTransfer, convertTransferToNormal, setAssigned, createAccount, seedDefaults,
+Actions : bootstrap, bootstrapFull, getBudgetMonth, getTransactions, listTransactions,
+getReports, addTransaction, categorizeTransaction, categorizeMany, setPayeeCategory,
+updateTransaction, deleteTransaction, convertToTransfer, convertTransferToNormal,
+setAssigned, createAccount, updateAccount, deleteAccount, seedDefaults,
 createCategory, updateCategory, deleteCategory, createCategoryGroup,
 updateCategoryGroup, deleteCategoryGroup, reorderCategories, reorderCategoryGroups,
 listRules, createRule, updateRule, deleteRule, applyRulesToUncategorized,
 listTargets, setTarget, deleteTarget, getBankConnections, linkBankAccount,
-listSyncLogs, exportData, importReplaceBegin, importReplaceTransactions,
-importReplaceAssignments (import YNAB destructif). Dechiffrement en memoire, calculs
-via packages/engine, aucune donnee metier dans les logs.
+listSyncLogs, exportData, migrateSplitPayload, importReplaceBegin,
+importReplaceTransactions, importReplaceAssignments (import YNAB destructif),
+recomputeAggregates, newBudget. Dechiffrement en memoire, calculs via
+packages/engine, aucune donnee metier dans les logs.
+
+Fonctionnalites annoncees : `bootstrap` et `bootstrapFull` renvoient `features`
+(constante `SERVER_FEATURES` de `functions/api/features.ts`, memes noms que
+`app/src/lib/features.ts`). Le front masque ce qui en depend tant que la fonction
+deployee ne les annonce pas (Pages et Edge Functions se deploient separement).
+
+- `crossBudgetTransfers` : un virement entre un compte budget et un compte de suivi
+  suit la regle YNAB. La moitie cote budget compte comme une transaction ordinaire
+  (badge « A categoriser », budget, rapports) et se categorise
+  (categorizeTransaction, categorizeMany ; updateTransaction : categorie, libelle
+  et notes seulement). Les transferts entre comptes budget restent neutres.
+- `accountFlags` : updateAccount accepte `onBudget` (bascule budget/suivi) et
+  `closed` (clore exige un solde exactement nul ; un compte clos n'est plus
+  synchronise).
+- `refillTargets` : setTarget accepte `type: 'refill'` (montant > 0, sans echeance).
+- `importTransfers` : importReplaceTransactions accepte `transferGroupId` par ligne.
+
+Deploiement de ces fonctionnalites : aucun SQL. La version des agregats passe a 3 :
+les agregats existants sont ignores puis reconstruits automatiquement a la premiere
+ouverture de l'app (bootstrapFull), le calcul complet sert entre-temps.
 
 ## Edge Function sync-bank (Enable Banking)
 

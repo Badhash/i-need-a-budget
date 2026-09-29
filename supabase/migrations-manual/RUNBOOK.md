@@ -72,3 +72,24 @@ Notes par ref :
   DÉPLOIEMENT : SQL d'abord, puis code ; aucun backfill manuel.
 - **J** : `account_idx` est `text` (cohérent avec `month_idx`/`tx_hash`). Le
   code retombe sur le chargement complet tant qu'il reste des lignes NULL.
+
+## Edge Functions en attente de déploiement (transferts croisés)
+
+Le code serveur des transferts croisés (règle YNAB budget ↔ suivi), des comptes
+archivables, des objectifs « recharger » et de l'import des virements est prêt
+mais ne part qu'au prochain déploiement des Edge Functions (jeton CI à renouveler).
+
+- **Aucun SQL** à appliquer.
+- `AGG_VERSION` passe à 3 : le marqueur `aggregate_state` existant est traité
+  comme non prêt, les lectures retombent sur le calcul complet, puis
+  `bootstrapFull` reconstruit les agrégats en arrière-plan à la première
+  ouverture de l'app. Rien à lancer à la main (`recomputeAggregates` reste
+  disponible en secours).
+- Le front s'adapte seul : `bootstrap` annonce `features` et les interfaces
+  correspondantes s'allument sans redéploiement de Pages.
+- Effet attendu après déploiement : le badge « À catégoriser » peut augmenter du
+  nombre de virements budget → suivi (ou suivi → budget) jamais catégorisés.
+  C'est la règle YNAB : catégoriser leur moitié côté budget (ex. « Investissement »
+  pour un versement sur le PEA, une catégorie de revenus pour un retrait).
+- Vérification : la réponse de `bootstrap` contient `features` avec
+  `crossBudgetTransfers`, `accountFlags`, `refillTargets`, `importTransfers`.

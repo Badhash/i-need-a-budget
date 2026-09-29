@@ -110,6 +110,8 @@ Mémoire de tiers (REF N, table `payee_memory`, module `supabase/functions/api/p
 
 Badge « À catégoriser » (serveur `countsAsUncategorized`, agrégats `uncat_counts`, front) : comptes budget uniquement (les comptes de suivi ne se catégorisent pas : pas de sélecteur, règles non appliquées), sans catégorie, hors transfert entre comptes budget (la moitié côté budget d'un transfert croisé compte), pas dans le futur, pas antérieur au mois de départ.
 
+Fonctionnalités serveur (`features`) : le front (Pages) et les Edge Functions se déploient séparément. `bootstrap`/`bootstrapFull` annoncent les comportements serveur récents dans `features` (constante `SERVER_FEATURES` de `supabase/functions/api/features.ts`, noms identiques à `app/src/lib/features.ts` : `crossBudgetTransfers`, `accountFlags`, `refillTargets`, `importTransfers`). Toute interface qui en dépend reste masquée (`useServerFeatures` / `hasServerFeature`) tant que le serveur déployé ne l'annonce pas : l'app garde alors son comportement historique. Le serveur reste rétrocompatible (paramètres nouveaux optionnels, réponses seulement enrichies).
+
 Tous ces calculs vivent dans un module TypeScript pur `packages/engine` (zéro dépendance), utilisé par l'Edge Function `/api`, couvert par Vitest (cas : rollover positif, overspending, mois vide, transfert, futur).
 
 ## Modèle de données (tables principales — enveloppes opaques)
