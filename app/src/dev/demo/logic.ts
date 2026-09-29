@@ -1,11 +1,12 @@
 // Mode demonstration : regles metier partagees par le generateur de donnees et
 // le serveur factice. Miroir fidele de supabase/functions/api/index.ts
-// (entree moteur, badge « À catégoriser », rapports, memoire de tiers), plus
-// la semantique des fonctionnalites serveur annoncees (lib/features.ts).
+// (entree moteur, badge « À catégoriser », rapports, memoire de tiers) et de
+// sync-bank (categorisation a l'import, consentement), plus la semantique des
+// fonctionnalites serveur annoncees (lib/features.ts).
 
 import type { BudgetInput } from '../../../../packages/engine/src/index'
 import { payeeKey } from '../../../../packages/crypto/src/payee'
-import type { DemoDb, DemoTransaction } from './db'
+import { randomUuid, stableUuid, type DemoBankConnection, type DemoDb, type DemoTransaction } from './db'
 
 // ---------------------------------------------------------------------------
 // Virements croises (fonctionnalite crossBudgetTransfers)
@@ -124,12 +125,23 @@ function mostFrequentLabel(labels: Map<string, number>): string {
   return best
 }
 
+export interface ReportsOptions {
+  /** Fonctionnalite crossBudgetTransfers : moitie cote budget comptee. */
+  crossBudget: boolean
+  /**
+   * Serveur recent : marchands regroupes par cle de tiers (payeeKey). Le
+   * serveur ancien regroupe par libelle brut (une entree par
+   * « CB CARREFOUR MARKET jj/mm »).
+   */
+  merchantsByPayee: boolean
+}
+
 /**
  * Agregats de la vue Rapports. Perimetre : comptes budget, hors virement entre
  * comptes budget ; avec les virements croises, la moitie cote budget compte
- * comme une transaction ordinaire. Marchands regroupes par cle de tiers.
+ * comme une transaction ordinaire.
  */
-export function computeReports(db: DemoDb, month: string, crossBudget: boolean) {
+export function computeReports(db: DemoDb, month: string, { crossBudget, merchantsByPayee }: ReportsOptions) {
   const onBudget = new Set(db.accounts.filter((a) => a.onBudget).map((a) => a.id))
   const income = new Set(db.categories.filter((c) => c.isIncome).map((c) => c.id))
   const catToGroup = new Map(db.categories.map((c) => [c.id, c.groupId]))
@@ -160,7 +172,7 @@ export function computeReports(db: DemoDb, month: string, crossBudget: boolean) 
     if (t.bookingMonth !== month || !isSpending(t)) continue
     const groupKey = t.categoryId ? (catToGroup.get(t.categoryId) ?? 'uncat') : 'uncat'
     byGroup.set(groupKey, (byGroup.get(groupKey) ?? 0) - t.amount)
-    const key = payeeKey(t.label)
+    const key = merchantsByPayee ? payeeKey(t.label) : ''
     const merchantKey = key ? `payee:${key}` : `label:${t.label}`
     let merchant = byMerchant.get(merchantKey)
     if (!merchant) {
@@ -290,8 +302,28 @@ export function payeeDefaults(db: DemoDb): Map<string, string> {
 }
 
 // ---------------------------------------------------------------------------
-// Regles (matchLabel du serveur)
+// Regles (matchLabel du serveur) et categorisation automatique
 // ---------------------------------------------------------------------------
+
+/**
+ * Categorisation automatique d'une transaction importee (sync-bank) ou restee
+ * a categoriser (applyRulesToUncategorized) : regles d'abord (par priorite),
+ * puis repli sur la memoire de tiers. Comptes budget uniquement (un compte de
+ * suivi ne se categorise pas), categorie connue hors revenus. null : rien ne
+ * s'applique, la transaction reste « À catégoriser ».
+ */
+export function autoCategorizer(db: DemoDb): (tx: { accountId: string; label: string }) => string | null {
+  const rules = db.rules.slice().sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
+  const payees = payeeDefaults(db)
+  const onBudget = new Set(db.accounts.filter((a) => a.onBudget).map((a) => a.id))
+  const known = new Set(db.categories.filter((c) => !c.isIncome).map((c) => c.id))
+  return (tx) => {
+    if (!onBudget.has(tx.accountId)) return null
+    const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
+    const categoryId = rule?.categoryId ?? payees.get(payeeKey(tx.label)) ?? null
+    return categoryId && known.has(categoryId) ? categoryId : null
+  }
+}
 
 /** normalizeLabel de packages/crypto : minuscules sans accents, blancs reduits. */
 export function normalizeLabel(label: string): string {
@@ -318,4 +350,53 @@ export function matchLabel(label: string, matcher: { op: string; value: string }
     default:
       return false
   }
+}
+
+// ---------------------------------------------------------------------------
+// Consentement bancaire (finalizeAuth de sync-bank)
+// ---------------------------------------------------------------------------
+
+/** Duree du consentement demande par startAuth (plafond PSD2 usuel, 90 jours). */
+const CONSENT_DAYS = 90
+
+/** IBAN factice mais stable pour une banque (aucune donnee reelle). */
+function fakeIban(institution: string): string {
+  const digits = stableUuid(`iban:${institution}`)
+    .replace(/-/g, '')
+    .split('')
+    .map((c) => String(parseInt(c, 16) % 10))
+    .join('')
+  return `FR76${digits.slice(0, 23)}`
+}
+
+/**
+ * Consentement PSD2 accorde pour une banque (retour de la banque) : la
+ * connexion de la meme institution est prolongee (re-consentement), sinon une
+ * nouvelle connexion est creee avec un compte bancaire a associer. Renvoie
+ * l'identifiant de la connexion.
+ */
+export function applyConsent(db: DemoDb, institution: string, now: number = Date.now()): string {
+  const validUntil = new Date(now + CONSENT_DAYS * 86_400_000).toISOString()
+  const existing = db.bankConnections.find((c) => c.institution === institution)
+  if (existing) {
+    existing.validUntil = validUntil
+    existing.sessionState = 'active'
+    return existing.id
+  }
+  const connection: DemoBankConnection = {
+    id: randomUuid(),
+    institution,
+    validUntil,
+    sessionState: 'active',
+    accounts: [
+      {
+        uid: stableUuid(`eb-account:${institution}:courant`),
+        name: 'COMPTE COURANT',
+        iban: fakeIban(institution),
+        product: 'Compte de dépôt',
+      },
+    ],
+  }
+  db.bankConnections.push(connection)
+  return connection.id
 }

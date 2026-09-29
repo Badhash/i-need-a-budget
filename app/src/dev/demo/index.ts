@@ -24,9 +24,14 @@
 //                        'Failed to fetch')
 //
 // Les ecritures modifient la base en memoire de la session ; un rechargement
-// repart du jeu de donnees initial, ancre sur la date du jour.
+// repart du jeu de donnees initial, ancre sur la date du jour. Exception : le
+// consentement bancaire (Connecter / Reconnecter) simule le retour de la
+// banque par un vrai rechargement sur #/reglages (parametre interne
+// consentement=<banque>, retire aussitot de l'URL) ; la base de la session est
+// conservee le temps de l'aller-retour et la connexion est accordee.
 
 import { installDemoSession } from './session'
+import { clearConsentParam } from './state'
 
 export { demoApiCall } from './server'
 export { demoSyncBankCall } from './bank'
@@ -37,9 +42,11 @@ export const DEMO_MARKER = 'INAB_DEMO_MODULE'
 
 /**
  * Active le mode demonstration AVANT le premier rendu (appele par main.tsx) :
- * session factice synchrone, Supabase Auth neutralise, marqueur sur <html>.
+ * session factice synchrone, Supabase Auth neutralise, marqueur sur <html>,
+ * URL nettoyee d'un eventuel retour de consentement.
  */
 export function installDemo(): void {
   document.documentElement.dataset.demo = DEMO_MARKER
+  clearConsentParam()
   installDemoSession()
 }

@@ -27,8 +27,11 @@ function toOrigin(raw: string | undefined): string {
 export const SUPABASE_URL = toOrigin(rawUrl)
 export const SUPABASE_ANON_KEY = (rawAnon ?? '').trim()
 
-// Mode demonstration (VITE_DEMO=1) : aucun appel Supabase, configuration inutile.
-if ((!SUPABASE_URL || !SUPABASE_ANON_KEY) && import.meta.env.VITE_DEMO !== '1') {
+// Mode demonstration (VITE_DEMO=1, constante resolue au build) : aucun appel
+// Supabase, configuration inutile (cf. src/dev/demo).
+const DEMO = import.meta.env.VITE_DEMO === '1'
+
+if ((!SUPABASE_URL || !SUPABASE_ANON_KEY) && !DEMO) {
   // Ne pas jeter au chargement (sinon l'app entiere casse en dev/CI sans .env) :
   // on log clairement et les appels reels echoueront avec un message parlant.
   console.error(
@@ -41,10 +44,15 @@ export const supabase = createClient(
   SUPABASE_ANON_KEY || 'placeholder-anon-key',
   {
     auth: {
-      persistSession: true,
-      autoRefreshToken: true,
+      // Mode demonstration : Auth inerte. Session en memoire seulement (jamais
+      // celle qu'un `npm run dev` a stockee pour le meme origine), aucun
+      // rafraichissement de jeton ni initialisation : GoTrue n'emet aucune
+      // requete. Hors demo, options inchangees.
+      persistSession: !DEMO,
+      autoRefreshToken: !DEMO,
       // Hash routing (/#/) : on gere la navigation nous-memes, pas de parsing d'URL.
       detectSessionInUrl: false,
+      ...(DEMO ? { storageKey: 'inab-demo-auth', skipAutoInitialize: true } : {}),
     },
   },
 )

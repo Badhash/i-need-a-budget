@@ -1,6 +1,6 @@
 // Mode demonstration : jeu de donnees factice (INAB_DEMO_MODULE).
 //
-// Un budget realiste de 7 mois (mois courant inclus) : salaire, loyer,
+// Un budget realiste d'au moins 7 mois (mois courant inclus) : salaire, loyer,
 // prelevements, courses, restaurants, carte a debit differe et son releve
 // mensuel, virements vers le Livret A et le PEA, remboursements, transactions
 // recentes a categoriser, assignations de chaque mois, objectifs, regles,
@@ -10,12 +10,23 @@
 // ANCRE sur la date reelle du jour : les captures sont toujours d'actualite.
 // Aucune donnee bancaire reelle : libelles, montants, IBAN et noms inventes.
 //
+// Fenetre : l'historique remonte jusqu'au premier mois atteignable par le
+// selecteur de mois (MIN_MONTH), pour qu'aucun mois accessible ne soit vide,
+// dans la limite de MAX_HISTORY mois. Au-dela (horloge tres lointaine), le
+// budget demarre au premier mois genere (budgetStartMonth) : le selecteur
+// s'y arrete. Les evenements marquants (prime, voyage, fin du credit auto...)
+// sont dates par rapport au mois courant, quelle que soit la longueur.
+//
 // Calibrage : le solde d'ouverture du Livret A est ajuste pour que le Pret a
 // assigner du mois courant tombe toujours a 412,35 € (quel que soit le jour
-// du mois), avec un depassement sur Restaurants.
+// du mois), avec un depassement sur Restaurants. L'excedent de chaque mois
+// passe au-dela d'une avance de 2 000 € part en Investissement : le Pret a
+// assigner ne gonfle pas avec la longueur de l'historique et le solde
+// d'ouverture reste positif (au moins 500 €).
 
-import { addMonths, computeBudget } from '../../../../packages/engine/src/index'
+import { addMonths, computeBudget, monthRange } from '../../../../packages/engine/src/index'
 import { SERVER_FEATURES } from '@/lib/features'
+import { MIN_MONTH } from '@/lib/format'
 import {
   addDays,
   businessDayOnOrBefore,
@@ -32,11 +43,18 @@ import {
   type DemoGroup,
   type DemoTransaction,
 } from './db'
-import { engineInput, learnPayee } from './logic'
+import { autoCategorizer, engineInput, learnPayee } from './logic'
 
 const SEED = 0x1d3a5eed
 /** Pret a assigner vise pour le mois courant (centimes). */
 const TARGET_RTA = 41_235
+/** Longueur minimale et maximale de l'historique, mois courant inclus. */
+const MIN_HISTORY = 7
+const MAX_HISTORY = 36
+/** Avance gardee en fin de mois passe ; l'excedent est epargne (centimes). */
+const SURPLUS_CAP = 200_000
+/** Solde d'ouverture minimal du Livret A apres calibrage (centimes). */
+const MIN_LIVRET_OPENING = 50_000
 
 const id = (name: string) => stableUuid(`inab-demo:${name}`)
 
@@ -221,7 +239,13 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
 
   const today = isoLocalDate(now)
   const M0 = today.slice(0, 7)
-  const months = Array.from({ length: 7 }, (_, i) => addMonths(M0, i - 6))
+  // Premier mois genere : M0-6 au plus tard, MIN_MONTH s'il est plus ancien,
+  // jamais plus de MAX_HISTORY mois en arriere.
+  const earliest = addMonths(M0, -(MAX_HISTORY - 1))
+  let first = addMonths(M0, -(MIN_HISTORY - 1))
+  if (MIN_MONTH < first) first = MIN_MONTH > earliest ? MIN_MONTH : earliest
+  const months = monthRange(first, M0)
+  const pastMonths = months.slice(0, -1)
   const M1 = addMonths(M0, 1)
 
   // --- Comptes ---------------------------------------------------------------
@@ -382,6 +406,8 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
   ]
 
   months.forEach((m, k) => {
+    // Anciennete du mois (0 = mois courant) : repere des evenements marquants.
+    const back = months.length - 1 - k
     const last = daysInMonth(m)
     const d = (day: number) => dateInMonth(m, day)
     const anyDay = () => d(int(1, last))
@@ -396,7 +422,7 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
       label: 'VIR SEPA SALAIRE ACME SAS',
       counterparty: 'ACME SAS',
     })
-    if (k === 3) {
+    if (back === 3) {
       push({
         account: courant,
         cat: 'salaire',
@@ -418,10 +444,10 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
       ['VIR SEPA VERS PEA MON COURTIER', 'VIR SEPA RECU COMPTE COURANT'],
       crossBudget ? 'investissement' : null,
     )
-    if (k === 3) {
+    if (back === 3) {
       transfer(livret, courant, d(19), 50_000, ['VIR SEPA VERS COMPTE COURANT', 'VIR SEPA RECU DU LIVRET A'])
     }
-    if (k === 2) push({ account: pea, cat: null, date: d(15), amount: 4_218, label: 'COUPON ETF MONDE' })
+    if (back === 4) push({ account: pea, cat: null, date: d(15), amount: 4_218, label: 'COUPON ETF MONDE' })
 
     // Logement et abonnements : prelevements a date fixe.
     push({ account: courant, cat: 'loyer', date: d(3), amount: -95_000, label: 'PRLV SEPA SCI LES TILLEULS LOYER', counterparty: 'SCI LES TILLEULS' })
@@ -433,18 +459,21 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
     push({ account: courant, cat: 'sport', date: d(6), amount: -3_495, label: 'PRLV SEPA FITNESS PARK', counterparty: 'FITNESS PARK' })
     push({ account: courant, cat: 'transports', date: d(7), amount: -8_880, label: 'PRLV SEPA NAVIGO MENSUEL', counterparty: 'COMUTITRES' })
     push({ account: carte, cat: 'streaming', date: d(21), amount: -1_349, label: cb('NETFLIX.COM', d(21)) })
-    if (k <= 1) {
+    // Abonnement presse resilie il y a 4 mois (categorie cachee depuis).
+    if (back >= 5) {
       push({ account: courant, cat: 'presse', date: d(20), amount: -999, label: 'PRLV SEPA JOURNAL DU MATIN ABONNEMENT', counterparty: 'JOURNAL DU MATIN' })
     }
-    if (k === 0) {
+    // Credit auto rembourse il y a 6 mois (categorie archivee depuis).
+    if (back >= 6) {
+      const final = back === 6
       push({
         account: courant,
         cat: 'creditAuto',
         date: d(15),
         amount: -18_900,
-        label: 'PRLV SEPA AUTOFINANCE ECHEANCE FINALE',
+        label: final ? 'PRLV SEPA AUTOFINANCE ECHEANCE FINALE' : 'PRLV SEPA AUTOFINANCE ECHEANCE CREDIT AUTO',
         counterparty: 'AUTOFINANCE',
-        notes: 'Dernière échéance du crédit auto',
+        notes: final ? 'Dernière échéance du crédit auto' : undefined,
       })
     }
 
@@ -496,7 +525,7 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
       const date = anyDay()
       push({ account: carte, cat: 'transports', date, amount: -eur(9, 26), label: cb('UBER *TRIP', date) })
     }
-    if (k === 3) {
+    if (back === 3) {
       push({
         account: carte,
         cat: 'transports',
@@ -517,7 +546,7 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
       const date = anyDay()
       push({ account: carte, cat: 'sorties', date, amount: -eur(16, 32), label: cb('LE COMPTOIR DU CANAL', date) })
     }
-    if (k === 2) {
+    if (back === 4) {
       push({ account: carte, cat: 'sorties', date: d(14), amount: -5_400, label: cb('FNAC SPECTACLES', d(14)), notes: 'Concert' })
     }
     const amazonCount = int(1, 2)
@@ -533,16 +562,16 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
       const date = anyDay()
       push({ account: carte, cat: 'shopping', date, amount: -eur(29, 79), label: cb('ZARA', date) })
     }
-    if (k === 4) {
+    if (back === 2) {
       // Achat rendu puis rembourse : montant positif sur Shopping.
       push({ account: carte, cat: 'shopping', date: d(6), amount: -3_999, label: cb('DECATHLON', d(6)) })
       push({ account: carte, cat: 'shopping', date: d(18), amount: 3_999, label: `REMBOURSEMENT CB DECATHLON ${ddmm(d(17))}`, notes: 'Article retourné' })
     }
-    if (k === 1) push({ account: carte, cat: 'cadeaux', date: d(12), amount: -4_690, label: cb('NATURE ET DECOUVERTES', d(12)) })
-    if (k === 4) push({ account: carte, cat: 'cadeaux', date: d(23), amount: -3_250, label: cb('CULTURA', d(23)) })
-    if (k === 2) push({ account: carte, cat: 'voyages', date: d(9), amount: -18_436, label: cb('EASYJET', d(9)) })
-    if (k === 3) push({ account: carte, cat: 'voyages', date: d(11), amount: -61_200, label: cb('AIRBNB', d(11)), notes: 'Location à Marseille, 5 nuits' })
-    if (k === 5) push({ account: carte, cat: 'voyages', date: d(13), amount: -14_200, label: cb('HOTEL DU PORT', d(13)) })
+    if (back === 5) push({ account: carte, cat: 'cadeaux', date: d(12), amount: -4_690, label: cb('NATURE ET DECOUVERTES', d(12)) })
+    if (back === 2) push({ account: carte, cat: 'cadeaux', date: d(23), amount: -3_250, label: cb('CULTURA', d(23)) })
+    if (back === 4) push({ account: carte, cat: 'voyages', date: d(9), amount: -18_436, label: cb('EASYJET', d(9)) })
+    if (back === 3) push({ account: carte, cat: 'voyages', date: d(11), amount: -61_200, label: cb('AIRBNB', d(11)), notes: 'Location à Marseille, 5 nuits' })
+    if (back === 1) push({ account: carte, cat: 'voyages', date: d(13), amount: -14_200, label: cb('HOTEL DU PORT', d(13)) })
   })
 
   // Mois courant : un diner qui fait deborder l'enveloppe Restaurants.
@@ -556,21 +585,23 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
     notes: 'Dîner anniversaire',
   })
 
-  // Transactions recentes a categoriser (badge « À catégoriser », mode Tri).
+  // Imports recents a categoriser (badge « À catégoriser », mode Tri) : des
+  // marchands NOUVEAUX, inconnus des regles et de la memoire de tiers (sinon
+  // l'import les aurait deja categorises, cf. plus bas). BIOCOOP revient deux
+  // fois : categoriser la premiere suggere la meme categorie pour la seconde.
   const recent: { offset: number; account: DemoAccount; amount: number; label: (date: string) => string; counterparty?: string }[] = [
-    { offset: 0, account: carte, amount: -2_347, label: (dt) => cb('CARREFOUR CITY', dt) },
-    { offset: 1, account: courant, amount: -680, label: (dt) => cb('BOULANGERIE DU MARCHE', dt) },
-    { offset: 1, account: carte, amount: -1_790, label: (dt) => cb('UBER *TRIP', dt) },
-    { offset: 2, account: carte, amount: -6_490, label: (dt) => cb('LEROY MERLIN', dt) },
+    { offset: 0, account: carte, amount: -6_490, label: (dt) => cb('LEROY MERLIN', dt) },
+    { offset: 1, account: courant, amount: -1_835, label: (dt) => cb('BIOCOOP', dt) },
+    { offset: 1, account: carte, amount: -300, label: (dt) => cb('VELIB METROPOLE', dt) },
+    { offset: 2, account: carte, amount: -1_850, label: (dt) => cb('PAYPAL *VINTED', dt) },
     { offset: 3, account: courant, amount: 2_500, label: () => 'VIR INSTANTANE RECU LUCAS MARTIN', counterparty: 'LUCAS MARTIN' },
-    { offset: 4, account: carte, amount: -3_499, label: (dt) => cb('AMAZON PAYMENTS', dt) },
-    { offset: 5, account: courant, amount: -1_260, label: (dt) => cb('PHARMACIE DU CENTRE', dt) },
-    { offset: 6, account: carte, amount: -1_850, label: (dt) => cb('PAYPAL *VINTED', dt) },
-    { offset: 7, account: courant, amount: -6_000, label: (dt) => `RETRAIT DAB ${ddmm(dt)} PARIS 11E` },
-    { offset: 8, account: carte, amount: -8_999, label: (dt) => cb('DARTY', dt) },
-    { offset: 9, account: carte, amount: -786, label: (dt) => cb('LA POSTE', dt) },
-    { offset: 11, account: carte, amount: -1_350, label: (dt) => cb('PATHE BEAUGRENELLE', dt) },
-    { offset: 12, account: courant, amount: -2_735, label: (dt) => cb('MONOPRIX', dt) },
+    { offset: 4, account: carte, amount: -8_999, label: (dt) => cb('DARTY', dt) },
+    { offset: 5, account: carte, amount: -786, label: (dt) => cb('LA POSTE', dt) },
+    { offset: 6, account: courant, amount: -2_610, label: (dt) => cb('BIOCOOP', dt) },
+    { offset: 8, account: carte, amount: -1_350, label: (dt) => cb('PATHE BEAUGRENELLE', dt) },
+    { offset: 9, account: carte, amount: -4_580, label: (dt) => cb('IKEA PARIS NORD', dt) },
+    { offset: 10, account: carte, amount: -3_240, label: (dt) => cb('SEPHORA', dt) },
+    { offset: 11, account: courant, amount: -2_490, label: (dt) => cb('NICOLAS', dt) },
   ]
   for (const r of recent) {
     const date = addDays(today, -r.offset)
@@ -579,7 +610,7 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
 
   // Releves mensuels de la carte a debit differe (mois termines) : virement
   // du compte courant vers la carte, qui remet son solde a zero.
-  months.slice(0, 6).forEach((m) => {
+  pastMonths.forEach((m) => {
     const spent = transactions
       .filter((t) => t.accountId === carte.id && t.bookingMonth === m && !t.transferGroupId)
       .reduce((s, t) => s + t.amount, 0)
@@ -601,7 +632,42 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
     payees: [],
     bankConnections: [],
     syncLogs: [],
-    budgetStartMonth: null,
+    // Historique plafonne (horloge tres lointaine) : le budget demarre au
+    // premier mois genere, le selecteur ne descend pas sur des mois vides.
+    budgetStartMonth: MIN_MONTH < first ? first : null,
+  }
+
+  // --- Regles, memoire de tiers, categorisation a l'import -------------------
+  const rules: [string, CatKey][] = [
+    ['carrefour', 'courses'],
+    ['edf', 'electricite'],
+    ['netflix', 'streaming'],
+    ['sncf', 'transports'],
+    ['free mobile', 'telephone'],
+  ]
+  rules.forEach(([value, key], priority) => {
+    db.rules.push({
+      id: id(`rule:${value}`),
+      matcher: { field: 'label', op: 'contains', value },
+      categoryId: cat(key),
+      priority,
+    })
+  })
+
+  // Memoire de tiers : rejoue les categorisations (meme payeeKey que le serveur).
+  const onBudget = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
+  const income = new Set(categories.filter((c) => c.isIncome).map((c) => c.id))
+  for (const t of transactions) {
+    if (!t.categoryId || t.transferGroupId || !onBudget.has(t.accountId) || income.has(t.categoryId)) continue
+    learnPayee(db, t.label, t.categoryId)
+  }
+
+  // Les imports passent par les regles puis la memoire de tiers, comme dans
+  // sync-bank : seuls les marchands inconnus restent « À catégoriser ».
+  const categorizeImport = autoCategorizer(db)
+  for (const t of transactions) {
+    if (t.categoryId || t.transferGroupId || t.txHash === null) continue
+    t.categoryId = categorizeImport(t)
   }
 
   // --- Assignations ----------------------------------------------------------
@@ -611,6 +677,9 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
     if (existing) existing.amount = amount
     else db.assignments.push({ id: id(`assignment:${key}:${month}`), categoryId, month, amount })
   }
+  const assignedOf = (key: CatKey, month: string) =>
+    db.assignments.find((a) => a.categoryId === cat(key) && a.month === month)?.amount ?? 0
+  const rtaOf = (month: string) => computeBudget(engineInput(db, month, crossBudget)).readyToAssign
   const rowsOf = (month: string) => {
     const budget = computeBudget(engineInput(db, month, crossBudget))
     return new Map(budget.categories.map((r) => [r.categoryId, r]))
@@ -618,14 +687,14 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
   const plannedKeys = Object.keys(PLAN) as CatKey[]
 
   // Mois passes : le plan, puis couverture des depassements (Restaurants
-  // « ajuste au centime pres » : son report reste quasi nul).
-  months.slice(0, 6).forEach((m, k) => {
+  // « ajuste au centime pres » : son report reste quasi nul). Le premier mois
+  // amorce le fonds d'urgence ; presse et credit auto tant qu'ils existent.
+  pastMonths.forEach((m, k) => {
+    const back = months.length - 1 - k
     for (const key of plannedKeys) setAssigned(key, m, PLAN[key]!)
-    if (k === 0) {
-      setAssigned('urgence', m, PLAN.urgence! + 100_000)
-      setAssigned('creditAuto', m, 18_900)
-    }
-    if (k <= 1) setAssigned('presse', m, 999)
+    if (k === 0) setAssigned('urgence', m, PLAN.urgence! + 100_000)
+    if (back >= 6) setAssigned('creditAuto', m, 18_900)
+    if (back >= 5) setAssigned('presse', m, 999)
     const rows = rowsOf(m)
     for (const key of [...plannedKeys, 'presse', 'creditAuto'] as CatKey[]) {
       const r = rows.get(cat(key))
@@ -639,6 +708,10 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
         setAssigned(key, m, Math.max(0, r.assigned - Math.floor((r.available - buffer) / 500) * 500))
       }
     }
+    // Excedent du mois (salaire au-dessus du plan, reliquats rendus) : au-dela
+    // de l'avance SURPLUS_CAP, il est place en Investissement.
+    const surplus = Math.floor((rtaOf(m) - SURPLUS_CAP) / 500) * 500
+    if (surplus > 0) setAssigned('investissement', m, assignedOf('investissement', m) + surplus)
   })
 
   // Mois courant : charges fixes et epargne financees (au moins la depense du
@@ -674,11 +747,18 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
     setAssigned('vacances', M1, 15_000)
   }
 
-  // Calibrage : le solde d'ouverture du Livret A fixe le Pret a assigner.
-  const rta = computeBudget(engineInput(db, M0, crossBudget)).readyToAssign
+  // Calibrage : le solde d'ouverture du Livret A fixe le Pret a assigner. S'il
+  // devait passer sous MIN_LIVRET_OPENING (trop d'argent non assigne), le
+  // surplus est d'abord place en Investissement ce mois-ci.
+  let rta = rtaOf(M0)
+  const shortfall = MIN_LIVRET_OPENING - (TARGET_RTA - rta)
+  if (shortfall > 0) {
+    setAssigned('investissement', M0, assignedOf('investissement', M0) + ceilTo(shortfall, 500))
+    rta = rtaOf(M0)
+  }
   livretOpening.amount = TARGET_RTA - rta
 
-  // --- Objectifs, regles, memoire de tiers -----------------------------------
+  // --- Objectifs --------------------------------------------------------------
   const year = Number(M0.slice(0, 4))
   const december = `${year}-12`
   db.targets.push(
@@ -688,30 +768,6 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
   )
   if (refillTargets) {
     db.targets.push({ id: id('target:urgence'), categoryId: cat('urgence'), type: 'refill', amount: 300_000, dueMonth: null })
-  }
-
-  const rules: [string, CatKey][] = [
-    ['carrefour', 'courses'],
-    ['edf', 'electricite'],
-    ['netflix', 'streaming'],
-    ['sncf', 'transports'],
-    ['free mobile', 'telephone'],
-  ]
-  rules.forEach(([value, key], priority) => {
-    db.rules.push({
-      id: id(`rule:${value}`),
-      matcher: { field: 'label', op: 'contains', value },
-      categoryId: cat(key),
-      priority,
-    })
-  })
-
-  // Memoire de tiers : rejoue les categorisations (meme payeeKey que le serveur).
-  const onBudget = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
-  const income = new Set(categories.filter((c) => c.isIncome).map((c) => c.id))
-  for (const t of transactions) {
-    if (!t.categoryId || t.transferGroupId || !onBudget.has(t.accountId) || income.has(t.categoryId)) continue
-    learnPayee(db, t.label, t.categoryId)
   }
 
   // --- Banque ----------------------------------------------------------------

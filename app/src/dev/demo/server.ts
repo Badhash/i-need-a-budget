@@ -10,7 +10,6 @@ import { SERVER_FEATURES } from '@/lib/features'
 import { currentMonth, today } from '@/lib/format'
 import { markLocalWrite } from '@/lib/realtimeGate'
 import { addMonths, computeBudget } from '../../../../packages/engine/src/index'
-import { payeeKey } from '../../../../packages/crypto/src/payee'
 import {
   ACCOUNT_KINDS,
   RULE_OPS,
@@ -25,15 +24,14 @@ import {
 } from './db'
 import {
   accountBalances,
+  autoCategorizer,
   computeReports,
   crossBudgetGroups,
   engineInput,
   forgetPayeeCategory,
   isCrossBudgetHalf,
   learnPayeeSafe,
-  matchLabel,
   normalizeLabel,
-  payeeDefaults,
   setPayeeDefault,
   uncategorizedCount,
 } from './logic'
@@ -42,6 +40,11 @@ import { demoConfig, demoDb, hasFeature, simulateCall } from './state'
 type Params = Record<string, unknown>
 
 const crossBudget = () => hasFeature(SERVER_FEATURES.crossBudgetTransfers)
+
+// Le serveur recent annonce toutes ses fonctionnalites d'un bloc : au moins une
+// annoncee = code recent (marchands des rapports regroupes par cle de tiers).
+// Aucune (features=none) = serveur ancien deploye, regroupement par libelle brut.
+const reportsOptions = () => ({ crossBudget: crossBudget(), merchantsByPayee: demoConfig.features.length > 0 })
 
 // ---------------------------------------------------------------------------
 // Validation (memes regles et memes messages que le serveur)
@@ -267,7 +270,7 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
       bootstrap: buildBootstrap(db),
       budget: budgetOf(db, month),
       transactions: listTx(db),
-      reports: computeReports(db, month, crossBudget()),
+      reports: computeReports(db, month, reportsOptions()),
     }
   },
 
@@ -280,7 +283,7 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
 
   listTransactions: (db) => ({ transactions: listTx(db) }),
 
-  getReports: (db, p) => computeReports(db, requireMonth(p.month), crossBudget()),
+  getReports: (db, p) => computeReports(db, requireMonth(p.month), reportsOptions()),
 
   // --- Transactions ---------------------------------------------------------
   addTransaction: (db, p) => {
@@ -736,17 +739,13 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
   },
 
   applyRulesToUncategorized: (db) => {
-    const rules = db.rules.slice().sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
-    const payees = payeeDefaults(db)
-    const onBudget = new Set(db.accounts.filter((a) => a.onBudget).map((a) => a.id))
-    const known = new Set(db.categories.filter((c) => !c.isIncome).map((c) => c.id))
+    // Regles d'abord, puis repli sur la memoire de tiers (comptes budget).
+    const categorize = autoCategorizer(db)
     let categorized = 0
     for (const tx of db.transactions) {
-      if (tx.categoryId || tx.transferGroupId || !onBudget.has(tx.accountId)) continue
-      // Regles d'abord, puis repli sur la memoire de tiers.
-      const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
-      const categoryId = rule?.categoryId ?? payees.get(payeeKey(tx.label)) ?? null
-      if (!categoryId || !known.has(categoryId)) continue
+      if (tx.categoryId || tx.transferGroupId) continue
+      const categoryId = categorize(tx)
+      if (!categoryId) continue
       tx.categoryId = categoryId
       categorized += 1
     }
@@ -951,6 +950,7 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
   importReplaceTransactions: (db, p) => {
     const raw = requireArray(p.transactions, 'transactions', 200)
     const accountIds = new Set(db.accounts.map((a) => a.id))
+    const onBudget = new Set(db.accounts.filter((a) => a.onBudget).map((a) => a.id))
     const categoryIds = new Set(db.categories.map((c) => c.id))
     // Fonctionnalite importTransfers : paires de virements YNAB (meme groupe).
     const transfers = hasFeature(SERVER_FEATURES.importTransfers)
@@ -958,19 +958,21 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
       const o = requireObject(t, 'transactions[]')
       const accountId = requireUuid(o.accountId, 'accountId')
       if (!accountIds.has(accountId)) throw new ApiError(404, 'compte inconnu')
-      const categoryId = optionalUuid(o.categoryId, 'categoryId')
-      if (categoryId && !categoryIds.has(categoryId)) throw new ApiError(404, 'categorie inconnue')
+      const rawCategoryId = optionalUuid(o.categoryId, 'categoryId')
+      if (rawCategoryId && !categoryIds.has(rawCategoryId)) throw new ApiError(404, 'categorie inconnue')
       const bookingDate = requireDate(o.date)
+      const transferGroupId = transfers ? optionalUuid(o.transferGroupId, 'transferGroupId') : null
       return {
         id: randomUuid(),
         accountId,
-        categoryId,
+        // La moitie cote compte de suivi d'un virement ne porte jamais de categorie.
+        categoryId: transferGroupId && !onBudget.has(accountId) ? null : rawCategoryId,
         bookingDate,
         bookingMonth: bookingDate.slice(0, 7),
         amount: requireAmount(o.amount),
         label: requireText(o.label, 'label', 200),
         counterparty: o.counterparty == null ? null : requireText(o.counterparty, 'counterparty', 200),
-        transferGroupId: transfers ? optionalUuid(o.transferGroupId, 'transferGroupId') : null,
+        transferGroupId,
         notes: o.notes == null ? null : requireText(o.notes, 'notes', 500),
         txHash: null,
       }
