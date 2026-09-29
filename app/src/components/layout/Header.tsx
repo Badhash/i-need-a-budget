@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
 import {
   Check,
@@ -292,6 +293,32 @@ function HeaderBudgetSummary() {
   )
 }
 
+/**
+ * Vrai des que la page defile : le header se fond dans la page tout en haut
+ * (pas de filet) et se detache (filet + ombre douce) quand le contenu passe
+ * dessous, comme les barres iOS. Ecoute passive, un calcul par frame au plus.
+ */
+function useScrolled(threshold = 4): boolean {
+  const [scrolled, setScrolled] = useState(false)
+  useEffect(() => {
+    let frame = 0
+    const update = () => {
+      frame = 0
+      setScrolled(window.scrollY > threshold)
+    }
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update)
+    }
+    update()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [threshold])
+  return scrolled
+}
+
 // Le selecteur de mois ne s'affiche que la ou il agit : Budget et Rapports.
 // Sur Transactions (liste complete paginee), Comptes et Reglages il ne pilote
 // rien, on le masque.
@@ -305,9 +332,16 @@ export function Header() {
   const showMonth = MONTH_PAGES.has(pathname)
   const isBudget = pathname === '/budget'
   const showMobileTitle = !showMonth && !OWN_MOBILE_TITLE.has(pathname)
+  const scrolled = useScrolled()
 
   return (
-    <header className="glass-bar pt-safe px-safe sticky top-0 z-40 border-b border-edge">
+    <header
+      data-scrolled={scrolled || undefined}
+      className={cn(
+        'glass-bar pt-safe px-safe sticky top-0 z-40 border-b transition-[border-color,box-shadow] duration-200',
+        scrolled ? 'border-edge shadow-bar' : 'border-transparent',
+      )}
+    >
       <div className="mx-auto flex h-14 max-w-content items-center gap-2 px-3 sm:px-4 lg:h-[4.5rem] lg:gap-5 lg:px-8">
         {/* Mobile : marque (+ titre de la page quand il n'y a pas de mois). */}
         <div className={cn('flex min-w-0 items-center gap-2.5 lg:hidden', !showMonth && 'flex-1')}>

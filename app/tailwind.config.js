@@ -55,6 +55,7 @@ export default {
         elevated: 'var(--shadow-elevated)',
         glow: 'var(--shadow-glow)',
         button: 'var(--shadow-button)',
+        bar: 'var(--shadow-bar)',
         highlight: 'var(--highlight)',
       },
       borderRadius: {

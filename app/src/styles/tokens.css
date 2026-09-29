@@ -89,6 +89,7 @@
   --shadow-fab: 0 12px 28px -8px rgb(var(--accent) / 0.6), 0 2px 6px rgb(60 36 28 / 0.1);
   --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(20 16 40 / 0.08),
     0 6px 16px -8px rgb(var(--accent) / 0.6);
+  --shadow-bar: 0 10px 28px -20px rgb(60 36 28 / 0.35);
 
   --cat-blue-bg: #e8f0fa;
   --cat-blue-fg: #3b6fb5;
@@ -141,6 +142,7 @@
   --shadow-glow: 0 10px 32px -8px rgb(var(--accent) / 0.42);
   --shadow-fab: 0 12px 30px -8px rgb(var(--accent) / 0.45), 0 4px 12px rgb(0 0 0 / 0.45);
   --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.16), 0 8px 20px -12px rgb(var(--accent) / 0.55);
+  --shadow-bar: none;
 
   --cat-blue-bg: #22303f;
   --cat-blue-fg: #8fb8e8;
@@ -203,6 +205,7 @@
   --shadow-fab: 0 12px 28px -8px rgb(var(--accent) / 0.55), 0 2px 6px rgb(15 50 40 / 0.1);
   --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(20 16 40 / 0.08),
     0 6px 16px -8px rgb(var(--accent) / 0.6);
+  --shadow-bar: 0 10px 28px -20px rgb(15 50 40 / 0.35);
 
   --cat-blue-bg: #e3eef9;
   --cat-blue-fg: #33689c;
@@ -254,6 +257,7 @@
   --shadow-glow: 0 10px 32px -8px rgb(var(--accent) / 0.38);
   --shadow-fab: 0 12px 30px -8px rgb(var(--accent) / 0.4), 0 4px 12px rgb(0 0 0 / 0.45);
   --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.16), 0 8px 20px -12px rgb(var(--accent) / 0.55);
+  --shadow-bar: none;
 
   --cat-blue-bg: #1f2f3e;
   --cat-blue-fg: #8cb6e6;
@@ -316,6 +320,7 @@
   --shadow-fab: 0 12px 28px -8px rgb(var(--accent) / 0.6), 0 2px 6px rgb(36 28 84 / 0.1);
   --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(20 16 40 / 0.08),
     0 6px 16px -8px rgb(var(--accent) / 0.6);
+  --shadow-bar: 0 10px 28px -20px rgb(36 28 84 / 0.35);
 
   --cat-blue-bg: #e4edfb;
   --cat-blue-fg: #3d6bc0;
@@ -367,6 +372,7 @@
   --shadow-glow: 0 10px 32px -8px rgb(var(--accent) / 0.45);
   --shadow-fab: 0 12px 30px -8px rgb(var(--accent) / 0.5), 0 4px 12px rgb(0 0 0 / 0.45);
   --shadow-button: inset 0 1px 0 0 rgb(255 255 255 / 0.16), 0 8px 20px -12px rgb(var(--accent) / 0.55);
+  --shadow-bar: none;
 
   --cat-blue-bg: #232c44;
   --cat-blue-fg: #93b4f2;
