@@ -57,9 +57,7 @@ export function SignedAmountInput({
         className={cn(
           'flex shrink-0 items-center justify-center rounded-xl border font-semibold transition-[background-color,border-color,color,transform] duration-150 ease-spring active:scale-95',
           lg ? 'h-14 w-14 text-[17px]' : 'h-11 w-11 text-[15px] lg:h-10 lg:w-10',
-          negative
-            ? 'border-danger/40 bg-danger/10 text-danger'
-            : 'border-line bg-surface text-soft hover:text-ink',
+          negative ? 'border-danger/40 bg-danger/10 text-danger' : 'border-line bg-surface text-soft hover:text-ink',
         )}
       >
         <SignIcon className={lg ? 'h-5 w-5' : 'h-4 w-4'} />

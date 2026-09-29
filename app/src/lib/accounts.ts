@@ -164,10 +164,7 @@ function mapTransactions(queryClient: QueryClient, fn: (t: Transaction) => Trans
   })
 }
 
-function mapAccounts(
-  queryClient: QueryClient,
-  fn: (accounts: AccountWithBalance[]) => AccountWithBalance[],
-): void {
+function mapAccounts(queryClient: QueryClient, fn: (accounts: AccountWithBalance[]) => AccountWithBalance[]): void {
   queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) => (old ? { ...old, accounts: fn(old.accounts) } : old))
 }
 
@@ -326,8 +323,7 @@ export function inclusionEffect(
 ): InclusionEffect {
   const { before, after } = onBudgetSets(view, accountId, nextOnBudget)
   const rtaDelta = inflowCurve(view, after)(month) - inflowCurve(view, before)(month)
-  const uncategorizedDelta =
-    uncategorizedCountOf(view, after, current) - uncategorizedCountOf(view, before, current)
+  const uncategorizedDelta = uncategorizedCountOf(view, after, current) - uncategorizedCountOf(view, before, current)
   const withAccount = nextOnBudget ? after : before
   const { offGroups } = scopeOf(view, withAccount)
   const income = new Set(view.categories.filter((c) => c.isIncome).map((c) => c.id))
@@ -580,7 +576,8 @@ async function findOpeningTransactionId(accountId: string, vars: CreateAccountVa
     month: monthOf(vars.openingDate),
   })
   const match = transactions.find(
-    (t) => t.accountId === accountId && t.amount === vars.openingBalance && (t.label ?? OPENING_LABEL) === OPENING_LABEL,
+    (t) =>
+      t.accountId === accountId && t.amount === vars.openingBalance && (t.label ?? OPENING_LABEL) === OPENING_LABEL,
   )
   return match?.id ?? null
 }
@@ -627,7 +624,9 @@ function insertAccount(
     balance: vars.openingBalance,
     closed: false,
   }
-  mapAccounts(queryClient, (accounts) => (accounts.some((a) => a.id === account.id) ? accounts : [...accounts, account]))
+  mapAccounts(queryClient, (accounts) =>
+    accounts.some((a) => a.id === account.id) ? accounts : [...accounts, account],
+  )
   if (vars.openingBalance === 0) return undefined
   const categoryId = vars.onBudget ? (openingIncomeCategory(boot?.categories ?? [])?.id ?? null) : null
   insertTransaction(queryClient, {
@@ -735,7 +734,9 @@ export function useUpdateAccount() {
     onMutate: async (vars) => {
       const interrupted = await pauseAll(queryClient, [BOOTSTRAP_KEY])
       const account = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)?.accounts.find((a) => a.id === vars.accountId)
-      const previous = account ? { name: account.name, institution: account.institution, kind: account.kind } : undefined
+      const previous = account
+        ? { name: account.name, institution: account.institution, kind: account.kind }
+        : undefined
       patchAccountFields(queryClient, [vars.accountId], {
         name: vars.name,
         institution: vars.institution,
@@ -827,9 +828,10 @@ export function useDeleteAccount() {
         if (!old) return old
         const present = new Set(old.map((t) => t.id))
         const restored = (ctx.own ?? []).filter((t) => !present.has(t.id)).map((t) => ({ ...t, accountId: account.id }))
-        return [...old.map((t) => (relink.has(t.id) ? { ...t, transferGroupId: relink.get(t.id)! } : t)), ...restored].sort(
-          byDateDesc,
-        )
+        return [
+          ...old.map((t) => (relink.has(t.id) ? { ...t, transferGroupId: relink.get(t.id)! } : t)),
+          ...restored,
+        ].sort(byDateDesc)
       })
       patchUncategorizedCount(queryClient, -(ctx.countDelta ?? 0))
     },

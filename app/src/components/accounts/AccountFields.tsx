@@ -58,7 +58,8 @@ export function parseSignedEuros(raw: string): number | null {
 
 export function validateDraft(draft: AccountDraft, withOpening: boolean): DraftCheck {
   if (!draft.name.trim()) return { error: 'Donnez un nom au compte.', field: 'name', cents: 0 }
-  if (!draft.institution.trim()) return { error: "Indiquez la banque ou l'établissement.", field: 'institution', cents: 0 }
+  if (!draft.institution.trim())
+    return { error: "Indiquez la banque ou l'établissement.", field: 'institution', cents: 0 }
   if (!withOpening) return { error: null, cents: 0 }
   const cents = parseSignedEuros(draft.balance)
   if (cents === null) {
@@ -102,7 +103,29 @@ export function AccountFields({
     }
   }
   const invalid = (field: DraftField) =>
-    invalidField === field ? 'border-danger/60 hover:border-danger/60 focus:border-danger/70 focus:ring-danger/15' : undefined
+    invalidField === field
+      ? 'border-danger/60 hover:border-danger/60 focus:border-danger/70 focus:ring-danger/15'
+      : undefined
+
+  const budgetSwitch = (
+    <div className="rounded-2xl bg-surface2/70 ring-1 ring-inset ring-edge">
+      <SwitchRow
+        checked={draft.onBudget}
+        onCheckedChange={(onBudget) => set({ onBudget, onBudgetTouched: true })}
+        icon={
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent-ink dark:text-accent">
+            <Landmark className="h-[18px] w-[18px]" />
+          </span>
+        }
+        title="Inclus dans le budget"
+        description={
+          draft.onBudget
+            ? "Son solde d'ouverture rejoint le Prêt à assigner."
+            : 'Compte de suivi : compté dans la valeur nette, hors budget.'
+        }
+      />
+    </div>
+  )
 
   return (
     <div className={cn('space-y-5', className)}>
@@ -111,8 +134,12 @@ export function AccountFields({
         <KindPicker value={draft.kind} onChange={setKind} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div>
+      {/* Decision structurante (budget ou suivi) juste apres le type, qui la
+          suggere : toujours visible sans defiler, meme sur petit ecran. */}
+      {withOpening && budgetSwitch}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="min-w-0">
           <label htmlFor={`${uid}-name`} className="label-caps mb-1.5 block">
             Nom du compte
           </label>
@@ -128,7 +155,7 @@ export function AccountFields({
             className={invalid('name')}
           />
         </div>
-        <div>
+        <div className="min-w-0">
           <label htmlFor={`${uid}-institution`} className="label-caps mb-1.5 block">
             Banque
           </label>
@@ -147,9 +174,9 @@ export function AccountFields({
       </div>
 
       {withOpening && (
-        <>
-          <div className="grid gap-4 sm:grid-cols-[1.4fr_1fr]">
-            <div>
+        <div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+            <div className="min-w-0">
               <label htmlFor={`${uid}-balance`} className="label-caps mb-1.5 block">
                 Solde actuel
               </label>
@@ -163,9 +190,9 @@ export function AccountFields({
                 aria-describedby={`${uid}-balance-hint`}
               />
             </div>
-            <div>
+            <div className="min-w-0">
               <label htmlFor={`${uid}-date`} className="label-caps mb-1.5 block">
-                Depuis le
+                À la date du
               </label>
               <Input
                 id={`${uid}-date`}
@@ -175,34 +202,16 @@ export function AccountFields({
                 max={today()}
                 onChange={(e) => set({ openingDate: e.target.value })}
                 aria-invalid={invalidField === 'date' || undefined}
-                className={invalid('date')}
+                className={cn('px-3', invalid('date'))}
               />
             </div>
           </div>
-          <p id={`${uid}-balance-hint`} className="-mt-2 text-[12.5px] leading-snug text-soft">
+          <p id={`${uid}-balance-hint`} className="mt-2 text-[12.5px] leading-snug text-soft">
             {draft.kind === 'card_deferred'
               ? "Pour une carte à débit différé : l'encours non encore prélevé, souvent négatif."
               : 'Le solde du compte à cette date : le point de départ de son historique.'}
           </p>
-
-          <div className="rounded-2xl bg-surface2/70 ring-1 ring-inset ring-edge">
-            <SwitchRow
-              checked={draft.onBudget}
-              onCheckedChange={(onBudget) => set({ onBudget, onBudgetTouched: true })}
-              icon={
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent-ink dark:text-accent">
-                  <Landmark className="h-[18px] w-[18px]" />
-                </span>
-              }
-              title="Inclus dans le budget"
-              description={
-                draft.onBudget
-                  ? "Son solde d'ouverture rejoint le Prêt à assigner."
-                  : 'Compte de suivi : compté dans la valeur nette, hors budget.'
-              }
-            />
-          </div>
-        </>
+        </div>
       )}
     </div>
   )

@@ -56,7 +56,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-import { AccountFields, emptyDraft, parseSignedEuros, validateDraft, type AccountDraft, type DraftField } from './AccountFields'
+import {
+  AccountFields,
+  emptyDraft,
+  parseSignedEuros,
+  validateDraft,
+  type AccountDraft,
+  type DraftField,
+} from './AccountFields'
 import { balanceClass, LinkBadge, type AccountActions, type LinkStatus, type SheetView } from './AccountCard'
 import { KIND_META, KindPill, fmtLastActivity, quoted } from './accountKinds'
 import { Sparkline } from './Sparkline'
@@ -161,11 +168,16 @@ function SheetBody({ account, initialView, stats, link, flags, actions, onClose 
       {view === 'adjust' && <AdjustView account={account} onBack={back} onCancel={cancel} onDone={onClose} />}
       {view === 'edit' && <EditView account={account} onBack={back} onCancel={cancel} onDone={onClose} />}
       {view === 'budget' && flags && <BudgetView account={account} onBack={back} onCancel={cancel} onDone={onClose} />}
-      {view === 'close' && flags && (
-        <CloseView account={account} onBack={back} onCancel={cancel} onDone={onClose} />
-      )}
+      {view === 'close' && flags && <CloseView account={account} onBack={back} onCancel={cancel} onDone={onClose} />}
       {view === 'delete' && (
-        <DeleteView account={account} flags={flags} onRequestClose={requestClose} onBack={back} onCancel={cancel} onDone={onClose} />
+        <DeleteView
+          account={account}
+          flags={flags}
+          onRequestClose={requestClose}
+          onBack={back}
+          onCancel={cancel}
+          onDone={onClose}
+        />
       )}
     </div>
   )
@@ -175,7 +187,15 @@ function SheetBody({ account, initialView, stats, link, flags, actions, onClose 
 // Briques
 // ---------------------------------------------------------------------------
 
-function SheetHeader({ title, description, onBack }: { title: ReactNode; description: ReactNode; onBack?: () => void }) {
+function SheetHeader({
+  title,
+  description,
+  onBack,
+}: {
+  title: ReactNode
+  description: ReactNode
+  onBack?: () => void
+}) {
   return (
     <DialogHeader className="pr-14">
       <div className="flex items-start gap-1.5">
@@ -229,8 +249,12 @@ function ActionRow({
         <Icon className="h-[18px] w-[18px]" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className={cn('block text-[15px] font-medium leading-snug', danger ? 'text-danger' : 'text-ink')}>{title}</span>
-        {description && <span className="mt-0.5 block truncate text-[12.5px] leading-snug text-soft">{description}</span>}
+        <span className={cn('block text-[15px] font-medium leading-snug', danger ? 'text-danger' : 'text-ink')}>
+          {title}
+        </span>
+        {description && (
+          <span className="mt-0.5 block truncate text-[12.5px] leading-snug text-soft">{description}</span>
+        )}
       </span>
       <ChevronRight className="h-4 w-4 shrink-0 text-soft/70" />
     </button>
@@ -362,7 +386,12 @@ function MenuView({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="label-caps">Solde</p>
-              <Amount cents={account.balance} size="xl" animate className={cn('mt-0.5 block', balanceClass(account.balance))} />
+              <Amount
+                cents={account.balance}
+                size="xl"
+                animate
+                className={cn('mt-0.5 block', balanceClass(account.balance))}
+              />
               <p className="mt-1 text-[12.5px] text-soft">
                 {pending
                   ? 'Création en cours…'
@@ -412,7 +441,12 @@ function MenuView({
                 description="L'aligner sur le solde réel de la banque"
                 onClick={() => onView('adjust')}
               />
-              <ActionRow icon={Pencil} title="Modifier" description="Nom, banque, type" onClick={() => onView('edit')} />
+              <ActionRow
+                icon={Pencil}
+                title="Modifier"
+                description="Nom, banque, type"
+                onClick={() => onView('edit')}
+              />
             </>
           )}
           {flags && !closed && (
@@ -439,7 +473,9 @@ function MenuView({
             <ActionRow
               icon={Archive}
               title="Clôturer le compte"
-              description={account.balance === 0 ? 'Le ranger dans les comptes clôturés' : "Son solde doit d'abord revenir à 0"}
+              description={
+                account.balance === 0 ? 'Le ranger dans les comptes clôturés' : "Son solde doit d'abord revenir à 0"
+              }
               onClick={onRequestClose}
             />
           )}
@@ -546,7 +582,7 @@ function AdjustView({
           : account.onBudget
             ? "L'écart sera à catégoriser."
             : "Compte de suivi : l'écart reste hors budget."}{' '}
-        <span className="text-soft">Une transaction « {ADJUSTMENT_LABEL} » est créée aujourd'hui.</span>
+        <span className="text-soft">Une transaction {quoted(ADJUSTMENT_LABEL)} est créée aujourd'hui.</span>
       </EffectTile>
     )
   } else if (delta === 0) {
@@ -560,11 +596,19 @@ function AdjustView({
 
   return (
     <>
-      <SheetHeader title="Ajuster le solde" description={`${quoted(account.name)} : saisissez le solde réel.`} onBack={onBack} />
+      <SheetHeader
+        title="Ajuster le solde"
+        description={`${quoted(account.name)} : saisissez le solde réel.`}
+        onBack={onBack}
+      />
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-2 pt-2">
         <div className="flex items-baseline justify-between gap-3 px-1">
           <span className="label-caps">Solde actuel</span>
-          <Amount cents={account.balance} animate className={cn('text-[15px] font-semibold', balanceClass(account.balance))} />
+          <Amount
+            cents={account.balance}
+            animate
+            className={cn('text-[15px] font-semibold', balanceClass(account.balance))}
+          />
         </div>
         <SignedAmountInput
           size="lg"
@@ -640,7 +684,11 @@ function EditView({
 
   return (
     <>
-      <SheetHeader title="Modifier le compte" description="Nom, banque et type. Le solde se corrige avec « Ajuster le solde »." onBack={onBack} />
+      <SheetHeader
+        title="Modifier le compte"
+        description={`Nom, banque et type. Le solde se corrige avec ${quoted('Ajuster le solde')}.`}
+        onBack={onBack}
+      />
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-2 pt-2">
         <AccountFields
           draft={draft}
@@ -695,7 +743,9 @@ function BudgetView({
     haptic(10)
     toast({
       message: toTracking ? `${quoted(account.name)} passé en suivi` : `${quoted(account.name)} inclus dans le budget`,
-      description: toTracking ? 'Ses transactions sont sorties du budget.' : 'Ses transactions comptent désormais dans le budget.',
+      description: toTracking
+        ? 'Ses transactions sont sorties du budget.'
+        : 'Ses transactions comptent désormais dans le budget.',
       tone: 'success',
     })
     onDone()
@@ -732,11 +782,13 @@ function BudgetView({
               (toTracking
                 ? `Ses opérations catégorisées (${fmtEURSigned(envelopes)}) quitteront leurs enveloppes.`
                 : `Ses opérations déjà catégorisées (${fmtEURSigned(envelopes)}) compteront dans leurs enveloppes.`),
-            uncat > 0 && `${uncat} transaction${uncat > 1 ? 's' : ''} sans catégorie ${uncat > 1 ? 'seront' : 'sera'} à catégoriser.`,
-            uncat < 0 && `${-uncat} transaction${uncat < -1 ? 's' : ''} ne ${uncat < -1 ? 'seront' : 'sera'} plus à catégoriser.`,
+            uncat > 0 &&
+              `${uncat} transaction${uncat > 1 ? 's' : ''} sans catégorie ${uncat > 1 ? 'seront' : 'sera'} à catégoriser.`,
+            uncat < 0 &&
+              `${-uncat} transaction${uncat < -1 ? 's' : ''} ne ${uncat < -1 ? 'seront' : 'sera'} plus à catégoriser.`,
             toTracking
               ? 'Son solde reste compté dans la valeur nette.'
-              : "Pour que son argent rejoigne le Prêt à assigner, catégorisez ses entrées en revenus.",
+              : 'Pour que son argent rejoigne le Prêt à assigner, catégorisez ses entrées en revenus.',
             'Réversible à tout moment.',
           ]}
         />
@@ -791,10 +843,15 @@ function CloseView({
   if (account.balance === 0 && !adjusting) {
     return (
       <>
-        <SheetHeader title="Clôturer le compte" description={`${quoted(account.name)} a un solde nul.`} onBack={onBack} />
+        <SheetHeader
+          title="Clôturer le compte"
+          description={`${quoted(account.name)} a un solde nul.`}
+          onBack={onBack}
+        />
         <div className="min-h-0 flex-1 px-5 pb-2 pt-2">
           <p className="text-[14px] leading-relaxed text-soft">
-            Il sera rangé dans les comptes clôturés, hors des listes et des sélecteurs. Vous pourrez le rouvrir à tout moment.
+            Il sera rangé dans les comptes clôturés, hors des listes et des sélecteurs. Vous pourrez le rouvrir à tout
+            moment.
           </p>
         </div>
         <DialogFooter>
@@ -839,7 +896,7 @@ function CloseView({
           items={[
             income &&
               `L'ajustement ${positive ? 'retire' : 'ajoute'} ${fmtEUR(Math.abs(account.balance))} ${positive ? 'du' : 'au'} Prêt à assigner.`,
-            'Pour virer le reste : saisissez la sortie sur ce compte, puis « Convertir en virement vers… ».',
+            `Pour virer le reste : saisissez la sortie sur ce compte, puis ${quoted('Convertir en virement vers…')}.`,
           ]}
         />
       </div>
@@ -885,21 +942,28 @@ function DeleteView({
   const confirm = () => {
     remove.mutate({ accountId: account.id })
     haptic([10, 40, 10])
-    toast({ message: `${quoted(account.name)} supprimé`, description: `${count} transaction${count > 1 ? 's' : ''} supprimée${count > 1 ? 's' : ''}.` })
+    toast({
+      message: `${quoted(account.name)} supprimé`,
+      description: `${count} transaction${count > 1 ? 's' : ''} supprimée${count > 1 ? 's' : ''}.`,
+    })
     onDone()
   }
 
   return (
     <>
-      <SheetHeader title={`Supprimer ${quoted(account.name)}\u00a0?`} description="Cette action est définitive." onBack={onBack} />
+      <SheetHeader
+        title={`Supprimer ${quoted(account.name)}\u00a0?`}
+        description="Cette action est définitive."
+        onBack={onBack}
+      />
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-2 pt-2">
         <div className="flex gap-3.5 rounded-2xl border border-danger/20 bg-danger/[0.06] p-4">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-danger/15 text-danger">
             <Trash2 className="h-5 w-5" />
           </span>
           <p className="text-[14px] leading-relaxed text-ink/90">
-            Le compte et {count === 0 ? 'son historique' : `ses ${count} transaction${count > 1 ? 's' : ''}`} seront supprimés
-            définitivement. Les virements liés sur d'autres comptes sont conservés, déliés (à recatégoriser).
+            Le compte et {count === 0 ? 'son historique' : `ses ${count} transaction${count > 1 ? 's' : ''}`} seront
+            supprimés définitivement. Les virements liés sur d'autres comptes sont conservés, déliés (à recatégoriser).
           </p>
         </div>
         {flags && !account.closed && (

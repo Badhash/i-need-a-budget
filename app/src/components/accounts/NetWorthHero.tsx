@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router'
 import { ChevronRight, Minus, TrendingDown, TrendingUp } from 'lucide-react'
 import { useBudgetMonth } from '@/lib/data'
-import { fmtEURSigned, fmtPercent } from '@/lib/format'
+import { currentMonth, fmtEURSigned, fmtMonthShort, fmtPercent } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { Amount } from '@/components/shared/Amount'
 import { useMountedFlag } from '@/components/shared/ProgressBar'
@@ -55,34 +55,25 @@ function RtaChip() {
       )}
     >
       Prêt à assigner
-      <Amount
-        cents={budget.rta}
-        animate
-        className={cn('font-semibold', negative ? 'text-danger' : 'text-success')}
-      />
+      {month !== currentMonth() && <span className="text-soft/80">({fmtMonthShort(month)})</span>}
+      <Amount cents={budget.rta} animate className={cn('font-semibold', negative ? 'text-danger' : 'text-success')} />
       <ChevronRight className="h-3.5 w-3.5 transition-transform duration-200 ease-spring group-hover:translate-x-0.5" />
     </Link>
   )
 }
 
-function Legend({
-  dotClass,
-  label,
-  amount,
-  sub,
-}: {
-  dotClass: string
-  label: string
-  amount: number
-  sub: string
-}) {
+function Legend({ dotClass, label, amount, sub }: { dotClass: string; label: string; amount: number; sub: string }) {
   return (
     <div className="min-w-0">
       <p className="flex items-center gap-2 text-[12px] font-medium uppercase tracking-[0.08em] text-soft">
         <span aria-hidden className={cn('h-2 w-2 shrink-0 rounded-full', dotClass)} />
         {label}
       </p>
-      <Amount cents={amount} animate className={cn('mt-1 block text-[18px] font-semibold tracking-tight', amount < 0 ? 'text-danger' : 'text-ink')} />
+      <Amount
+        cents={amount}
+        animate
+        className={cn('mt-1 block text-[18px] font-semibold tracking-tight', amount < 0 ? 'text-danger' : 'text-ink')}
+      />
       <p className="mt-0.5 truncate text-[12.5px] text-soft tnum">{sub}</p>
     </div>
   )
@@ -93,7 +84,13 @@ function Legend({
  * sa variation du mois, et le partage Budget / Suivi en barre bicolore fine
  * (accent = budget, second ton de l'aurore = suivi).
  */
-export function NetWorthHero({ budgetTotal, trackingTotal, budgetCount, trackingCount, monthChange }: NetWorthHeroProps) {
+export function NetWorthHero({
+  budgetTotal,
+  trackingTotal,
+  budgetCount,
+  trackingCount,
+  monthChange,
+}: NetWorthHeroProps) {
   const total = budgetTotal + trackingTotal
   const b = Math.max(0, budgetTotal)
   const t = Math.max(0, trackingTotal)

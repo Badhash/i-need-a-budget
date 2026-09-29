@@ -69,7 +69,18 @@ interface SectionProps {
   actions: AccountActions
 }
 
-function AccountSection({ title, description, accounts, addLabel, onAdd, desktop, stats, linkOf, flags, actions }: SectionProps) {
+function AccountSection({
+  title,
+  description,
+  accounts,
+  addLabel,
+  onAdd,
+  desktop,
+  stats,
+  linkOf,
+  flags,
+  actions,
+}: SectionProps) {
   return (
     <section className="space-y-3.5">
       <SectionHeader title={title} description={description} />
@@ -126,7 +137,9 @@ function ClosedSection({
         <span className="rounded-full bg-surface2 px-2 py-px text-[12px] font-semibold tnum ring-1 ring-inset ring-line/60">
           {accounts.length}
         </span>
-        <ChevronDown className={cn('ml-auto h-4 w-4 transition-transform duration-200 ease-spring', open && 'rotate-180')} />
+        <ChevronDown
+          className={cn('ml-auto h-4 w-4 transition-transform duration-200 ease-spring', open && 'rotate-180')}
+        />
       </button>
       {open && (
         <div className="animate-fade-up divide-y divide-line/60 overflow-hidden rounded-2xl border border-edge bg-surface shadow-card">

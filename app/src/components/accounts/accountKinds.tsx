@@ -90,7 +90,9 @@ export function KindPill({
         PILL_SIZES[size],
         className,
       )}
-      style={muted ? undefined : { backgroundColor: `var(--cat-${meta.color}-bg)`, color: `var(--cat-${meta.color}-fg)` }}
+      style={
+        muted ? undefined : { backgroundColor: `var(--cat-${meta.color}-bg)`, color: `var(--cat-${meta.color}-fg)` }
+      }
     >
       <Icon strokeWidth={2.1} />
     </span>

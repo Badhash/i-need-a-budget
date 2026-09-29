@@ -27,6 +27,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { fmtEUR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { KIND_META, KindPill, fmtLastActivity } from './accountKinds'
 import { Sparkline } from './Sparkline'
@@ -50,7 +51,10 @@ export function LinkBadge({ status, className }: { status: LinkStatus | undefine
   const warn = status === 'expired' || status === 'expiring'
   if (!warn && status !== 'pending') {
     return (
-      <span className={cn('inline-flex shrink-0 items-center text-success', className)} title="Synchronisé avec la banque">
+      <span
+        className={cn('inline-flex shrink-0 items-center text-success', className)}
+        title="Synchronisé avec la banque"
+      >
         <RefreshCw className="h-3.5 w-3.5" strokeWidth={2.4} aria-hidden />
         <span className="sr-only">Synchronisé avec la banque</span>
       </span>
@@ -110,7 +114,7 @@ export function AccountRow({ account, stats, link, actions }: CardProps) {
     <button
       type="button"
       onClick={() => actions.open(account, 'menu')}
-      aria-label={`${account.name}, ${KIND_META[account.kind].label}`}
+      aria-label={`${account.name}, solde ${fmtEUR(account.balance)}`}
       className={cn(
         'flex w-full items-center gap-3.5 rounded-2xl border border-edge bg-surface px-4 py-3.5 text-left shadow-card transition-[transform,box-shadow] duration-200 ease-spring active:scale-[0.985]',
         pending && 'opacity-80',
@@ -119,7 +123,9 @@ export function AccountRow({ account, stats, link, actions }: CardProps) {
       <KindPill kind={account.kind} size="md" />
       <div className="min-w-0 flex-1">
         <p className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-[15.5px] font-semibold leading-snug tracking-tight text-ink">{account.name}</span>
+          <span className="truncate text-[15.5px] font-semibold leading-snug tracking-tight text-ink">
+            {account.name}
+          </span>
           {link === 'active' && <LinkBadge status={link} />}
         </p>
         <p className="mt-0.5 truncate text-[13px] leading-snug text-soft">
@@ -130,22 +136,18 @@ export function AccountRow({ account, stats, link, actions }: CardProps) {
         {link && link !== 'active' && <LinkBadge status={link} className="mt-1.5" />}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1.5">
-        <Amount cents={account.balance} animate className={cn('text-[17px] font-semibold tracking-tight', balanceClass(account.balance))} />
+        <Amount
+          cents={account.balance}
+          animate
+          className={cn('text-[17px] font-semibold tracking-tight', balanceClass(account.balance))}
+        />
         {stats && <Sparkline values={stats.series} tone={trendTone(account)} className="h-6 w-[72px]" />}
       </div>
     </button>
   )
 }
 
-function IconAction({
-  label,
-  onClick,
-  children,
-}: {
-  label: string
-  onClick: () => void
-  children: React.ReactNode
-}) {
+function IconAction({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <Button variant="ghost" size="iconSm" aria-label={label} title={label} onClick={onClick}>
       {children}
@@ -276,7 +278,11 @@ export function AccountTile({ account, stats, link, flags, actions }: CardProps)
           </p>
         </div>
         {stats && (
-          <Sparkline values={stats.series} tone={trendTone(account)} className="mb-1.5 h-12 w-[42%] max-w-[180px] shrink-0" />
+          <Sparkline
+            values={stats.series}
+            tone={trendTone(account)}
+            className="mb-1.5 h-12 w-[42%] max-w-[180px] shrink-0"
+          />
         )}
       </div>
     </div>
@@ -288,7 +294,12 @@ export function AccountTile({ account, stats, link, flags, actions }: CardProps)
  * un geste (serveur recent), le reste des actions dans la feuille (mobile) ou
  * le menu (desktop). Le solde n'apparait que s'il n'est pas nul (anomalie).
  */
-export function ClosedAccountRow({ account, flags, actions, desktop }: Omit<CardProps, 'stats' | 'link'> & { desktop: boolean }) {
+export function ClosedAccountRow({
+  account,
+  flags,
+  actions,
+  desktop,
+}: Omit<CardProps, 'stats' | 'link'> & { desktop: boolean }) {
   const content = (
     <>
       <KindPill kind={account.kind} size="sm" muted />
