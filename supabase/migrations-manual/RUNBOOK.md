@@ -85,6 +85,9 @@ mais ne part qu'au prochain déploiement des Edge Functions (jeton CI à renouve
   `bootstrapFull` reconstruit les agrégats en arrière-plan à la première
   ouverture de l'app. Rien à lancer à la main (`recomputeAggregates` reste
   disponible en secours).
+- Écritures sur une moitié croisée et bascules budget/suivi : agrégats invalidés
+  puis reconstruits en arrière-plan environ 5 s après la dernière écriture
+  (une relecture de l'historique par rafale d'actions, pas une par lecture).
 - Le front s'adapte seul : `bootstrap` annonce `features` et les interfaces
   correspondantes s'allument sans redéploiement de Pages.
 - Effet attendu après déploiement : le badge « À catégoriser » peut augmenter du

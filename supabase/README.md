@@ -68,6 +68,16 @@ Deploiement de ces fonctionnalites : aucun SQL. La version des agregats passe a 
 les agregats existants sont ignores puis reconstruits automatiquement a la premiere
 ouverture de l'app (bootstrapFull), le calcul complet sert entre-temps.
 
+Agregats et ecritures croisees : une ecriture sur une moitie croisee (ou une
+bascule budget/suivi) invalide les agregats, puis les reconstruit en arriere-plan
+(EdgeRuntime.waitUntil) des l'accalmie : aucune action d'ecriture en cours et la
+derniere terminee depuis 5 s dans l'isolate. Une rafale d'actions ne coute donc
+qu'une relecture de l'historique. La bascule 'ready' est refusee si une action
+d'ecriture est en cours a ce moment (une action en lot chevauchant le snapshot
+serait comptee deux fois), avec une seconde tentative apres une nouvelle accalmie.
+Memes regles pour les autres reconstructions d'arriere-plan (bootstrapFull,
+deleteAccount, newBudget).
+
 ## Edge Function sync-bank (Enable Banking)
 
 Synchronisation bancaire PSD2 (verify_jwt = false ; verification interne du JWT

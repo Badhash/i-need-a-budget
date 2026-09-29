@@ -22,7 +22,8 @@
 // Toute ecriture metier dont l'ancien OU le nouveau payload est une moitie
 // croisee n'utilise donc PAS la maintenance incrementale : /api invalide les
 // agregats (aggMarkStale) avant l'ecriture puis a nouveau apres, et seul le
-// recompute complet (groupes de transfert vus en entier) les reconstruit.
+// recompute complet (groupes de transfert vus en entier) les reconstruit —
+// planifie par /api en arriere-plan des l'accalmie des ecritures.
 //
 // Nouveau budget (REF M, user_settings.budgetStartMonth) : les transactions
 // on-budget ANTERIEURES au mois de depart ne produisent ni activity ni uncat ;
@@ -48,6 +49,13 @@
 //     et ne bascule 'ready' QUE si rev n'a pas bouge (CAS). Un recompute
 //     perdant invalide le marqueur (il peut avoir insere des lignes parasites
 //     apres la bascule d'un recompute gagnant concurrent).
+//   * LIMITE CONNUE : la fence d'une action d'ecriture est posee APRES ses
+//     ecritures metier. Une action longue (lot) chevauchant un recompute peut
+//     donc avoir des lignes dans son snapshot et appliquer ses deltas apres sa
+//     bascule. Les reconstructions en arriere-plan de /api attendent pour cela
+//     l'accalmie et verifient avant la bascule (canCommit) qu'aucune action
+//     d'ecriture n'est en cours dans leur isolate. Les ecritures d'un autre
+//     processus (autre isolate, sync-bank) ne relevent que de la fence.
 //
 // Transport : lectures via computed columns base64 (REF D, enc_b64) ; ecritures
 // directes PostgREST en litteral hex bytea (les RPC enc_insert/enc_update ne
@@ -749,12 +757,20 @@ async function setBuilding(admin: Db, keys: CryptoKeys, userId: string): Promise
  * peut avoir insere des lignes parasites apres la bascule d'un gagnant, on
  * prefere le fallback + reconstruction future). En cas d'echec au milieu, le
  * marqueur reste 'building' : non-pret, jamais de chiffre faux.
+ *
+ * `canCommit` (optionnel) : garde de l'appelant evaluee juste avant la bascule.
+ * false = abandon traite comme un recompute perdant (marqueur invalide, retour
+ * false). /api s'en sert pour ses reconstructions en arriere-plan : une action
+ * d'ecriture encore en cours dans l'isolate a pu faire entrer une partie de ses
+ * lignes dans le snapshot alors que sa maintenance (fence en fin d'action, donc
+ * apres la bascule) les recompterait.
  */
 export async function aggRecompute(
   admin: Db,
   keys: CryptoKeys,
   userId: string,
   load: () => Promise<AggSourceData>,
+  canCommit?: () => boolean,
 ): Promise<boolean> {
   // 1. Fence AVANT le snapshot.
   const guardRev = await setBuilding(admin, keys, userId)
@@ -868,6 +884,11 @@ export async function aggRecompute(
   const readyHex = bytesToPgHex(
     await encryptJson(keys, { version: AGG_VERSION, status: 'ready' } satisfies StatePayload, STATE_CTX(userId)),
   )
+  // Garde de l'appelant, evaluee sans await avant l'envoi de la bascule.
+  if (canCommit && !canCommit()) {
+    await aggMarkStale(admin, userId).catch(() => {})
+    return false
+  }
   const { data: upd, error: updErr } = await admin
     .from('aggregate_state')
     .update({ rev: guardRev + 1, enc_payload: readyHex, built_at: new Date().toISOString() })

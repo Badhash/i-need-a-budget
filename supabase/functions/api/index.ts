@@ -473,19 +473,29 @@ async function aggMaintain(
 // maintenance le laisserait faux — puis RE-invalides apres, succes ou echec
 // (meme protocole que deleteAccount) : un recompute concurrent qui aurait
 // charge un snapshot anterieur a l'ecriture voit sa bascule finale echouer.
-// Les lectures retombent sur le calcul complet (toujours juste) et
-// bootstrapFull reconstruit en arriere-plan a la prochaine ouverture.
+// Ecriture reussie : reconstruction planifiee en arriere-plan (comme
+// deleteAccount et newBudget ; elle attend l'accalmie des ecritures, cf.
+// scheduleAggRebuild). Sans elle, categoriser un virement vers le PEA ferait
+// relire tout l'historique a chaque bootstrap/getBudgetMonth jusqu'a la
+// prochaine ouverture. Entre-temps, le calcul complet sert (toujours juste).
 async function withAggregatesStale<T>(userId: string, write: () => Promise<T>): Promise<T> {
   try {
     await aggMarkStale(admin, userId)
   } catch {
     throw new ApiError(500, 'invalidation des agregats impossible, reessayez')
   }
+  let result: T
   try {
-    return await write()
+    result = await write()
   } finally {
     await aggMarkStale(admin, userId).catch(() => {})
   }
+  try {
+    await scheduleAggRebuild(userId, await getKeys())
+  } catch {
+    // jamais bloquant : l'ecriture a reussi, bootstrapFull reconstruira sinon
+  }
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -1192,15 +1202,54 @@ function rollupsToEngineInput(
   return { month, accounts, categories: engineCategories, transactions, assignments, startMonth }
 }
 
-// Action consolidee de demarrage : UN SEUL loadBudgetData (donc une seule
-// lecture/dechiffrement de la table transactions) sert a produire d'un coup la
-// taxonomie, le budget du mois, la liste des transactions et les agregats
-// rapports du mois. Evite le double/triple chargement de la table transactions
-// au lancement (bootstrap + getBudgetMonth + listTransactions). Le front hydrate
-// les caches TanStack correspondants a partir de la reponse.
 // Reconstructions d'agregats en cours dans CET isolate (anti-rafale locale ;
 // la protection reelle inter-instances est le CAS sur aggregate_state.rev).
 const rebuildInFlight = new Set<string>()
+
+// Activite d'ecriture par utilisateur dans CET isolate, tenue par le routeur
+// (toute action hors READ_ONLY_ACTIONS) : actions en cours et fin de la
+// derniere. Sert aux reconstructions en arriere-plan (cf. scheduleAggRebuild).
+const writeActivity = new Map<string, { inFlight: number; lastEndAt: number }>()
+
+function beginWrite(userId: string): void {
+  const activity = writeActivity.get(userId)
+  if (activity) activity.inFlight += 1
+  else writeActivity.set(userId, { inFlight: 1, lastEndAt: 0 })
+}
+
+function endWrite(userId: string): void {
+  const activity = writeActivity.get(userId)
+  if (!activity) return
+  activity.inFlight = Math.max(0, activity.inFlight - 1)
+  activity.lastEndAt = Date.now()
+}
+
+const writesInFlight = (userId: string): number => writeActivity.get(userId)?.inFlight ?? 0
+
+// Reconstruction en arriere-plan : accalmie exigee avant chaque tentative
+// (aucune ecriture en cours, la derniere terminee depuis REBUILD_QUIET_MS),
+// abandon si elle n'arrive pas dans REBUILD_MAX_WAIT_MS (la prochaine
+// ouverture reconstruira), au plus REBUILD_MAX_ATTEMPTS tentatives (chacune
+// relit tout l'historique en enc_core).
+const REBUILD_QUIET_MS = 5_000
+const REBUILD_MAX_WAIT_MS = 60_000
+const REBUILD_MAX_ATTEMPTS = 2
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+// true des l'accalmie, false si l'echeance passe avant.
+async function waitForWriteQuiet(userId: string, deadline: number): Promise<boolean> {
+  for (;;) {
+    const now = Date.now()
+    const activity = writeActivity.get(userId)
+    const busy = (activity?.inFlight ?? 0) > 0
+    const quietFor = activity ? now - activity.lastEndAt : REBUILD_QUIET_MS
+    if (!busy && quietFor >= REBUILD_QUIET_MS) return true
+    if (now >= deadline) return false
+    const wait = busy ? 250 : REBUILD_QUIET_MS - quietFor
+    await sleep(Math.max(50, Math.min(wait, deadline - now)))
+  }
+}
 
 // Source de verite pour un recompute : lecture FRAICHE et SANS cache (jamais
 // le cache K, qui pourrait etre a 3s de retard sur une ecriture d'un autre
@@ -1230,23 +1279,57 @@ async function loadAggSource(userId: string): Promise<AggSourceData> {
 // Reconstruit les agregats (fence puis lecture fraiche core-only, cf.
 // loadAggSource). EdgeRuntime.waitUntil (runtime Supabase) prolonge
 // l'invocation apres l'envoi de la reponse : la reconstruction part en
-// ARRIERE-PLAN. A defaut de waitUntil, on attend inline (cout unique : la
-// premiere ouverture apres la migration). En cas d'erreur, on invalide (un
-// rebuild concurrent perdant peut laisser des residus) : l'etat reste
-// non-pret et la prochaine ouverture retentera.
+// ARRIERE-PLAN (cf. rebuildWhenQuiet). A defaut de waitUntil, on attend inline,
+// sans accalmie ni garde (l'appelant peut etre lui-meme une ecriture en cours).
+// En cas d'erreur, on invalide (un rebuild concurrent perdant peut laisser des
+// residus) : l'etat reste non-pret et la prochaine ouverture retentera.
 async function scheduleAggRebuild(userId: string, keys: CryptoKeys): Promise<void> {
   if (rebuildInFlight.has(userId)) return
   rebuildInFlight.add(userId)
-  const rebuild = aggRecompute(admin, keys, userId, () => loadAggSource(userId))
-    .then(() => {})
-    .catch(() => aggMarkStale(admin, userId).catch(() => {}))
-    .finally(() => rebuildInFlight.delete(userId))
   const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } })
     .EdgeRuntime
+  const run = runtime?.waitUntil
+    ? rebuildWhenQuiet(userId, keys)
+    : aggRecompute(admin, keys, userId, () => loadAggSource(userId)).then(() => {})
+  const rebuild = run
+    .catch(() => aggMarkStale(admin, userId).catch(() => {}))
+    .finally(() => rebuildInFlight.delete(userId))
   if (runtime?.waitUntil) runtime.waitUntil(rebuild)
   else await rebuild
 }
 
+// Reconstruction en arriere-plan. Elle attend l'accalmie des ecritures du user
+// dans cet isolate : lancee au milieu d'une rafale de categorisations, chaque
+// action la ferait echouer (fence) et on relirait l'historique pour rien. La
+// garde canCommit refuse la bascule si une action d'ecriture est alors en
+// cours (cf. aggRecompute : une action en lot chevauchant le snapshot
+// recompterait ses lignes). Une tentative empoisonnee est retentee une fois,
+// apres une nouvelle accalmie, sauf si un autre processus (sync-bank, autre
+// isolate) a deja reconstruit entre-temps.
+async function rebuildWhenQuiet(userId: string, keys: CryptoKeys): Promise<void> {
+  const deadline = Date.now() + REBUILD_MAX_WAIT_MS
+  for (let attempt = 1; attempt <= REBUILD_MAX_ATTEMPTS; attempt++) {
+    // Retentative : laisse aussi le temps a un recompute concurrent de finir.
+    if (attempt > 1) await sleep(REBUILD_QUIET_MS)
+    if (!(await waitForWriteQuiet(userId, deadline))) return
+    if (await aggIsReady(admin, keys, userId)) return
+    const ready = await aggRecompute(
+      admin,
+      keys,
+      userId,
+      () => loadAggSource(userId),
+      () => writesInFlight(userId) === 0,
+    )
+    if (ready) return
+  }
+}
+
+// Action consolidee de demarrage : UN SEUL loadBudgetData (donc une seule
+// lecture/dechiffrement de la table transactions) sert a produire d'un coup la
+// taxonomie, le budget du mois, la liste des transactions et les agregats
+// rapports du mois. Evite le double/triple chargement de la table transactions
+// au lancement (bootstrap + getBudgetMonth + listTransactions). Le front hydrate
+// les caches TanStack correspondants a partir de la reponse.
 async function actionBootstrapFull(userId: string, params: Params) {
   const month = requireMonth(params.month)
   // Transactions COMPLETES : la reponse porte la liste des transactions (libelle)
@@ -3471,13 +3554,20 @@ Deno.serve(async (req) => {
     action = body.action
 
     // Ecriture : purge le cache du user AVANT execution pour ne jamais servir
-    // du perime (cle stricte par userId, aucun effet inter-tenant).
-    if (!READ_ONLY_ACTIONS.has(action)) {
+    // du perime (cle stricte par userId, aucun effet inter-tenant), et tient
+    // l'activite d'ecriture lue par les reconstructions d'agregats en
+    // arriere-plan (cf. scheduleAggRebuild), succes ou echec.
+    const isWrite = !READ_ONLY_ACTIONS.has(action)
+    if (isWrite) {
       invalidateBudgetCache(userId)
+      beginWrite(userId)
     }
-
-    const result = await ACTIONS[action](userId, (body.params as Params) ?? {})
-    return new Response(JSON.stringify(result), { status: 200, headers })
+    try {
+      const result = await ACTIONS[action](userId, (body.params as Params) ?? {})
+      return new Response(JSON.stringify(result), { status: 200, headers })
+    } finally {
+      if (isWrite) endWrite(userId)
+    }
   } catch (err) {
     if (err instanceof ApiError) {
       console.error(`api action=${action} status=${err.status} message=${err.message}`)
