@@ -2,7 +2,9 @@ import { Outlet, useRouterState } from '@tanstack/react-router'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
 import { BottomNav, Fab } from '@/components/layout/BottomNav'
+import { NetworkStatusPill } from '@/components/layout/NetworkStatusPill'
 import { UpdateBanner } from '@/components/shared/UpdateBanner'
+import { PullToRefresh } from '@/components/shared/PullToRefresh'
 import { Toaster } from '@/components/shared/Toaster'
 import { AddTransactionDialog } from '@/components/transactions/AddTransactionDialog'
 import { EditTransactionDialog } from '@/components/transactions/EditTransactionDialog'
@@ -57,6 +59,7 @@ export function AppShell() {
         >
           Se déconnecter
         </button>
+        <NetworkStatusPill />
         <Toaster />
       </div>
     )
@@ -80,6 +83,8 @@ export function AppShell() {
       </div>
       <BottomNav />
       <Fab />
+      <NetworkStatusPill />
+      <PullToRefresh />
       <AddTransactionDialog />
       <EditTransactionDialog />
       <Toaster />

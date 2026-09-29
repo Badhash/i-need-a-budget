@@ -7,7 +7,6 @@ import {
   LogOut,
   Monitor,
   Moon,
-  Palette,
   Settings,
   Sun,
 } from 'lucide-react'
@@ -97,31 +96,6 @@ function ThemeSwatch({ color }: { color: string }) {
   )
 }
 
-function ThemeMenu() {
-  const theme = useUiStore((s) => s.theme)
-  const setTheme = useUiStore((s) => s.setTheme)
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button type="button" className={CHROME_BUTTON} aria-label="Choisir le thème">
-          <Palette className="h-[18px] w-[18px]" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>Thème</DropdownMenuLabel>
-        {THEMES.map((t) => (
-          <DropdownMenuItem key={t.id} onSelect={() => setTheme(t.id)}>
-            <ThemeSwatch color={t.preview.accent} />
-            <span className="flex-1">{t.label}</span>
-            {theme === t.id && <Check className="h-4 w-4 text-accent" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
 function ModeToggle() {
   const mode = useUiStore((s) => s.mode)
   const setMode = useUiStore((s) => s.setMode)
@@ -156,20 +130,44 @@ function useAccountEmail(): { email: string; initial: string } {
   return { email, initial: email ? email[0]!.toUpperCase() : '?' }
 }
 
+/**
+ * Menu compte DESKTOP : e-mail, choix du theme et deconnexion. Le theme y a
+ * rejoint le compte (comme sur mobile) pour laisser sa place a l'indicateur
+ * de fraicheur ; le mode clair/sombre garde son bouton direct.
+ */
 function UserMenu() {
   const { email, initial } = useAccountEmail()
+  const theme = useUiStore((s) => s.theme)
+  const setTheme = useUiStore((s) => s.setTheme)
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" className={CHROME_BUTTON} aria-label="Compte">
+        <button type="button" className={CHROME_BUTTON} aria-label="Compte et thème">
           <Avatar initial={initial} />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className="w-60">
         <DropdownMenuLabel className="max-w-[240px] truncate normal-case tracking-normal text-[12.5px] font-normal text-soft">
           {email || 'Compte'}
         </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Thème</DropdownMenuLabel>
+        {THEMES.map((t) => (
+          <DropdownMenuItem
+            key={t.id}
+            onSelect={(e) => {
+              // Le menu reste ouvert : on voit le theme s'appliquer.
+              e.preventDefault()
+              setTheme(t.id)
+            }}
+          >
+            <ThemeSwatch color={t.preview.accent} />
+            <span className="flex-1">{t.label}</span>
+            {theme === t.id && <Check className="h-4 w-4 text-accent" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => void supabase.auth.signOut()}>
           <LogOut className="h-4 w-4" />
           <span className="flex-1">Se déconnecter</span>
@@ -244,6 +242,13 @@ function MobileAccountMenu() {
           ))}
         </div>
         <DropdownMenuSeparator />
+        {/* Sous 360px, l'engrenage du header cede sa place : Reglages ici. */}
+        <DropdownMenuItem asChild className="min-[360px]:hidden">
+          <Link to="/reglages">
+            <Settings className="h-4 w-4" />
+            <span className="flex-1">Réglages</span>
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void supabase.auth.signOut()}>
           <LogOut className="h-4 w-4" />
           <span className="flex-1">Se déconnecter</span>
@@ -352,44 +357,42 @@ export function Header() {
       )}
     >
       <div className="mx-auto flex h-14 max-w-content items-center gap-2 px-3 sm:px-4 lg:h-[4.5rem] lg:gap-5 lg:px-8">
-        {/* Mobile : marque (+ titre de la page quand il n'y a pas de mois).
-            Sous 360px avec le selecteur de mois, la marque cede sa place : le
-            mois tient sur une ligne sans deborder du header. */}
-        <div
-          className={cn(
-            'flex min-w-0 items-center gap-2.5 lg:hidden',
-            showMonth ? 'max-[359px]:hidden' : 'flex-1',
-          )}
-        >
-          <BrandMark size="sm" />
-          {showMobileTitle && (
-            <span className="truncate text-[17px] font-semibold tracking-tight text-ink">{title}</span>
-          )}
-        </div>
+        {/* Mobile : marque + titre de la page. Sur les pages a selecteur de
+            mois, le mois tient lieu de titre : la marque lui cede sa place
+            (avec l'indicateur de fraicheur, tout tient sur une ligne des 320px). */}
+        {!showMonth && (
+          <div className="flex min-w-0 flex-1 items-center gap-2.5 lg:hidden">
+            <BrandMark size="sm" />
+            {showMobileTitle && (
+              <span className="truncate text-[17px] font-semibold tracking-tight text-ink">{title}</span>
+            )}
+          </div>
+        )}
 
         {/* Desktop : titre de page affirme. */}
         <h1 className="hidden shrink-0 text-[24px] font-semibold tracking-[-0.02em] text-ink lg:block">{title}</h1>
         {isBudget && <HeaderBudgetSummary />}
 
         {showMonth && (
-          <div className="flex min-w-0 flex-1 items-center justify-center lg:justify-end">
+          <div className="flex min-w-0 flex-1 items-center justify-start lg:justify-end">
             <MonthSelector />
           </div>
         )}
         {!showMonth && <div className="hidden flex-1 lg:block" />}
 
         <div className="flex shrink-0 items-center gap-0.5 lg:gap-1">
-          <FreshnessIndicator />
-          {/* Desktop : boutons separes (theme, mode, compte). */}
+          {/* Icone seule la ou le selecteur de mois occupe la place. */}
+          <FreshnessIndicator compact={showMonth} />
+          {/* Desktop : mode clair/sombre direct, compte + theme en menu. */}
           <div className="hidden items-center gap-1 lg:flex">
-            <ThemeMenu />
             <ModeToggle />
             <UserMenu />
           </div>
-          {/* Mobile : un menu compte + apparence, et le raccourci Reglages. */}
+          {/* Mobile : un menu compte + apparence, et le raccourci Reglages
+              (dans le menu sous 360px). */}
           <div className="flex items-center lg:hidden">
             <MobileAccountMenu />
-            <Link to="/reglages" aria-label="Réglages" className={CHROME_BUTTON}>
+            <Link to="/reglages" aria-label="Réglages" className={cn(CHROME_BUTTON, 'max-[359px]:hidden')}>
               <Settings className="h-[19px] w-[19px]" />
             </Link>
           </div>

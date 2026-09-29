@@ -16,7 +16,10 @@ export function BottomNav() {
   const activeIndex = NAV_ITEMS.findIndex((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] lg:hidden">
+    <div
+      data-no-pull-refresh
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] lg:hidden"
+    >
       <nav
         aria-label="Navigation principale"
         className="glass pointer-events-auto relative flex w-full max-w-md items-stretch rounded-[28px] border border-edge p-1.5 shadow-elevated"
@@ -68,6 +71,7 @@ export function Fab() {
       type="button"
       onClick={() => setAddTxOpen(true)}
       aria-label="Ajouter une transaction"
+      data-no-pull-refresh
       className="fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] z-40 flex h-14 w-14 items-center justify-center rounded-full bg-brand text-accentfg shadow-fab ring-1 ring-inset ring-accentfg/15 transition-transform duration-200 ease-spring active:scale-90 lg:hidden"
     >
       <Plus className="h-6 w-6" strokeWidth={2.4} />
