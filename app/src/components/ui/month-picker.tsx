@@ -26,6 +26,9 @@ const MONTH_ABBR = Array.from({ length: 12 }, (_, i) =>
   new Date(Date.UTC(2026, i, 1)).toLocaleDateString('fr-FR', { month: 'short', timeZone: 'UTC' }),
 )
 
+const YEAR_ARROW =
+  "relative flex h-9 w-9 items-center justify-center rounded-full text-soft transition-colors after:absolute after:-inset-1 after:content-[''] hover:bg-surface2 hover:text-ink active:scale-95"
+
 function pad(m: number): string {
   return String(m).padStart(2, '0')
 }
@@ -113,7 +116,7 @@ export function MonthPicker({
               type="button"
               onClick={() => pick(ALL)}
               className={cn(
-                'mb-1 flex h-10 w-full items-center justify-center rounded-xl text-[13.5px] font-medium transition-colors hover:bg-surface2',
+                'mb-1 flex h-11 w-full items-center justify-center rounded-xl text-[13.5px] font-medium transition-colors hover:bg-surface2 lg:h-10',
                 isAll && 'bg-accent/10 text-accent-ink',
               )}
             >
@@ -121,12 +124,13 @@ export function MonthPicker({
             </button>
           )}
 
+          {/* Fleches d'annee : 36px a l'oeil, zone de toucher etendue a 44px. */}
           <div className="flex items-center justify-between px-1 py-1">
             <button
               type="button"
               onClick={() => setYear((y) => y - 1)}
               aria-label="Année précédente"
-              className="flex h-9 w-9 items-center justify-center rounded-full text-soft transition-colors hover:bg-surface2 hover:text-ink active:scale-95"
+              className={YEAR_ARROW}
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -135,7 +139,7 @@ export function MonthPicker({
               type="button"
               onClick={() => setYear((y) => y + 1)}
               aria-label="Année suivante"
-              className="flex h-9 w-9 items-center justify-center rounded-full text-soft transition-colors hover:bg-surface2 hover:text-ink active:scale-95"
+              className={YEAR_ARROW}
             >
               <ChevronRight className="h-4 w-4" />
             </button>

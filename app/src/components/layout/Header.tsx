@@ -43,8 +43,11 @@ function MonthSelector() {
   const minMonth = startMonth && startMonth > MIN_MONTH ? startMonth : MIN_MONTH
   const isCurrent = month === currentMonth()
 
+  // Fleches de 36px a l'oeil, zone de toucher etendue a 44px (pseudo-element,
+  // sans changer la mise en page) ; au-dessus du libelle voisin (z-10) pour
+  // garder la bande qu'ils partagent.
   const arrow =
-    'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-soft transition-[background-color,color,transform] duration-150 ease-spring hover:bg-ink/[0.06] hover:text-ink active:scale-90 disabled:pointer-events-none disabled:opacity-30'
+    "relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-soft transition-[background-color,color,transform] duration-150 ease-spring after:absolute after:-inset-1 after:content-[''] hover:bg-ink/[0.06] hover:text-ink active:scale-90 disabled:pointer-events-none disabled:opacity-30"
 
   return (
     <div className="flex items-center rounded-full border border-edge bg-surface/80 p-0.5 shadow-card dark:bg-surface2/60">
@@ -60,10 +63,10 @@ function MonthSelector() {
       <button
         type="button"
         onClick={resetMonth}
-        className="relative min-w-[112px] rounded-full px-1.5 py-1.5 text-center text-[14px] font-semibold tracking-tight text-ink transition-colors hover:bg-ink/[0.04] lg:min-w-[128px]"
+        className="relative min-w-[112px] whitespace-nowrap rounded-full px-1.5 py-1.5 text-center text-[14px] font-semibold tracking-tight text-ink transition-colors after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] hover:bg-ink/[0.04] lg:min-w-[128px]"
         title="Revenir au mois courant"
       >
-        <span key={month} className="inline-block animate-fade-in tnum">
+        <span key={month} className="inline-block animate-fade-in whitespace-nowrap tnum">
           {fmtMonthTitle(month)}
         </span>
         {/* Point discret : on regarde un autre mois que le mois courant. */}
@@ -349,8 +352,15 @@ export function Header() {
       )}
     >
       <div className="mx-auto flex h-14 max-w-content items-center gap-2 px-3 sm:px-4 lg:h-[4.5rem] lg:gap-5 lg:px-8">
-        {/* Mobile : marque (+ titre de la page quand il n'y a pas de mois). */}
-        <div className={cn('flex min-w-0 items-center gap-2.5 lg:hidden', !showMonth && 'flex-1')}>
+        {/* Mobile : marque (+ titre de la page quand il n'y a pas de mois).
+            Sous 360px avec le selecteur de mois, la marque cede sa place : le
+            mois tient sur une ligne sans deborder du header. */}
+        <div
+          className={cn(
+            'flex min-w-0 items-center gap-2.5 lg:hidden',
+            showMonth ? 'max-[359px]:hidden' : 'flex-1',
+          )}
+        >
           <BrandMark size="sm" />
           {showMobileTitle && (
             <span className="truncate text-[17px] font-semibold tracking-tight text-ink">{title}</span>

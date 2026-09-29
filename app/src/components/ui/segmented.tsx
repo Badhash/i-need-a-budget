@@ -20,8 +20,9 @@ interface SegmentedControlProps<T extends string> {
 
 /**
  * Selecteur segmente (filtres, periodes, modes) : segments de largeur egale,
- * pastille qui glisse sous le segment actif (courbe ressort). Cibles 44px sur
- * mobile en taille md.
+ * pastille qui glisse sous le segment actif (courbe ressort). Taille md :
+ * segments de 40px a l'oeil sur mobile (36px desktop), dont la zone de toucher
+ * deborde dans le rembourrage du conteneur (pseudo-element) : 48px sur mobile.
  */
 export function SegmentedControl<T extends string>({
   options,
@@ -64,7 +65,7 @@ export function SegmentedControl<T extends string>({
             aria-checked={active}
             onClick={() => onChange(v)}
             className={cn(
-              'relative z-10 flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[10px] px-3 font-medium transition-colors duration-150',
+              "relative z-10 flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[10px] px-3 font-medium transition-colors duration-150 after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']",
               size === 'md' ? 'min-h-10 text-[14px] lg:min-h-9 lg:text-[13.5px]' : 'min-h-8 text-[12.5px]',
               active ? 'text-ink' : 'text-soft hover:text-ink',
             )}
