@@ -30,6 +30,11 @@ export function AppShell() {
   useRealtimeSync()
   const boot = useBootstrap()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+  // Cle du fondu de page : l'id du match feuille, engage par le routeur dans le
+  // MEME commit que la page rendue par l'Outlet. location est engagee plus tot
+  // (des le debut du chargement) : une cle sur le pathname remontait la page
+  // quittee une fois avant de la remplacer (effets rejoues, vue reconstruite).
+  const pageKey = useRouterState({ select: (s) => s.matches[s.matches.length - 1]?.id })
 
   // Etat vide : aucun compte -> onboarding (l'etape 1 seede les categories,
   // l'etape 2 cree le compte ; on reste sur l'onboarding tant qu'aucun compte
@@ -68,7 +73,7 @@ export function AppShell() {
           {/* Fondu d'entree a chaque changement de page (opacite seule : une
               transformation ferait des elements fixed de la page des enfants
               positionnes le temps de l'animation). */}
-          <div key={pathname} className="animate-fade-in">
+          <div key={pageKey} className="animate-fade-in">
             <Outlet />
           </div>
         </main>
