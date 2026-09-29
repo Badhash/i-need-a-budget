@@ -51,6 +51,7 @@ import {
 import { clearUserSettings, loadUserSettings, saveUserSettings } from './settings.ts'
 import { clearPayees, forgetPayeeCategory, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
 import { mfaLevelSatisfied } from './mfa.ts'
+import { SERVER_FEATURES } from './features.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
@@ -134,7 +135,9 @@ interface RulePayload {
   priority: number
 }
 
-type TargetType = 'monthly' | 'byDate'
+// 'refill' (« recharger jusqu'a ») : remplir l'enveloppe jusqu'a `amount`, report
+// compris (le front calcule le manque a partir du disponible du mois).
+type TargetType = 'monthly' | 'byDate' | 'refill'
 
 interface TargetPayload {
   categoryId: string
@@ -892,6 +895,20 @@ function prevMonth(month: string, delta: number): string {
   return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`
 }
 
+// Libelle le plus frequent d'un groupe de marchand (egalite : ordre lexical,
+// pour un resultat stable d'un appel a l'autre).
+function mostFrequentLabel(labels: Map<string, number>): string {
+  let best = ''
+  let bestCount = 0
+  for (const [label, count] of labels) {
+    if (count > bestCount || (count === bestCount && label < best)) {
+      best = label
+      bestCount = count
+    }
+  }
+  return best
+}
+
 function computeReports(data: FullData, month: string) {
   const onBudget = new Set(data.accounts.filter((a) => a.onBudget).map((a) => a.id))
   const income = new Set(data.categories.filter((c) => c.isIncome).map((c) => c.id))
@@ -930,15 +947,25 @@ function computeReports(data: FullData, month: string) {
 
   const monthTxs = data.transactions.filter((t) => t.bookingMonth === month)
   const byGroup = new Map<string, number>()
-  const byMerchant = new Map<string, { total: number; count: number }>()
+  // Marchands regroupes par cle de tiers (payeeKey : mots stables du libelle,
+  // sans dates, montants ni references), repli sur le libelle brut quand la
+  // cle est vide. Prefixes distincts : une cle ne peut jamais rejoindre un
+  // libelle brut. Libelle affiche : le libelle brut le plus frequent.
+  const byMerchant = new Map<string, { total: number; count: number; labels: Map<string, number> }>()
   for (const t of monthTxs) {
     if (!isSpending(t)) continue
     const groupKey = t.categoryId ? (catToGroup.get(t.categoryId) ?? 'uncat') : 'uncat'
     byGroup.set(groupKey, (byGroup.get(groupKey) ?? 0) - t.amount)
-    const merchant = byMerchant.get(t.label) ?? { total: 0, count: 0 }
+    const key = payeeKey(t.label)
+    const merchantKey = key ? `payee:${key}` : `label:${t.label}`
+    let merchant = byMerchant.get(merchantKey)
+    if (!merchant) {
+      merchant = { total: 0, count: 0, labels: new Map() }
+      byMerchant.set(merchantKey, merchant)
+    }
     merchant.total -= t.amount
     merchant.count += 1
-    byMerchant.set(t.label, merchant)
+    merchant.labels.set(t.label, (merchant.labels.get(t.label) ?? 0) + 1)
   }
 
   const cashflow = Array.from({ length: 6 }, (_, i) => {
@@ -975,8 +1002,8 @@ function computeReports(data: FullData, month: string) {
       }
       return named
     })(),
-    topMerchants: [...byMerchant.entries()]
-      .map(([label, v]) => ({ label, ...v }))
+    topMerchants: [...byMerchant.values()]
+      .map((m) => ({ label: mostFrequentLabel(m.labels), total: m.total, count: m.count }))
       .sort((a, b) => b.total - a.total)
       .slice(0, 5),
     cashflow,
@@ -1038,7 +1065,9 @@ async function loadPayeeList(
 
 // Construit la reponse `bootstrap` (taxonomie + soldes) a partir de donnees deja
 // dechiffrees : partage entre l'action bootstrap et l'action consolidee
-// bootstrapFull (un seul loadBudgetData pour les deux).
+// bootstrapFull (un seul loadBudgetData pour les deux). `features` annonce les
+// comportements serveur recents (voir features.ts) : il accompagne TOUTE
+// reponse bootstrap, chemin agrege comme chemin complet.
 function buildBootstrap(data: DecryptedData, payees: { key: string; categoryId: string }[]) {
   const balances = new Map<string, number>()
   for (const t of data.transactions) {
@@ -1056,6 +1085,7 @@ function buildBootstrap(data: DecryptedData, payees: { key: string; categoryId: 
     ).length,
     budgetStartMonth: data.startMonth,
     payees,
+    features: [...SERVER_FEATURES],
   }
 }
 
@@ -1093,6 +1123,7 @@ async function actionBootstrap(userId: string) {
         uncategorizedCount,
         budgetStartMonth: settings.budgetStartMonth,
         payees,
+        features: [...SERVER_FEATURES],
       }
     } catch {
       // Lecture agregee impossible (ligne indechiffrable, erreur reseau) :
@@ -2019,9 +2050,31 @@ async function actionCreateAccount(userId: string, params: Params) {
   return { id: accountId }
 }
 
-// Edition des metadonnees d'un compte : nom, etablissement, type. Le flag
-// on_budget n'est PAS modifiable ici : le basculer changerait le RTA et la
-// categorie du solde d'ouverture (hors perimetre, evite une incoherence moteur).
+// Solde d'un compte : agregats si prets (O(comptes)), sinon somme complete des
+// transactions (enc_core seul). Sert la garde d'archivage d'updateAccount.
+async function loadAccountBalance(userId: string, accountId: string): Promise<number> {
+  const keys = await getKeys()
+  if (await aggIsReady(admin, keys, userId)) {
+    try {
+      return (await aggReadBalances(admin, keys, userId)).get(accountId) ?? 0
+    } catch {
+      // Lecture agregee impossible : calcul complet ci-dessous.
+    }
+  }
+  const transactions = await loadTxCore(userId)
+  return transactions.reduce((sum, t) => (t.accountId === accountId ? sum + t.amount : sum), 0)
+}
+
+// Edition d'un compte : nom, etablissement, type, et (fonctionnalite
+// accountFlags) onBudget et closed, tous optionnels.
+//   - onBudget : bascule budget <-> suivi. Tout le budget change (RTA,
+//     activites, badge, transferts qui deviennent croises ou neutres) : agregats
+//     invalides autour de l'ecriture. Les categories des transactions restent en
+//     place (ignorees tant que le compte est de suivi) : la bascule est
+//     reversible.
+//   - closed : archivage. Clore exige un solde exactement nul (sinon 400) ;
+//     rouvrir est toujours permis. Un compte clos ne recoit plus de transfert
+//     (convertToTransfer) ni d'import (sync-bank). Sans effet sur les agregats.
 async function actionUpdateAccount(userId: string, params: Params) {
   const accountId = requireUuid(params.accountId, 'accountId')
   const name = params.name == null ? null : requireText(params.name, 'name', 80)
@@ -2030,16 +2083,32 @@ async function actionUpdateAccount(userId: string, params: Params) {
   if (kind !== null && !ACCOUNT_KINDS.includes(kind)) {
     throw new ApiError(400, 'type de compte invalide')
   }
+  const onBudget = params.onBudget == null ? null : requireBoolean(params.onBudget, 'onBudget')
+  const closed = params.closed == null ? null : requireBoolean(params.closed, 'closed')
 
   const accounts = await loadAll<AccountPayload>('accounts', userId)
   const account = accounts.find((a) => a.id === accountId)
   if (!account) throw new ApiError(404, 'compte inconnu')
+
+  // Garde d'archivage, seulement au passage ouvert -> clos (renvoyer closed
+  // true sur un compte deja clos ne bloque pas l'edition de son nom).
+  if (closed === true && !account.closed) {
+    if ((await loadAccountBalance(userId, accountId)) !== 0) {
+      throw new ApiError(400, 'solde non nul : ramenez-le a 0 avant de clore le compte')
+    }
+  }
 
   const { id, ...payload } = account
   const next: AccountPayload = { ...payload }
   if (name !== null) next.name = name
   if (institution !== null) next.institution = institution
   if (kind !== null) next.kind = kind
+  if (closed !== null) next.closed = closed
+  if (onBudget !== null && onBudget !== account.onBudget) {
+    next.onBudget = onBudget
+    await withAggregatesStale(userId, () => updateEncrypted('accounts', userId, id, next))
+    return { ok: true }
+  }
   await updateEncrypted('accounts', userId, id, next)
   return { ok: true }
 }
@@ -2628,10 +2697,14 @@ async function actionListTargets(userId: string) {
   return { targets }
 }
 
+// Types : 'monthly' (assigner amount chaque mois), 'byDate' (atteindre amount
+// pour dueMonth), 'refill' (fonctionnalite refillTargets : recharger
+// l'enveloppe jusqu'a amount chaque mois, report compris). dueMonth n'existe
+// que pour 'byDate'.
 async function actionSetTarget(userId: string, params: Params) {
   const categoryId = requireUuid(params.categoryId, 'categoryId')
   const type = params.type
-  if (type !== 'monthly' && type !== 'byDate') {
+  if (type !== 'monthly' && type !== 'byDate' && type !== 'refill') {
     throw new ApiError(400, 'type d objectif invalide')
   }
   const amount = requireAmount(params.amount)
@@ -3096,6 +3169,11 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
     const counterparty =
       o.counterparty == null ? null : requireText(o.counterparty, 'counterparty', 200)
     const notes = o.notes == null ? null : requireText(o.notes, 'notes', 500)
+    // Paire de virement (fonctionnalite importTransfers) : les deux moities
+    // portent le meme transferGroupId. Les agregats sont deja invalides pendant
+    // l'import et reconstruits ensuite sous la regle des transferts croises.
+    const transferGroupId =
+      o.transferGroupId == null ? null : requireUuid(o.transferGroupId, 'transferGroupId')
     const bookingMonth = bookingDate.slice(0, 7)
     const payload: TxPayload = {
       accountId,
@@ -3105,7 +3183,7 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
       amount,
       label,
       counterparty,
-      transferGroupId: null,
+      transferGroupId,
       notes,
     }
     // tx_hash reste NULL : saisie non bancaire (la dedup ne concerne que les
