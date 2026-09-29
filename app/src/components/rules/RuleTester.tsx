@@ -43,6 +43,7 @@ export function RuleTester({ onCreateRule, onMatch }: RuleTesterProps) {
   useEffect(() => {
     onMatch?.(matchedId)
   }, [matchedId, onMatch])
+  useEffect(() => () => onMatch?.(null), [onMatch])
 
   return (
     <div className="space-y-3">

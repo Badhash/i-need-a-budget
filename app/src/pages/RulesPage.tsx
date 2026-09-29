@@ -35,6 +35,7 @@ import { Card } from '@/components/ui/card'
 import { SegmentedControl } from '@/components/ui/segmented'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { cn } from '@/lib/utils'
 
 type Tab = 'rules' | 'test' | 'payees'
 
@@ -295,16 +296,14 @@ export function RulesPage() {
       ) : (
         <>
           <SegmentedControl options={TABS} value={tab} onChange={setTab} block aria-label="Section" />
-          <div key={tab} className="animate-fade-in space-y-5">
-            {tab === 'rules' && (
-              <>
-                {newRuleCard}
-                {rulesCard}
-              </>
-            )}
-            {tab === 'test' && testerCard}
-            {tab === 'payees' && payeesCard}
+          {/* Onglets montes en permanence : une regle en cours de saisie ou un
+              libelle teste survivent a un aller-retour d'onglet. */}
+          <div className={cn('space-y-5', tab !== 'rules' && 'hidden')}>
+            {newRuleCard}
+            {rulesCard}
           </div>
+          <div className={cn(tab !== 'test' && 'hidden')}>{testerCard}</div>
+          <div className={cn(tab !== 'payees' && 'hidden')}>{payeesCard}</div>
         </>
       )}
 

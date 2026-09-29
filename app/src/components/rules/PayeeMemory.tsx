@@ -100,7 +100,7 @@ export function PayeeMemory({ className }: { className?: string }) {
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Chercher un tiers ou une catégorie"
+          placeholder="Tiers ou catégorie"
           aria-label="Chercher dans les tiers mémorisés"
           autoCapitalize="off"
           autoCorrect="off"
@@ -194,7 +194,7 @@ export function PayeeMemory({ className }: { className?: string }) {
                     className={cn('h-4 w-4 shrink-0 text-soft transition-transform duration-200', open && 'rotate-180')}
                   />
                 </button>
-                {open && <div className="flex animate-fade-in justify-end pb-3 pl-12">{actions}</div>}
+                {open && <div className="flex animate-fade-in pb-3 pl-12">{actions}</div>}
               </li>
             )
           })}

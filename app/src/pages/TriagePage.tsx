@@ -435,7 +435,10 @@ export function TriagePage() {
           aria-hidden
           className={cn(
             'pointer-events-none absolute inset-x-0 top-0 z-10 animate-out fade-out-0 fill-mode-forwards duration-300 ease-in',
-            leaving.dir === 'right' ? 'slide-out-to-right-full spin-out-6' : 'slide-out-to-left-full spin-out-[-6deg]',
+            // Desktop : envol court, la carte ne traverse pas la colonne des choix.
+            leaving.dir === 'right'
+              ? 'slide-out-to-right-full spin-out-6 lg:slide-out-to-right-1/3 lg:spin-out-3'
+              : 'slide-out-to-left-full spin-out-[-6deg] lg:slide-out-to-left-1/3 lg:spin-out-[-3deg]',
           )}
           style={{ transform: leaving.dragX ? `translateX(${leaving.dragX}px) rotate(${leaving.dragX / 28}deg)` : undefined }}
           onAnimationEnd={() => setLeaving((l) => (l && l.seq === leaving.seq ? null : l))}
