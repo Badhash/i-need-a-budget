@@ -68,7 +68,15 @@ function useCalmFlag(value: boolean, showDelay: number, minVisible: number): boo
   return shownAt !== null
 }
 
-function useFreshness(): { state: FreshnessState; label: string; recent: boolean } {
+/** Heure (ou jour et heure au-dela de 24 h) du dernier chargement, pour l'infobulle. */
+function fmtSyncMoment(at: number, now: number): string {
+  const date = new Date(at)
+  const time = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+  if (now - at < 24 * 60 * 60 * 1000) return time
+  return `${date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} à ${time}`
+}
+
+function useFreshness(): { state: FreshnessState; label: string; recent: boolean; moment: string | null } {
   const online = useOnline()
   const checking = useCheckingConnectivity()
   const refreshing = useRefreshStore((s) => s.refreshing)
@@ -78,12 +86,13 @@ function useFreshness(): { state: FreshnessState; label: string; recent: boolean
   const syncAt = useLastServerSync()
   const now = useNow(15000)
 
-  if (!online) return { state: 'offline', label: checking ? 'Vérification…' : 'Hors ligne', recent: false }
-  if (refreshing || backgroundSync) return { state: 'syncing', label: 'Synchronisation…', recent: false }
-  if (syncAt === null) return { state: 'unknown', label: 'Actualiser', recent: false }
+  const moment = syncAt === null ? null : fmtSyncMoment(syncAt, Math.max(now, syncAt))
+  if (!online) return { state: 'offline', label: checking ? 'Vérification…' : 'Hors ligne', recent: false, moment }
+  if (refreshing || backgroundSync) return { state: 'syncing', label: 'Synchronisation…', recent: false, moment }
+  if (syncAt === null) return { state: 'unknown', label: 'Actualiser', recent: false, moment }
   // syncAt peut depasser la derniere graduation de l'horloge (chargement tout juste termine).
   const age = Math.max(0, Math.max(now, syncAt) - syncAt)
-  return { state: age < 60000 ? 'fresh' : 'stale', label: formatSyncAge(age), recent: age < RECENT_MS }
+  return { state: age < 60000 ? 'fresh' : 'stale', label: formatSyncAge(age), recent: age < RECENT_MS, moment }
 }
 
 function StatusGlyph({ state, recent, size }: { state: FreshnessState; recent: boolean; size: 'sm' | 'md' }) {
@@ -102,11 +111,14 @@ function StatusGlyph({ state, recent, size }: { state: FreshnessState; recent: b
         className={cn(icon, 'transition-transform duration-280 ease-spring group-hover:rotate-90')}
         strokeWidth={2.2}
       />
+      {/* Petit rebond de la pastille verte quand une synchronisation aboutit. */}
       <span
+        key={state}
         aria-hidden
         className={cn(
-          'absolute -right-0.5 -top-0.5 h-[7px] w-[7px] rounded-full ring-2 ring-bg transition-colors duration-280',
+          'absolute -right-0.5 -top-0.5 h-[7px] w-[7px] rounded-full ring-2 ring-bg',
           recent ? 'bg-success' : 'bg-soft/50',
+          state === 'fresh' && 'animate-pop',
         )}
       />
     </span>
@@ -126,10 +138,15 @@ function StatusGlyph({ state, recent, size }: { state: FreshnessState; recent: b
  */
 export function FreshnessIndicator({ compact = false }: { compact?: boolean }) {
   const queryClient = useQueryClient()
-  const { state, label, recent } = useFreshness()
+  const { state, label, recent, moment } = useFreshness()
   const busy = state === 'syncing'
   const onClick = () => void refreshData(queryClient)
-  const title = state === 'offline' ? `${label} · toucher pour vérifier la connexion` : `${label} · Actualiser`
+  const title =
+    state === 'offline'
+      ? `${label} · toucher pour vérifier la connexion`
+      : state === 'syncing'
+        ? label
+        : `${label}${moment ? ` (dernière synchronisation : ${moment})` : ''} · Actualiser`
 
   return (
     <>

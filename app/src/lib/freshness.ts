@@ -13,7 +13,7 @@
 // rapports affiche. Seules les requetes a l'ecran repartent au serveur ; les
 // autres sont juste marquees perimees pour leur prochain affichage.
 
-import { useSyncExternalStore } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 import { create } from 'zustand'
 import { hashKey, onlineManager, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { BOOTSTRAP_KEY, TRANSACTIONS_KEY, budgetKey, reportsKey } from '@/lib/data'
@@ -63,11 +63,9 @@ export function lastServerSync(client: QueryClient): number | null {
 
 export function useLastServerSync(): number | null {
   const client = useQueryClient()
-  return useSyncExternalStore(
-    (listener) => client.getQueryCache().subscribe(listener),
-    () => lastServerSync(client),
-    () => null,
-  )
+  // Abonnement stable (sinon useSyncExternalStore se reabonne a chaque rendu).
+  const subscribe = useCallback((listener: () => void) => client.getQueryCache().subscribe(listener), [client])
+  return useSyncExternalStore(subscribe, () => lastServerSync(client), () => null)
 }
 
 /** Libelle d'anciennete : « À jour » sous la minute, puis min, h, j. */
