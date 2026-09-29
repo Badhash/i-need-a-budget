@@ -1,159 +1,94 @@
-import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { MoreHorizontal } from 'lucide-react'
-import type { Transaction } from '@/types/domain'
-import { countsAsUncategorized, patchAccountBalances, patchUncategorizedCount, useAccountsList } from '@/lib/data'
-import { apiCall } from '@/lib/api'
-import { scheduleBudgetRefetch } from '@/lib/categorize'
-import { useUiStore } from '@/stores/ui'
+import { ArrowLeftRight, MoreHorizontal, Pencil, Trash2, Undo2, Wand2 } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import type { TxRow } from '@/components/transactions/txRow'
+import { canCategorize, type TxRow } from '@/components/transactions/txRow'
+import { accountIcon } from '@/components/transactions/AccountChip'
+import { useTxRowActions } from '@/components/transactions/useTxRowActions'
 
-// Menu discret par ligne : conversion transaction <-> virement entre comptes.
+/**
+ * Menu discret par ligne (desktop, au survol) : modifier, convertir en
+ * virement / annuler le virement, creer une regle, supprimer. La suppression
+ * est immediate, avec « Annuler » dans le toast (plus de double confirmation).
+ */
 export function RowMenu({ row, className }: { row: TxRow; className?: string }) {
-  const queryClient = useQueryClient()
-  const accounts = useAccountsList()
-  const setEditTx = useUiStore((s) => s.setEditTx)
-  const [error, setError] = useState<string | null>(null)
+  const actions = useTxRowActions()
   const isTransfer = Boolean(row.tx.transferGroupId)
-  const targets = accounts.filter((a) => a.id !== row.tx.accountId)
-
-  const convert = useMutation({
-    mutationFn: (targetAccountId: string) =>
-      apiCall('convertToTransfer', { transactionId: row.tx.id, targetAccountId }),
-    // Pas de mise a jour optimiste ici : on rafraichit la seule liste des
-    // transactions pour un retour visuel prompt. Le budget/les rapports/le
-    // bootstrap sont reconcilies en fond par le signal Realtime coalesce (pas
-    // de rechargement de la table entiere a chaque conversion).
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      // Conversion rare : un rafraichissement du bootstrap remet le compteur
-      // « À catégoriser » du badge d'aplomb (le transfert sort du decompte).
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
-      // Une depense categorisee devenue virement sort de son enveloppe.
-      scheduleBudgetRefetch(queryClient)
-    },
-    onError: (err) => showError(err),
-  })
-  const revert = useMutation({
-    mutationFn: () => apiCall('convertTransferToNormal', { transactionId: row.tx.id }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
-      scheduleBudgetRefetch(queryClient)
-    },
-    onError: (err) => showError(err),
-  })
-  // Suppression optimiste : la ligne disparait immediatement, rollback si echec.
-  const remove = useMutation({
-    mutationFn: () => apiCall('deleteTransaction', { transactionId: row.tx.id }),
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: ['transactions'] })
-      const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
-      // Si la ligne supprimee comptait dans le badge, on decremente en optimiste.
-      const countDelta = countsAsUncategorized(queryClient, row.tx) ? -1 : 0
-      patchUncategorizedCount(queryClient, countDelta)
-      queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
-        old?.filter((t) => t.id !== row.tx.id),
-      )
-      // Solde du compte : la ligne part avec son montant (le miroir d'un
-      // virement est inconnu ici, le bootstrap est refetche au succes).
-      if (!isTransfer) patchAccountBalances(queryClient, [{ accountId: row.tx.accountId, delta: -row.tx.amount }])
-      return { snapshot, countDelta }
-    },
-    onError: (err, _vars, ctx) => {
-      if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
-      if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
-      if (!isTransfer) patchAccountBalances(queryClient, [{ accountId: row.tx.accountId, delta: row.tx.amount }])
-      showError(err)
-    },
-    // Suppression deja refletee de facon optimiste dans la liste ; le budget
-    // (activite de l'enveloppe, Pret a assigner), les soldes et les rapports
-    // sont relus de facon ciblee et coalescee. EXCEPTION virement : le serveur
-    // supprime ou delie aussi le MIROIR (autre compte) que le patch optimiste
-    // ne connait pas — sans refetch il resterait affiche comme un virement
-    // orphelin.
-    onSuccess: () => {
-      if (isTransfer) {
-        void queryClient.invalidateQueries({ queryKey: ['transactions'] })
-        void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
-      }
-      scheduleBudgetRefetch(queryClient)
-    },
-  })
-  // Confirmation en deux temps dans le menu : premier clic arme, second supprime.
-  const [confirmDelete, setConfirmDelete] = useState(false)
-
-  function showError(err: unknown) {
-    setError(err instanceof Error ? err.message : 'Une erreur est survenue.')
-    window.setTimeout(() => setError(null), 4000)
-  }
+  const targets = isTransfer ? [] : actions.transferTargets(row)
 
   return (
-    <div className={cn('relative', className)}>
-      <DropdownMenu onOpenChange={(open) => !open && setConfirmDelete(false)}>
+    <div className={cn('relative', className)} onClick={(e) => e.stopPropagation()}>
+      <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             aria-label="Actions sur la transaction"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink focus-visible:opacity-100 data-[state=open]:opacity-100 lg:opacity-0 lg:group-hover:opacity-100"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-soft transition-[background-color,color,opacity] hover:bg-ink/[0.06] hover:text-ink focus-visible:opacity-100 data-[state=open]:bg-ink/[0.06] data-[state=open]:opacity-100 lg:opacity-0 lg:group-hover:opacity-100"
           >
             <MoreHorizontal className="h-4 w-4" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {/* Un transfert ne se modifie pas ici : annuler le virement d'abord. */}
-          {!isTransfer && (
-            <DropdownMenuItem onSelect={() => setEditTx(row.tx)}>Modifier</DropdownMenuItem>
+        <DropdownMenuContent align="end" className="w-64">
+          {actions.canEdit(row) && (
+            <DropdownMenuItem onSelect={() => actions.edit(row)}>
+              <Pencil className="h-4 w-4 text-soft" />
+              Modifier
+            </DropdownMenuItem>
+          )}
+          {canCategorize(row) && !isTransfer && (
+            <DropdownMenuItem onSelect={() => actions.createRule(row)}>
+              <Wand2 className="h-4 w-4 text-soft" />
+              Créer une règle
+            </DropdownMenuItem>
           )}
           {isTransfer ? (
-            <DropdownMenuItem onSelect={() => revert.mutate()}>
+            <DropdownMenuItem disabled={row.pending} onSelect={() => actions.revert(row)}>
+              <Undo2 className="h-4 w-4 text-soft" />
               Annuler le virement
             </DropdownMenuItem>
           ) : targets.length > 0 ? (
             <>
-              <DropdownMenuLabel>Convertir en virement vers…</DropdownMenuLabel>
-              {targets.map((acc) => (
-                <DropdownMenuItem key={acc.id} onSelect={() => convert.mutate(acc.id)}>
-                  {acc.name}
-                </DropdownMenuItem>
-              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="flex items-center gap-1.5">
+                <ArrowLeftRight className="h-3 w-3" />
+                Convertir en virement {row.tx.amount < 0 ? 'vers' : 'depuis'}
+              </DropdownMenuLabel>
+              {targets.map(({ account, hint }) => {
+                const Icon = accountIcon(account)
+                return (
+                  <DropdownMenuItem
+                    key={account.id}
+                    disabled={row.pending}
+                    onSelect={() => actions.convert(row, account)}
+                    className="items-start"
+                  >
+                    <Icon className="mt-0.5 h-4 w-4 text-soft" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{account.name}</span>
+                      {hint && <span className="block text-[12px] leading-snug text-soft">{hint}</span>}
+                    </span>
+                  </DropdownMenuItem>
+                )
+              })}
             </>
-          ) : (
-            <DropdownMenuLabel>Aucun autre compte</DropdownMenuLabel>
-          )}
+          ) : null}
+          <DropdownMenuSeparator />
           <DropdownMenuItem
-            className="text-danger"
-            onSelect={(e) => {
-              if (!confirmDelete) {
-                // Garde le menu ouvert pour le second clic de confirmation.
-                e.preventDefault()
-                setConfirmDelete(true)
-              } else {
-                setConfirmDelete(false)
-                remove.mutate()
-              }
-            }}
+            disabled={row.pending}
+            className="text-danger data-[highlighted]:bg-danger/10"
+            onSelect={() => actions.remove(row)}
           >
-            {confirmDelete ? 'Confirmer la suppression' : 'Supprimer la transaction'}
+            <Trash2 className="h-4 w-4" />
+            Supprimer
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {error && (
-        <p
-          role="status"
-          className="absolute right-0 top-full z-10 mt-1 max-w-[220px] whitespace-normal rounded-lg border border-line bg-surface px-2.5 py-1.5 text-left text-[12px] text-danger shadow-card"
-        >
-          {error}
-        </p>
-      )}
     </div>
   )
 }

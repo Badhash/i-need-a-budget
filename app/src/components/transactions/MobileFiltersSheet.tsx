@@ -5,6 +5,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -24,6 +25,8 @@ interface MobileFiltersSheetProps {
   monthMax?: string
   hasFilters: boolean
   onClear: () => void
+  /** Nombre de transactions correspondant aux filtres (bouton de validation). */
+  resultCount: number
 }
 
 /**
@@ -45,6 +48,7 @@ export function MobileFiltersSheet({
   monthMax,
   hasFilters,
   onClear,
+  resultCount,
 }: MobileFiltersSheetProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -53,7 +57,7 @@ export function MobileFiltersSheet({
           <DialogTitle>Filtres</DialogTitle>
           <DialogDescription>Affine la liste par catégorie, compte ou mois.</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-4 p-5 pt-2">
+        <div className="flex flex-col gap-4 px-5 pt-2">
           <label className="flex flex-col gap-1.5">
             <span className="label-caps">Catégorie</span>
             <Combobox
@@ -91,17 +95,19 @@ export function MobileFiltersSheet({
               aria-label="Filtrer par mois"
             />
           </label>
-          <div className="mt-2 flex gap-2">
-            {hasFilters && (
-              <Button variant="outline" className="h-11 flex-1" onClick={onClear}>
-                Effacer
-              </Button>
-            )}
-            <Button className="h-11 flex-1" onClick={() => onOpenChange(false)}>
-              Voir les résultats
-            </Button>
-          </div>
         </div>
+        <DialogFooter className="mt-3 flex-row gap-2 sm:justify-stretch">
+          {hasFilters && (
+            <Button variant="secondary" className="h-12 flex-1" onClick={onClear}>
+              Effacer
+            </Button>
+          )}
+          <Button className="h-12 flex-1" onClick={() => onOpenChange(false)}>
+            {resultCount === 0
+              ? 'Aucun résultat'
+              : `Voir ${resultCount} transaction${resultCount > 1 ? 's' : ''}`}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

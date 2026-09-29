@@ -1,38 +1,126 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearch } from '@tanstack/react-router'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useSearch } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Inbox, Plus, Search, SlidersHorizontal, Wand2, X } from 'lucide-react'
+import {
+  ArrowRight,
+  CheckCheck,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  ReceiptText,
+  Search,
+  SearchX,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react'
 import type { Transaction } from '@/types/domain'
-import { countsAsUncategorized, useAccountsList, useAccountsMap, useBootstrap, useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
-import { payeeKey } from '@/lib/categorize'
+import {
+  countsAsUncategorized,
+  useAccountsList,
+  useAccountsMap,
+  useBootstrap,
+  useCategoriesList,
+  useCategoriesMap,
+  useGroupsList,
+  useGroupsMap,
+  useIsCrossBudgetTransfer,
+} from '@/lib/data'
+import { payeeDefaultOf, payeeKey, restorePayeeMemory, useCategorize } from '@/lib/categorize'
+import { isUnconfirmedTx, txDayRank } from '@/lib/transactions'
 import { haptic } from '@/lib/haptics'
 import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { useTransactions } from '@/lib/queries'
 import { ruleValueFromLabel, useApplyRules, useRules } from '@/lib/rules'
 import { currentMonth, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
-import { CategorizeToast, type CategorizeToastData } from '@/components/transactions/CategorizeToast'
 import { CreateRuleDialog } from '@/components/transactions/CreateRuleDialog'
 import { MobileFiltersSheet } from '@/components/transactions/MobileFiltersSheet'
 import { useCategorizeMany } from '@/components/transactions/useCategorizeMany'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { Amount } from '@/components/shared/Amount'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { MonthPicker } from '@/components/ui/month-picker'
 import { cn } from '@/lib/utils'
-import {
-  type TxRow,
-  type Maps,
-  toRow,
-  PAGE_SIZE,
-  normSearch,
-} from '@/components/transactions/txRow'
-import { CategorizedContext } from '@/components/transactions/CategoryBadge'
+import { canSelect, normSearch, PAGE_SIZE, toRow, type Maps, type TxRow } from '@/components/transactions/txRow'
+import { TxListContext, type TxListActions } from '@/components/transactions/listContext'
 import { DesktopTable } from '@/components/transactions/DesktopTable'
 import { MobileList } from '@/components/transactions/MobileList'
+import { SelectionBar } from '@/components/transactions/SelectionBar'
+import { TransactionDetail } from '@/components/transactions/TransactionDetail'
 import { TransactionsSkeleton } from '@/components/transactions/TransactionsSkeleton'
+import { TriageBanner } from '@/components/transactions/TriageBanner'
+import { TxToast } from '@/components/transactions/TxToast'
+import { dropFeedback, expireFeedback, showFeedback, useFeedbackStore } from '@/components/transactions/feedback'
+
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many)
+
+// Puce de filtre (mobile) : 40px a l'oeil, zone tactile etendue a 44px.
+const chipClass = (active: boolean) =>
+  cn(
+    "relative flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 text-[13.5px] font-medium ring-1 ring-inset transition-[background-color,color,box-shadow,transform] duration-150 ease-spring after:absolute after:inset-x-0 after:-inset-y-0.5 after:content-[''] active:scale-95",
+    active
+      ? 'bg-accent/10 text-accent-ink ring-accent/30 dark:text-accent'
+      : 'bg-surface text-soft shadow-card ring-edge hover:text-ink',
+  )
+
+function SearchField({ value, onChange, className }: { value: string; onChange: (v: string) => void; className?: string }) {
+  return (
+    <div className={cn('group relative', className)}>
+      <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-soft transition-colors group-focus-within:text-accent" />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Rechercher une transaction…"
+        aria-label="Rechercher une transaction"
+        className="h-11 w-full rounded-xl border border-line bg-surface pl-10 pr-10 text-[16px] text-ink shadow-[inset_0_1px_2px_rgb(var(--ink)/0.03)] outline-none transition-[border-color,box-shadow] duration-150 ease-spring placeholder:text-soft/70 hover:border-soft/40 focus:border-accent/70 focus:ring-4 focus:ring-accent/15 lg:text-[14px] [&::-webkit-search-cancel-button]:hidden"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          aria-label="Effacer la recherche"
+          className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-soft transition-colors hover:bg-ink/[0.06] hover:text-ink"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** Totaux de la liste filtree : sorties et entrees (virements neutres exclus). */
+function FilteredSummary({ rows, className }: { rows: TxRow[]; className?: string }) {
+  const { outflow, inflow } = useMemo(() => {
+    let out = 0
+    let inc = 0
+    for (const r of rows) {
+      if (r.tx.transferGroupId && !r.cross) continue
+      if (r.tx.amount < 0) out += r.tx.amount
+      else inc += r.tx.amount
+    }
+    return { outflow: out, inflow: inc }
+  }, [rows])
+  return (
+    <p className={cn('flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px] text-soft tnum', className)}>
+      <span className="font-medium text-ink">
+        {rows.length} {plural(rows.length, 'transaction', 'transactions')}
+      </span>
+      {outflow !== 0 && (
+        <span>
+          · sorties <Amount cents={outflow} className="font-medium text-ink" />
+        </span>
+      )}
+      {inflow !== 0 && (
+        <span>
+          · entrées <Amount cents={inflow} signed className="font-medium text-success" />
+        </span>
+      )}
+    </p>
+  )
+}
 
 export function TransactionsPage() {
   const queryClient = useQueryClient()
@@ -46,6 +134,9 @@ export function TransactionsPage() {
   const groupById = useGroupsMap()
   const categoriesList = useCategoriesList()
   const groupsList = useGroupsList()
+  const isCross = useIsCrossBudgetTransfer()
+  const categorize = useCategorize()
+  const categorizeMany = useCategorizeMany()
 
   // Pre-filtres poses par la navigation (tous optionnels, combinables) :
   //   ?compte=<id>     (depuis Comptes)
@@ -83,37 +174,52 @@ export function TransactionsPage() {
     return { min, max }
   }, [txs])
 
+  // Comptes et categories presents dans les transactions : un compte clos ou
+  // une categorie masquee n'apparait dans les filtres que s'il a des lignes.
+  const usage = useMemo(() => {
+    const accountIds = new Set<string>()
+    const categoryIds = new Set<string>()
+    for (const t of txs ?? []) {
+      accountIds.add(t.accountId)
+      if (t.categoryId) categoryIds.add(t.categoryId)
+    }
+    return { accountIds, categoryIds }
+  }, [txs])
+
   // Options du combobox categorie : regroupees par groupe, pastille coloree.
   const categoryOptions = useMemo<ComboboxOption[]>(() => {
     const opts: ComboboxOption[] = [{ value: 'all', label: 'Toutes les catégories' }]
-    for (const group of groupsList) {
-      for (const cat of categoriesList.filter((c) => c.groupId === group.id)) {
+    for (const group of groupsList.slice().sort((a, b) => a.sortOrder - b.sortOrder)) {
+      for (const cat of categoriesList
+        .filter((c) => c.groupId === group.id)
+        .sort((a, b) => a.sortOrder - b.sortOrder)) {
+        const hidden = cat.hidden || group.hidden
+        if (hidden && !usage.categoryIds.has(cat.id) && cat.id !== categoryFilter) continue
         opts.push({
           value: cat.id,
-          label: cat.name,
+          label: hidden ? `${cat.name} (masquée)` : cat.name,
           group: group.name,
           colorVar: `cat-${group.color}-fg`,
         })
       }
     }
     return opts
-  }, [groupsList, categoriesList])
+  }, [groupsList, categoriesList, usage, categoryFilter])
 
-  // Options du combobox compte.
+  // Options du combobox compte (clotures en dernier, marques).
   const accountOptions = useMemo<ComboboxOption[]>(
     () => [
       { value: 'all', label: 'Tous les comptes' },
-      ...accounts.map((acc) => ({ value: acc.id, label: acc.name })),
+      ...accounts.filter((a) => !a.closed).map((a) => ({ value: a.id, label: a.name })),
+      ...accounts
+        .filter((a) => a.closed && (usage.accountIds.has(a.id) || a.id === accountFilter))
+        .map((a) => ({ value: a.id, label: `${a.name} (clôturé)` })),
     ],
-    [accounts],
+    [accounts, usage, accountFilter],
   )
 
   const hasFilters =
-    Boolean(search) ||
-    accountFilter !== 'all' ||
-    categoryFilter !== 'all' ||
-    monthFilter !== 'all' ||
-    onlyUncat
+    Boolean(search) || accountFilter !== 'all' || categoryFilter !== 'all' || monthFilter !== 'all' || onlyUncat
 
   const clearFilters = () => {
     setSearch('')
@@ -123,15 +229,35 @@ export function TransactionsPage() {
     setOnlyUncat(false)
   }
 
-  // Non categorisee au sens du badge : compte budget, hors transfert, pas dans
-  // le futur ni avant le mois de depart (meme regle que le compteur de la nav,
-  // sinon chip et badge se contredisaient apres « Nouveau budget »).
+  // Non categorisee au sens du badge : compte budget, hors transfert neutre,
+  // pas dans le futur ni avant le mois de depart (meme regle que le compteur
+  // de la nav, sinon chip et badge se contredisaient apres « Nouveau budget »).
   const isUncat = useCallback(
     (t: Transaction) => countsAsUncategorized(queryClient, t),
     // La taxonomie est lue dans le cache ; on recalcule quand elle change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [queryClient, boot.data],
+    [queryClient, boot.data, txs],
   )
+
+  // Moities de virement par groupe (compte miroir d'une ligne).
+  const peers = useMemo(() => {
+    const map = new Map<string, Transaction[]>()
+    for (const t of txs ?? []) {
+      if (!t.transferGroupId) continue
+      const list = map.get(t.transferGroupId)
+      if (list) list.push(t)
+      else map.set(t.transferGroupId, [t])
+    }
+    return map
+  }, [txs])
+  const peerOf = useCallback(
+    (t: Transaction) => (t.transferGroupId ? peers.get(t.transferGroupId)?.find((o) => o.id !== t.id) : undefined),
+    [peers],
+  )
+
+  // Ordre stable au sein d'un jour (cf. txDayRank) : une saisie reste en tete
+  // de sa journee, meme apres la reconciliation serveur.
+  const rank = useMemo(() => (txs ? txDayRank(txs) : () => 0), [txs])
 
   // Filtres appliques a TOUTES les transactions (tous mois confondus), tri
   // anti-chronologique, puis pagination. Le filtre mois se base sur le mois
@@ -146,17 +272,20 @@ export function TransactionsPage() {
       .filter((t) => categoryFilter === 'all' || t.categoryId === categoryFilter)
       .filter((t) => monthFilter === 'all' || monthOf(t.date) === monthFilter)
       .filter((t) => !onlyUncat || isUncat(t))
-      .map((t) => toRow(t, maps))
+      .map((t) => toRow(t, maps, { isCross, peerOf, isUncat }))
       .filter((r): r is TxRow => r !== null)
       .filter(
         (r) =>
           !q ||
           normSearch(r.tx.label).includes(q) ||
-          normSearch(r.parsed.short).includes(q) ||
+          normSearch(r.name).includes(q) ||
           (r.category ? normSearch(r.category.name).includes(q) : false) ||
-          (r.tx.note ? normSearch(r.tx.note).includes(q) : false),
+          (r.tx.note ? normSearch(r.tx.note).includes(q) : false) ||
+          (r.tx.counterparty ? normSearch(r.tx.counterparty).includes(q) : false),
       )
-      .sort((a, b) => (a.tx.date < b.tx.date ? 1 : a.tx.date > b.tx.date ? -1 : 0))
+      .sort((a, b) =>
+        a.tx.date !== b.tx.date ? (a.tx.date < b.tx.date ? 1 : -1) : rank(a.tx.id) - rank(b.tx.id),
+      )
   }, [
     txs,
     boot.data,
@@ -169,97 +298,204 @@ export function TransactionsPage() {
     monthFilter,
     onlyUncat,
     isUncat,
+    isCross,
+    peerOf,
+    rank,
   ])
 
   const uncatCount = useMemo(() => (txs ?? []).filter(isUncat).length, [txs, isUncat])
 
-  // Toast « Appliquer aux N autres » apres une categorisation manuelle : les
-  // autres transactions non categorisees du meme tiers (cle payee) sont
-  // proposees en un tap. Aucune lecture reseau : tout vient du cache.
-  const [toast, setToast] = useState<CategorizeToastData | null>(null)
-  const [ruleDialog, setRuleDialog] = useState<{ value: string; categoryId: string } | null>(null)
-  const categorizeMany = useCategorizeMany()
-  const dismissToast = useCallback(() => setToast(null), [])
-  const onCategorized = useCallback<(row: TxRow, categoryId: string | null) => void>(
+  // ---------------------------------------------------------------------------
+  // Retours (toast unique) apres une categorisation manuelle
+  // ---------------------------------------------------------------------------
+
+  const [ruleDialog, setRuleDialog] = useState<{ value: string; categoryId?: string } | null>(null)
+  const openCreateRule = useCallback((value: string, categoryId?: string) => setRuleDialog({ value, categoryId }), [])
+
+  // Categorisation manuelle d'une ligne (pastille, detail) : optimiste, puis
+  // « Catégorisé dans X » + « Annuler » (retour a la categorie d'avant par la
+  // meme mutation optimiste) ; si d'autres transactions du meme tiers restent a
+  // categoriser, « Appliquer aux N autres » ; « Créer une règle ». Aucune
+  // lecture reseau : tout vient du cache.
+  const categorizeRow = useCallback<TxListActions['categorizeRow']>(
     (row, categoryId) => {
-      if (!categoryId) {
-        setToast(null)
-        return
+      const previous = row.tx.categoryId
+      if (categoryId === previous) return
+      haptic(10)
+      const category = categoryId ? categoryById.get(categoryId) : undefined
+      const memoryBefore = payeeDefaultOf(queryClient, row.tx.label)
+      const txId = row.tx.id
+      const payee = payeeKey(row.tx.label)
+      const similarIds =
+        categoryId && payee
+          ? (txs ?? [])
+              .filter((t) => t.id !== txId && !isUnconfirmedTx(t.id) && isUncat(t) && payeeKey(t.label) === payee)
+              .map((t) => t.id)
+          : []
+      const links = []
+      if (category && similarIds.length > 0) {
+        const n = similarIds.length
+        links.push({
+          label: `Appliquer ${plural(n, "à l'autre", `aux ${n} autres`)}`,
+          onClick: () => {
+            haptic([10, 30, 10])
+            const toastKey = showFeedback({
+              message: `${n} ${plural(n, 'autre transaction catégorisée', 'autres transactions catégorisées')}`,
+              description: `Dans ${category.name}`,
+              icon: 'check',
+              undo: () => categorizeMany.mutate({ txIds: similarIds, categoryId: null }),
+            })
+            // Echec : le toast d'erreur global prend le relais.
+            categorizeMany.mutate(
+              { txIds: similarIds, categoryId: category.id },
+              { onError: () => dropFeedback(toastKey) },
+            )
+          },
+        })
       }
-      const category = categoryById.get(categoryId)
-      if (!category) return
-      const key = payeeKey(row.tx.label)
-      const similarIds = key
-        ? (txs ?? [])
-            .filter((t) => t.id !== row.tx.id && isUncat(t) && payeeKey(t.label) === key)
-            .map((t) => t.id)
-        : []
-      if (similarIds.length === 0) {
-        setToast(null)
-        return
+      if (category && !category.isIncome && !row.tx.transferGroupId) {
+        links.push({
+          label: 'Créer une règle',
+          onClick: () => {
+            expireFeedback()
+            openCreateRule(ruleValueFromLabel(row.tx.label), category.id)
+          },
+        })
       }
-      setToast({
-        shortLabel: row.parsed.short,
-        rawLabel: row.tx.label,
-        categoryName: category.name,
-        categoryId,
-        similarIds,
+      const tx = row.tx
+      const toastKey = showFeedback({
+        message: category ? `Catégorisé dans ${category.name}` : 'Remis à catégoriser',
+        description: row.name,
+        icon: 'check',
+        undo: () => {
+          categorize.mutate({ txId, categoryId: previous })
+          // Le choix annule ne doit pas rester le defaut du tiers.
+          restorePayeeMemory(queryClient, tx, categoryId, memoryBefore)
+        },
+        links,
+        duration: links.length > 0 ? 6500 : 5000,
       })
+      // Apres le toast : il a lu l'etat d'avant (memoire de tiers, similaires).
+      // Echec : retour arriere discret, le toast d'erreur global prend le relais.
+      categorize.mutate({ txId, categoryId }, { onError: () => dropFeedback(toastKey) })
     },
-    [categoryById, txs, isUncat],
+    [categoryById, queryClient, txs, isUncat, categorizeMany, categorize, openCreateRule],
   )
-  const applyToast = () => {
-    if (!toast) return
+
+  // ---------------------------------------------------------------------------
+  // Detail d'une ligne
+  // ---------------------------------------------------------------------------
+
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const openDetail = useCallback((row: TxRow) => setDetailId(row.tx.id), [])
+  const closeDetail = useCallback(() => setDetailId(null), [])
+
+  const listActions = useMemo<TxListActions>(
+    () => ({ categorizeRow, openDetail, openCreateRule, singleAccount: accountFilter !== 'all' }),
+    [categorizeRow, openDetail, openCreateRule, accountFilter],
+  )
+
+  // ---------------------------------------------------------------------------
+  // Selection multiple (cases desktop, appui long mobile)
+  // ---------------------------------------------------------------------------
+
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
+  const setMany = useCallback((ids: string[], value: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) {
+        if (value) next.add(id)
+        else next.delete(id)
+      }
+      return next
+    })
+  }, [])
+  const clearSelection = useCallback(() => setSelected(new Set()), [])
+  const toggleRow = useCallback(
+    (row: TxRow) => {
+      if (!canSelect(row)) return
+      haptic(6)
+      setMany([row.tx.id], !selectedRef.current.has(row.tx.id))
+    },
+    [setMany],
+  )
+  const enterSelect = useCallback(
+    (row: TxRow) => {
+      if (!canSelect(row)) return
+      haptic(15)
+      setMany([row.tx.id], true)
+    },
+    [setMany],
+  )
+
+  // Les lignes qui quittent la liste (filtre, categorisation sous « À
+  // catégoriser », suppression) quittent aussi la selection.
+  useEffect(() => {
+    const visible = new Set(rows.map((r) => r.tx.id))
+    if ([...selectedRef.current].some((id) => !visible.has(id))) {
+      setSelected((prev) => new Set([...prev].filter((id) => visible.has(id))))
+    }
+  }, [rows])
+
+  useEffect(() => {
+    if (selected.size === 0) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') clearSelection()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected.size, clearSelection])
+
+  const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.tx.id)), [rows, selected])
+  // « Sélectionner les similaires » : lignes a categoriser des memes tiers.
+  const similarIds = useMemo(() => {
+    if (selectedRows.length === 0) return []
+    const keys = new Set(selectedRows.map((r) => payeeKey(r.tx.label)).filter(Boolean))
+    if (keys.size === 0) return []
+    return rows
+      .filter((r) => !selected.has(r.tx.id) && r.uncategorized && canSelect(r) && keys.has(payeeKey(r.tx.label)))
+      .map((r) => r.tx.id)
+  }, [rows, selectedRows, selected])
+
+  const categorizeSelection = (categoryId: string | null) => {
+    const targets = selectedRows.filter(canSelect)
+    if (targets.length === 0) return
     haptic([10, 30, 10])
-    categorizeMany.mutate({ txIds: toast.similarIds, categoryId: toast.categoryId })
-    setToast(null)
-  }
-  const openRuleFromToast = () => {
-    if (!toast) return
-    setRuleDialog({ value: ruleValueFromLabel(toast.rawLabel), categoryId: toast.categoryId })
-    setToast(null)
+    const previous = new Map(targets.map((r) => [r.tx.id, r.tx.categoryId]))
+    clearSelection()
+    const n = targets.length
+    const category = categoryId ? categoryById.get(categoryId) : undefined
+    const toastKey = showFeedback({
+      message: category
+        ? `${n} ${plural(n, 'transaction catégorisée', 'transactions catégorisées')}`
+        : `${n} ${plural(n, 'transaction remise', 'transactions remises')} à catégoriser`,
+      description: category ? `Dans ${category.name}` : undefined,
+      icon: 'check',
+      // Chaque ligne retrouve SA categorie d'avant (un appel par categorie).
+      undo: () => {
+        const byPrevious = new Map<string | null, string[]>()
+        for (const [id, prev] of previous) byPrevious.set(prev, [...(byPrevious.get(prev) ?? []), id])
+        for (const [prev, ids] of byPrevious) categorizeMany.mutate({ txIds: ids, categoryId: prev })
+      },
+    })
+    categorizeMany.mutate({ txIds: [...previous.keys()], categoryId }, { onError: () => dropFeedback(toastKey) })
   }
 
-  // Filtres mobile : chips + feuille basse (memes variables d'etat que la
-  // barre desktop, qui reste inchangee).
+  // ---------------------------------------------------------------------------
+  // Categorisation automatique (regles)
+  // ---------------------------------------------------------------------------
+
+  const { data: rules } = useRules()
+  const applyRules = useApplyRules()
+  const ruleCount = rules?.length ?? 0
+
+  // Filtres mobile : puces + feuille basse (memes etats que la barre desktop).
   const [filtersOpen, setFiltersOpen] = useState(false)
   const sheetFilterCount =
     (accountFilter !== 'all' ? 1 : 0) + (categoryFilter !== 'all' ? 1 : 0) + (monthFilter !== 'all' ? 1 : 0)
   const isAllChip = !onlyUncat && sheetFilterCount === 0
-  const chipClass = (active: boolean) =>
-    cn(
-      'flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-[13px] font-medium transition-colors',
-      active ? 'border-accent/40 bg-accent/10 text-accent' : 'border-line bg-surface text-soft',
-    )
-
-  // Categorisation automatique : meme action que la page Regles, proposee ici
-  // parce que c'est ici qu'on constate le retard. Sans regle definie, l'action
-  // ne peut rien faire : on n'affiche alors pas la banniere du tout.
-  const { data: rules } = useRules()
-  const applyRules = useApplyRules()
-  const applied = applyRules.data
-  const ruleCount = rules?.length ?? 0
-  const showApplyBanner = ruleCount > 0 && (uncatCount > 0 || applyRules.isSuccess)
-  const applyTitle = applyRules.isError
-    ? 'La catégorisation automatique a échoué.'
-    : applyRules.isSuccess
-      ? applied === 0
-        ? 'Aucune transaction ne correspond à tes règles.'
-        : `${applied} transaction${applied === 1 ? '' : 's'} catégorisée${applied === 1 ? '' : 's'}.`
-      : `${uncatCount} transaction${uncatCount === 1 ? '' : 's'} à catégoriser`
-  const applySub = applyRules.isError
-    ? (applyRules.error?.message ?? 'Réessaie dans un instant.')
-    : applyRules.isSuccess && applied === 0
-      ? 'Ajuste tes règles dans Réglages, onglet Règles.'
-      : `${ruleCount} règle${ruleCount === 1 ? '' : 's'} de catégorisation active${ruleCount === 1 ? '' : 's'}, évaluées par ordre de priorité.`
-  // La banniere prend la couleur de son message : ambre tant qu'il reste du
-  // travail, vert quand des transactions viennent d'etre traitees, rouge en cas
-  // d'echec.
-  const applyTone = applyRules.isError
-    ? 'danger'
-    : applyRules.isSuccess && (applied ?? 0) > 0
-      ? 'success'
-      : 'warning'
 
   // Pagination : remise a la premiere page a chaque changement de filtre.
   const [page, setPage] = useState(0)
@@ -270,258 +506,285 @@ export function TransactionsPage() {
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount - 1)
 
+  // La barre de selection desktop occupe le bas : le toast se pose au-dessus.
+  const feedbackVisible = useFeedbackStore((s) => s.item !== null)
+
   if (!txs) return <TransactionsSkeleton />
 
+  const trierLink = uncatCount > 0 && (
+    <Link
+      to="/trier"
+      className={cn(
+        chipClass(false),
+        'bg-accent/15 font-semibold text-accent-ink shadow-none ring-accent/30 hover:bg-accent/20 hover:text-accent-ink dark:text-accent lg:h-10 lg:rounded-xl',
+      )}
+    >
+      Trier
+      <ArrowRight className="h-3.5 w-3.5" />
+    </Link>
+  )
+
+  const uncatBadge = uncatCount > 0 && (
+    <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-bold leading-none text-warning tnum">
+      {uncatCount}
+    </span>
+  )
+
   return (
-    <CategorizedContext.Provider value={onCategorized}>
-    <div className="space-y-4">
-      {/* Mobile : recherche pleine largeur + chips defilantes + feuille de filtres */}
-      <div className="space-y-2.5 lg:hidden">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-soft" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Rechercher un libellé, une catégorie…"
-            className="h-11 pl-10"
-          />
-        </div>
-        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <button
-            type="button"
-            onClick={() => {
-              setOnlyUncat(false)
-              setAccountFilter('all')
-              setCategoryFilter('all')
-              setMonthFilter('all')
-            }}
-            className={chipClass(isAllChip)}
-          >
-            Tout
-          </button>
-          <button type="button" onClick={() => setOnlyUncat((v) => !v)} className={chipClass(onlyUncat)}>
-            À catégoriser
-            {uncatCount > 0 && (
-              <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-bold text-warning tnum">
-                {uncatCount}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => setMonthFilter((m) => (m === currentMonth() ? 'all' : currentMonth()))}
-            className={chipClass(monthFilter === currentMonth())}
-          >
-            Ce mois
-          </button>
-          <button
-            type="button"
-            onClick={() => setFiltersOpen(true)}
-            className={chipClass(sheetFilterCount > 0)}
-            aria-haspopup="dialog"
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" />
-            Filtres
-            {sheetFilterCount > 0 && (
-              <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-[11px] font-bold text-accent tnum">
-                {sheetFilterCount}
-              </span>
-            )}
-          </button>
-          {hasFilters && (
-            <button type="button" onClick={clearFilters} className={chipClass(false)} aria-label="Effacer les filtres">
-              <X className="h-3.5 w-3.5" />
-              Effacer
+    <TxListContext.Provider value={listActions}>
+      <div className="space-y-4">
+        {/* Mobile : recherche pleine largeur + puces defilantes + feuille de filtres */}
+        <div className="space-y-3 lg:hidden">
+          <SearchField value={search} onChange={setSearch} />
+          <div className="-mx-4 flex gap-2 overflow-x-auto px-4 py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <button
+              type="button"
+              onClick={() => {
+                setOnlyUncat(false)
+                setAccountFilter('all')
+                setCategoryFilter('all')
+                setMonthFilter('all')
+              }}
+              className={chipClass(isAllChip)}
+              aria-pressed={isAllChip}
+            >
+              Tout
             </button>
-          )}
-        </div>
-        <MobileFiltersSheet
-          open={filtersOpen}
-          onOpenChange={setFiltersOpen}
-          categoryOptions={categoryOptions}
-          accountOptions={accountOptions}
-          categoryFilter={categoryFilter}
-          onCategoryChange={setCategoryFilter}
-          accountFilter={accountFilter}
-          onAccountChange={setAccountFilter}
-          monthFilter={monthFilter}
-          onMonthChange={setMonthFilter}
-          monthMin={monthBounds.min}
-          monthMax={monthBounds.max}
-          hasFilters={hasFilters}
-          onClear={clearFilters}
-        />
-      </div>
-
-      {/* Desktop : barre de filtres inchangee */}
-      <div className="hidden flex-wrap items-center gap-2.5 lg:flex">
-        <div className="relative min-w-[180px] flex-1">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-soft" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Rechercher un libellé, une catégorie…"
-            className="pl-10"
-          />
-        </div>
-        <Combobox
-          options={categoryOptions}
-          value={categoryFilter}
-          onChange={setCategoryFilter}
-          placeholder="Toutes les catégories"
-          searchPlaceholder="Rechercher une catégorie…"
-          className="w-48"
-          aria-label="Filtrer par catégorie"
-        />
-        <Combobox
-          options={accountOptions}
-          value={accountFilter}
-          onChange={setAccountFilter}
-          placeholder="Tous les comptes"
-          searchPlaceholder="Rechercher un compte…"
-          className="w-44"
-          aria-label="Filtrer par compte"
-        />
-        <MonthPicker
-          value={monthFilter}
-          onChange={setMonthFilter}
-          min={monthBounds.min}
-          max={monthBounds.max}
-          allowAll
-          className="w-40"
-          aria-label="Filtrer par mois"
-        />
-        <button
-          onClick={() => setOnlyUncat((v) => !v)}
-          className={cn(
-            'flex h-10 items-center gap-2 rounded-xl border px-3.5 text-[13px] font-medium transition-colors',
-            onlyUncat
-              ? 'border-warning/40 bg-warning/10 text-warning'
-              : 'border-line bg-surface text-soft hover:text-ink',
-          )}
-        >
-          À catégoriser
-          {uncatCount > 0 && (
-            <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-bold text-warning tnum">
-              {uncatCount}
-            </span>
-          )}
-        </button>
-        {hasFilters && (
-          <button
-            onClick={clearFilters}
-            className="flex h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-3.5 text-[13px] font-medium text-soft transition-colors hover:text-ink"
-          >
-            <X className="h-3.5 w-3.5" />
-            Effacer les filtres
-          </button>
-        )}
-        <Button onClick={() => setAddTxOpen(true)} className="hidden lg:inline-flex">
-          <Plus className="h-4 w-4" />
-          Ajouter
-        </Button>
-      </div>
-
-      {showApplyBanner && (
-        <Card
-          className={cn(
-            'flex flex-wrap items-center gap-x-3.5 gap-y-3 px-4 py-3.5',
-            applyTone === 'danger' && 'border-danger/30 bg-danger/[0.06]',
-            applyTone === 'success' && 'border-success/30 bg-success/[0.06]',
-            applyTone === 'warning' && 'border-warning/30 bg-warning/[0.06]',
-          )}
-        >
-          <span
-            className={cn(
-              'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
-              applyTone === 'danger' && 'bg-danger/15 text-danger',
-              applyTone === 'success' && 'bg-success/15 text-success',
-              applyTone === 'warning' && 'bg-warning/15 text-warning',
+            <button
+              type="button"
+              onClick={() => setOnlyUncat((v) => !v)}
+              className={chipClass(onlyUncat)}
+              aria-pressed={onlyUncat}
+            >
+              À catégoriser
+              {uncatBadge}
+            </button>
+            {trierLink}
+            <button
+              type="button"
+              onClick={() => setMonthFilter((m) => (m === currentMonth() ? 'all' : currentMonth()))}
+              className={chipClass(monthFilter === currentMonth())}
+              aria-pressed={monthFilter === currentMonth()}
+            >
+              Ce mois
+            </button>
+            <button
+              type="button"
+              onClick={() => setFiltersOpen(true)}
+              className={chipClass(sheetFilterCount > 0)}
+              aria-haspopup="dialog"
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Filtres
+              {sheetFilterCount > 0 && (
+                <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-[11px] font-bold leading-none tnum">
+                  {sheetFilterCount}
+                </span>
+              )}
+            </button>
+            {hasFilters && (
+              <button type="button" onClick={clearFilters} className={chipClass(false)} aria-label="Effacer les filtres">
+                <X className="h-3.5 w-3.5" />
+                Effacer
+              </button>
             )}
-          >
-            <Wand2 className="h-[18px] w-[18px]" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[14px] font-medium text-ink">{applyTitle}</p>
-            <p className="text-[13px] leading-snug text-soft">{applySub}</p>
           </div>
-          <Button
-            onClick={() => applyRules.mutate()}
-            disabled={applyRules.isPending || uncatCount === 0}
-            className="w-full shrink-0 sm:w-auto"
-          >
-            <Wand2 className="h-4 w-4" />
-            {applyRules.isPending ? 'Catégorisation…' : 'Catégoriser automatiquement'}
-          </Button>
-        </Card>
-      )}
-
-      {rows.length === 0 ? (
-        <Card>
-          <EmptyState
-            icon={Inbox}
-            title="Aucune transaction"
-            description={
-              onlyUncat
-                ? 'Tout est catégorisé. Bravo, rien ne traîne.'
-                : 'Aucune transaction ne correspond à ces filtres.'
-            }
-            actionLabel="Ajouter une transaction"
-            onAction={() => setAddTxOpen(true)}
+          {hasFilters && rows.length > 0 && <FilteredSummary rows={rows} className="px-1" />}
+          <MobileFiltersSheet
+            open={filtersOpen}
+            onOpenChange={setFiltersOpen}
+            categoryOptions={categoryOptions}
+            accountOptions={accountOptions}
+            categoryFilter={categoryFilter}
+            onCategoryChange={setCategoryFilter}
+            accountFilter={accountFilter}
+            onAccountChange={setAccountFilter}
+            monthFilter={monthFilter}
+            onMonthChange={setMonthFilter}
+            monthMin={monthBounds.min}
+            monthMax={monthBounds.max}
+            hasFilters={hasFilters}
+            onClear={clearFilters}
+            resultCount={rows.length}
           />
-        </Card>
-      ) : (
-        <>
-          {/* Un seul arbre monte : les deux (table + liste) coutaient une
-              centaine de pickers et de mesures clavier sur telephone. */}
-          {isDesktop ? (
-            <DesktopTable rows={rows} page={safePage} />
-          ) : (
-            <MobileList rows={rows} resetKey={filtersKey} />
-          )}
-          {pageCount > 1 && (
-            <div className="hidden items-center justify-between gap-3 px-1 lg:flex">
-              <p className="text-[12.5px] text-soft tnum">
-                {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, rows.length)} sur{' '}
-                {rows.length}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  className="h-10 px-3.5"
-                  onClick={() => setPage(Math.max(0, safePage - 1))}
-                  disabled={safePage === 0}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  Précédent
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-10 px-3.5"
-                  onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
-                  disabled={safePage >= pageCount - 1}
-                >
-                  Suivant
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
+        </div>
+
+        {/* Desktop : recherche + ajout, puis filtres et resume de la liste */}
+        <div className="hidden space-y-3 lg:block">
+          <div className="flex items-center gap-3">
+            <SearchField value={search} onChange={setSearch} className="flex-1" />
+            <Button onClick={() => setAddTxOpen(true)} className="h-11">
+              <Plus className="h-4 w-4" />
+              Ajouter
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Combobox
+              options={categoryOptions}
+              value={categoryFilter}
+              onChange={setCategoryFilter}
+              placeholder="Toutes les catégories"
+              searchPlaceholder="Rechercher une catégorie…"
+              className="w-52"
+              aria-label="Filtrer par catégorie"
+            />
+            <Combobox
+              options={accountOptions}
+              value={accountFilter}
+              onChange={setAccountFilter}
+              placeholder="Tous les comptes"
+              searchPlaceholder="Rechercher un compte…"
+              className="w-48"
+              aria-label="Filtrer par compte"
+            />
+            <MonthPicker
+              value={monthFilter}
+              onChange={setMonthFilter}
+              min={monthBounds.min}
+              max={monthBounds.max}
+              allowAll
+              className="w-44"
+              aria-label="Filtrer par mois"
+            />
+            <button
+              type="button"
+              onClick={() => setOnlyUncat((v) => !v)}
+              aria-pressed={onlyUncat}
+              className={cn(chipClass(onlyUncat), 'rounded-xl')}
+            >
+              À catégoriser
+              {uncatBadge}
+            </button>
+            {trierLink}
+            {hasFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className={cn(chipClass(false), 'rounded-xl bg-transparent shadow-none ring-transparent')}
+              >
+                <X className="h-3.5 w-3.5" />
+                Effacer les filtres
+              </button>
+            )}
+          </div>
+          {hasFilters && rows.length > 0 && <FilteredSummary rows={rows} className="px-1" />}
+        </div>
+
+        <TriageBanner
+          uncatCount={uncatCount}
+          ruleCount={ruleCount}
+          applying={applyRules.isPending}
+          applied={applyRules.isSuccess ? (applyRules.data ?? 0) : null}
+          applyError={applyRules.isError ? (applyRules.error?.message ?? 'Réessaie dans un instant.') : null}
+          onApplyRules={() => applyRules.mutate()}
+        />
+
+        {rows.length === 0 ? (
+          <Card>
+            {txs.length === 0 ? (
+              <EmptyState
+                icon={ReceiptText}
+                title="Aucune transaction pour l’instant"
+                description="Ajoute ta première dépense, ou connecte ta banque dans les réglages pour les importer."
+                actionLabel="Ajouter une transaction"
+                onAction={() => setAddTxOpen(true)}
+              />
+            ) : onlyUncat && !search && sheetFilterCount === 0 ? (
+              <EmptyState
+                icon={CheckCheck}
+                tone="success"
+                title="Tout est catégorisé"
+                description="Rien ne traîne : ton budget est à jour."
+                actionLabel="Voir toutes les transactions"
+                onAction={clearFilters}
+              />
+            ) : (
+              <EmptyState
+                icon={SearchX}
+                title="Aucun résultat"
+                description="Aucune transaction ne correspond à ces filtres."
+                actionLabel="Effacer les filtres"
+                onAction={clearFilters}
+              />
+            )}
+          </Card>
+        ) : (
+          <>
+            {/* Un seul arbre monte : les deux (table + liste) coutaient une
+                centaine de pickers et de mesures clavier sur telephone. */}
+            {isDesktop ? (
+              <DesktopTable
+                rows={rows}
+                page={safePage}
+                selected={selected}
+                onSetMany={setMany}
+                hideAccount={accountFilter !== 'all'}
+              />
+            ) : (
+              <MobileList
+                rows={rows}
+                resetKey={filtersKey}
+                selected={selected}
+                onLongPress={enterSelect}
+                onToggle={toggleRow}
+              />
+            )}
+            {isDesktop && pageCount > 1 && (
+              <div className="flex items-center justify-between gap-3 px-1">
+                <p className="text-[13px] text-soft tnum">
+                  {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, rows.length)} sur {rows.length}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    className="px-3.5"
+                    onClick={() => setPage(Math.max(0, safePage - 1))}
+                    disabled={safePage === 0}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Précédent
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="px-3.5"
+                    onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
+                    disabled={safePage >= pageCount - 1}
+                  >
+                    Suivant
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-            </div>
-          )}
-        </>
-      )}
-      <CategorizeToast
-        data={toast}
-        onApply={applyToast}
-        onCreateRule={openRuleFromToast}
-        onDismiss={dismissToast}
-      />
-      <CreateRuleDialog
-        open={ruleDialog !== null}
-        onOpenChange={(open) => !open && setRuleDialog(null)}
-        initialValue={ruleDialog?.value ?? ''}
-        initialCategoryId={ruleDialog?.categoryId}
-      />
-    </div>
-    </CategorizedContext.Provider>
+            )}
+          </>
+        )}
+
+        {selected.size > 0 && (
+          <SelectionBar
+            variant={isDesktop ? 'desktop' : 'mobile'}
+            count={selected.size}
+            total={selectedRows.reduce((s, r) => s + r.tx.amount, 0)}
+            label={selectedRows[0]?.tx.label}
+            includeIncome={selectedRows.some((r) => r.tx.amount > 0)}
+            similarCount={similarIds.length}
+            onCategorize={categorizeSelection}
+            onSelectSimilar={() => {
+              haptic(8)
+              setMany(similarIds, true)
+            }}
+            onClear={clearSelection}
+          />
+        )}
+
+        <TxToast bottomInset={isDesktop && selected.size > 0 && feedbackVisible ? 64 : 0} />
+        <TransactionDetail txId={detailId} onClose={closeDetail} />
+        <CreateRuleDialog
+          open={ruleDialog !== null}
+          onOpenChange={(open) => !open && setRuleDialog(null)}
+          initialValue={ruleDialog?.value ?? ''}
+          initialCategoryId={ruleDialog?.categoryId}
+        />
+      </div>
+    </TxListContext.Provider>
   )
 }

@@ -1,11 +1,15 @@
-// Categorisation en lot (toast « Appliquer aux N autres », selection multiple
-// mobile) : optimiste ligne par ligne via applyCategorizeOptimistic, puis UN
-// seul appel reseau categorizeMany. Rollback complet en cas d'echec.
+// Categorisation en lot (toast « Appliquer aux N autres », selection multiple) :
+// optimiste en une ecriture du cache (applyCategorizeManyOptimistic), puis UN
+// seul appel reseau categorizeMany. Retour cible en cas d'echec : seules les
+// categories posees par ce lot sont retirees.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import type { Transaction } from '@/types/domain'
-import { apiCategorizeMany, patchUncategorizedCount } from '@/lib/data'
-import { applyCategorizeOptimistic, scheduleBudgetRefetch } from '@/lib/categorize'
+import { apiCategorizeMany } from '@/lib/data'
+import {
+  applyCategorizeManyOptimistic,
+  revertCategorizeOptimistic,
+  scheduleBudgetRefetch,
+} from '@/lib/categorize'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 
 export interface CategorizeManyVars {
@@ -14,7 +18,7 @@ export interface CategorizeManyVars {
 }
 
 // Limite serveur : au-dela, on tronque (le cache optimiste suit la meme borne).
-const MAX_IDS = 200
+export const CATEGORIZE_MANY_MAX = 200
 
 export function useCategorizeMany() {
   const queryClient = useQueryClient()
@@ -23,23 +27,17 @@ export function useCategorizeMany() {
       enqueue(
         () =>
           apiCategorizeMany(
-            txIds.slice(0, MAX_IDS),
+            txIds.slice(0, CATEGORIZE_MANY_MAX).map(resolveId),
             categoryId === null ? null : resolveId(categoryId),
           ),
         { deps: categoryId === null ? [] : [categoryId] },
       ),
     onMutate: async ({ txIds, categoryId }) => {
       await queryClient.cancelQueries({ queryKey: ['transactions'] })
-      const snapshot = queryClient.getQueryData<Transaction[]>(['transactions'])
-      let countDelta = 0
-      for (const txId of txIds.slice(0, MAX_IDS)) {
-        countDelta += applyCategorizeOptimistic(queryClient, { txId, categoryId }).countDelta
-      }
-      return { snapshot, countDelta }
+      return applyCategorizeManyOptimistic(queryClient, txIds.slice(0, CATEGORIZE_MANY_MAX), categoryId)
     },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.snapshot) queryClient.setQueryData(['transactions'], ctx.snapshot)
-      if (ctx?.countDelta) patchUncategorizedCount(queryClient, -ctx.countDelta)
+    onError: (_err, _vars, contexts) => {
+      if (contexts) revertCategorizeOptimistic(queryClient, contexts)
     },
     // Liste et badge deja exacts ; refetch cible et coalesce du budget.
     onSuccess: () => scheduleBudgetRefetch(queryClient),
