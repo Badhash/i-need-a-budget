@@ -14,6 +14,15 @@ interface SignedAmountInputProps {
   className?: string
   inputClassName?: string
   autoFocus?: boolean
+  /** md = champ standard ; lg = saisie mise en avant (ajustement, solde d'ouverture). */
+  size?: 'md' | 'lg'
+  /** Saisie refusee : bordure et halo d'erreur, aria-invalid. */
+  invalid?: boolean
+  /** Touche Entree : valide le formulaire parent. */
+  onEnter?: () => void
+  id?: string
+  'aria-label'?: string
+  'aria-describedby'?: string
 }
 
 export function SignedAmountInput({
@@ -23,13 +32,21 @@ export function SignedAmountInput({
   className,
   inputClassName,
   autoFocus,
+  size = 'md',
+  invalid = false,
+  onEnter,
+  id,
+  'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
 }: SignedAmountInputProps) {
   const negative = value.trim().startsWith('-')
+  const lg = size === 'lg'
   const toggle = () => {
     const trimmed = value.trim()
     if (negative) onChange(trimmed.replace(/^-\s*/, ''))
     else onChange('-' + trimmed.replace(/^\+\s*/, ''))
   }
+  const SignIcon = negative ? Minus : Plus
   return (
     <div className={cn('flex gap-2', className)}>
       <button
@@ -38,22 +55,45 @@ export function SignedAmountInput({
         aria-label={negative ? 'Rendre le montant positif' : 'Rendre le montant négatif'}
         title={negative ? 'Montant négatif (toucher pour positif)' : 'Montant positif (toucher pour négatif)'}
         className={cn(
-          'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border text-[15px] font-semibold transition-colors lg:h-10 lg:w-10',
-          negative
-            ? 'border-danger/40 bg-danger/10 text-danger'
-            : 'border-line bg-surface text-soft hover:text-ink',
+          'flex shrink-0 items-center justify-center rounded-xl border font-semibold transition-[background-color,border-color,color,transform] duration-150 ease-spring active:scale-95',
+          lg ? 'h-14 w-14 text-[17px]' : 'h-11 w-11 text-[15px] lg:h-10 lg:w-10',
+          negative ? 'border-danger/40 bg-danger/10 text-danger' : 'border-line bg-surface text-soft hover:text-ink',
         )}
       >
-        {negative ? <Minus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+        <SignIcon className={lg ? 'h-5 w-5' : 'h-4 w-4'} />
       </button>
-      <Input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        inputMode="decimal"
-        autoFocus={autoFocus}
-        className={cn('flex-1 text-right tnum', inputClassName)}
-      />
+      <div className="relative min-w-0 flex-1">
+        <Input
+          id={id}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && onEnter) {
+              e.preventDefault()
+              onEnter()
+            }
+          }}
+          placeholder={placeholder}
+          inputMode="decimal"
+          autoComplete="off"
+          autoFocus={autoFocus}
+          aria-label={ariaLabel}
+          aria-describedby={ariaDescribedBy}
+          aria-invalid={invalid || undefined}
+          className={cn(
+            'text-right tnum',
+            lg && 'h-14 pr-9 text-[26px] font-semibold tracking-tight lg:h-14 lg:text-[26px]',
+            negative && lg && 'text-danger',
+            invalid && 'border-danger/60 hover:border-danger/60 focus:border-danger/70 focus:ring-danger/15',
+            inputClassName,
+          )}
+        />
+        {lg && (
+          <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[18px] font-medium text-soft">
+            €
+          </span>
+        )}
+      </div>
     </div>
   )
 }

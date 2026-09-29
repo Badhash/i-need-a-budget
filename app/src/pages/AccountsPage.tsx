@@ -1,502 +1,275 @@
-import { useEffect, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
-import { CreditCard, Landmark, Pencil, Plus, Sprout, TrendingUp, Wallet, type LucideIcon } from 'lucide-react'
-import type { AccountKind } from '@/types/domain'
-import {
-  apiAddTransaction,
-  apiCreateAccount,
-  apiDeleteAccount,
-  apiUpdateAccount,
-  useAccounts,
-  type AccountWithBalance,
-} from '@/lib/data'
-import { evalAmountCents, fmtEUR, MIN_MONTH, today } from '@/lib/format'
+import { useCallback, useMemo, useState } from 'react'
+import { Archive, ChevronDown, Landmark, Plus } from 'lucide-react'
+import { latestAccountId, useSetAccountFlags } from '@/lib/accounts'
+import type { AccountStats } from '@/lib/accounts'
+import { useAccounts, useServerFeatures, type AccountWithBalance } from '@/lib/data'
 import { useBankConnections } from '@/lib/bank'
-import { SyncHealth } from '@/components/settings/SyncHealth'
-import { Amount } from '@/components/shared/Amount'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { SignedAmountInput } from '@/components/shared/SignedAmountInput'
-import { Select } from '@/components/ui/select'
+import { toast } from '@/lib/toast'
+import { useIsDesktop } from '@/hooks/useIsDesktop'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { SectionHeader } from '@/components/shared/SectionHeader'
 import { Skeleton } from '@/components/ui/skeleton'
-
-const KIND_META: Record<AccountKind, { icon: LucideIcon; label: string }> = {
-  checking: { icon: Wallet, label: 'Compte courant' },
-  savings: { icon: Sprout, label: 'Épargne' },
-  investment: { icon: TrendingUp, label: 'Investissement' },
-  card_deferred: { icon: CreditCard, label: 'Carte à débit différé' },
-}
-
-function AccountCard({
-  account,
-  onEdit,
-}: {
-  account: AccountWithBalance
-  onEdit: (account: AccountWithBalance) => void
-}) {
-  const meta = KIND_META[account.kind]
-  const Icon = meta.icon
-  return (
-    // Bouton Modifier integre dans la carte (pas d'imbrication de zones
-    // cliquables) : le Link couvre la zone icone + libelle + montant, le crayon
-    // reste un bouton distinct a droite.
-    <Card className="flex items-center gap-2 p-5">
-      <Link
-        to="/transactions"
-        search={{ compte: account.id }}
-        className="flex min-w-0 flex-1 items-center gap-4 rounded-xl transition-opacity hover:opacity-80"
-        aria-label={`Voir les transactions de ${account.name}`}
-      >
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
-          <Icon className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="truncate font-semibold">{account.name}</p>
-            {!account.onBudget && <Badge variant="neutral">Hors budget</Badge>}
-          </div>
-          <p className="text-[12.5px] text-soft">
-            {account.institution} · {meta.label}
-          </p>
-        </div>
-        <Amount cents={account.balance} className="shrink-0 text-[18px] font-semibold" colored={account.balance < 0} />
-      </Link>
-      <button
-        type="button"
-        onClick={() => onEdit(account)}
-        aria-label={`Modifier ${account.name}`}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-soft transition-colors hover:bg-surface2 hover:text-ink"
-      >
-        <Pencil className="h-4 w-4" />
-      </button>
-    </Card>
-  )
-}
-
-/** Dialog d'edition d'un compte : nom, etablissement, type (le flag budget et le
- * solde d'ouverture ne se modifient pas ici, ils impacteraient le RTA). */
-function EditAccountDialog({
-  account,
-  onOpenChange,
-}: {
-  account: AccountWithBalance | null
-  onOpenChange: (o: boolean) => void
-}) {
-  const queryClient = useQueryClient()
-  const [name, setName] = useState('')
-  const [institution, setInstitution] = useState('')
-  const [kind, setKind] = useState<AccountKind>('checking')
-  const [error, setError] = useState<string | null>(null)
-  const [targetBalance, setTargetBalance] = useState('')
-  const [confirmDelete, setConfirmDelete] = useState(false)
-
-  useEffect(() => {
-    if (account) {
-      setName(account.name)
-      setInstitution(account.institution)
-      setKind(account.kind)
-      setError(null)
-      setTargetBalance('')
-      setConfirmDelete(false)
-    }
-  }, [account])
-
-  const invalidateAll = () =>
-    Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
-      queryClient.invalidateQueries({ queryKey: ['transactions'] }),
-      queryClient.invalidateQueries({ queryKey: ['reports'] }),
-      queryClient.invalidateQueries({ queryKey: ['budget'] }),
-    ])
-
-  const adjust = useMutation({
-    mutationFn: async () => {
-      if (!account) return
-      const cents = parseEuros(targetBalance)
-      if (cents === null) throw new Error('invalid')
-      const delta = cents - account.balance
-      if (delta === 0) return
-      await apiAddTransaction({
-        accountId: account.id,
-        date: today(),
-        label: 'Ajustement de solde',
-        categoryId: null,
-        amount: delta,
-      })
-    },
-    onSuccess: async () => {
-      await invalidateAll()
-      onOpenChange(false)
-    },
-    // La validation de saisie se fait AVANT mutate : ici c'est forcement le
-    // reseau/serveur, ne pas accuser la saisie.
-    onError: () => setError("Ajustement impossible pour le moment. Réessayez."),
-  })
-
-  const remove = useMutation({
-    mutationFn: async () => {
-      if (!account) return
-      await apiDeleteAccount(account.id)
-    },
-    onSuccess: async () => {
-      await invalidateAll()
-      onOpenChange(false)
-    },
-    onError: () => setError('Suppression impossible pour le moment. Réessayez.'),
-  })
-
-  const update = useMutation({
-    mutationFn: apiUpdateAccount,
-    onSuccess: async () => {
-      // Les metadonnees du compte vivent dans le bootstrap (taxonomie + soldes).
-      await queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
-      onOpenChange(false)
-    },
-    onError: () => setError('Modification impossible pour le moment. Réessayez.'),
-  })
-
-  const submit = () => {
-    if (!account) return
-    if (!name.trim() || !institution.trim()) {
-      setError('Renseignez le nom du compte et la banque.')
-      return
-    }
-    setError(null)
-    update.mutate({ accountId: account.id, name: name.trim(), institution: institution.trim(), kind })
-  }
-
-  return (
-    <Dialog open={account !== null} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Modifier le compte</DialogTitle>
-          <DialogDescription>
-            Modifiez le nom, la banque ou le type du compte. Le solde d'ouverture et l'inclusion
-            dans le budget ne se changent pas ici.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 overflow-y-auto p-5 pt-2">
-          <div>
-            <label className="label-caps mb-1.5 block">Nom du compte</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Carte World Elite" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label-caps mb-1.5 block">Banque</label>
-              <Input
-                value={institution}
-                onChange={(e) => setInstitution(e.target.value)}
-                placeholder="Ma banque"
-              />
-            </div>
-            <div>
-              <label className="label-caps mb-1.5 block">Type</label>
-              <Select value={kind} onChange={(e) => setKind(e.target.value as AccountKind)}>
-                <option value="checking">Compte courant</option>
-                <option value="savings">Épargne</option>
-                <option value="investment">Investissement</option>
-                <option value="card_deferred">Carte à débit différé</option>
-              </Select>
-            </div>
-          </div>
-          {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
-          <Button className="w-full" onClick={submit} disabled={update.isPending}>
-            {update.isPending ? 'Enregistrement…' : 'Enregistrer'}
-          </Button>
-
-          <div className="space-y-3 border-t border-line pt-4">
-            <div>
-              <p className="label-caps">Ajuster le solde</p>
-              <p className="mt-1 text-[13px] text-soft">
-                Solde actuel : {account ? fmtEUR(account.balance) : ''}. Saisissez le solde réel :
-                une transaction « Ajustement de solde » de la différence est créée (à catégoriser).
-              </p>
-            </div>
-            <div className="flex gap-3">
-              <SignedAmountInput
-                value={targetBalance}
-                onChange={setTargetBalance}
-                placeholder="350,00"
-                className="flex-1"
-              />
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  if (!targetBalance.trim() || parseEuros(targetBalance) === null) {
-                    setError('Saisissez un solde valide, par exemple -1234,56.')
-                    return
-                  }
-                  setError(null)
-                  adjust.mutate()
-                }}
-                disabled={adjust.isPending}
-              >
-                {adjust.isPending ? 'Ajustement…' : 'Ajuster'}
-              </Button>
-            </div>
-          </div>
-
-          <div className="space-y-3 border-t border-line pt-4">
-            <div>
-              <p className="label-caps text-danger">Supprimer le compte</p>
-              <p className="mt-1 text-[13px] text-soft">
-                Supprime définitivement le compte et TOUTES ses transactions. Les virements liés
-                sur les autres comptes sont conservés (déliés, à recatégoriser).
-              </p>
-            </div>
-            {!confirmDelete ? (
-              <Button variant="secondary" className="w-full text-danger" onClick={() => setConfirmDelete(true)}>
-                Supprimer ce compte…
-              </Button>
-            ) : (
-              <div className="flex gap-3">
-                <Button variant="secondary" className="flex-1" onClick={() => setConfirmDelete(false)}>
-                  Annuler
-                </Button>
-                <Button
-                  className="flex-1 bg-danger text-white hover:bg-danger/90"
-                  onClick={() => remove.mutate()}
-                  disabled={remove.isPending}
-                >
-                  {remove.isPending ? 'Suppression…' : 'Confirmer la suppression'}
-                </Button>
-              </div>
-            )}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// Meme borne basse que le selecteur de mois (MIN_MONTH) : un solde d'ouverture
-// ne doit pas tomber dans un mois que l'app ne sait pas afficher.
-const MIN_DATE = `${MIN_MONTH}-01`
-
-// Parser strict partage : « 1.234,56 » est rejete (au lieu de 1,23 € via
-// parseFloat), le negatif reste autorise (encours de carte a debit differe).
-function parseEuros(raw: string): number | null {
-  if (!raw.trim()) return 0
-  return evalAmountCents(raw)
-}
-
-/** Dialog de creation de compte (hors onboarding) : type carte a debit differe inclus. */
-function AddAccountDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const queryClient = useQueryClient()
-  const [name, setName] = useState('')
-  const [institution, setInstitution] = useState('')
-  const [kind, setKind] = useState<AccountKind>('checking')
-  const [onBudget, setOnBudget] = useState(true)
-  const [balance, setBalance] = useState('')
-  const [openingDate, setOpeningDate] = useState(today())
-  const [error, setError] = useState<string | null>(null)
-
-  const create = useMutation({
-    mutationFn: apiCreateAccount,
-    onSuccess: async () => {
-      // Creer un compte (avec son solde d'ouverture) touche la taxonomie et les
-      // soldes (bootstrap), la liste des transactions, les agregats (reports) et
-      // le budget (RTA si compte on-budget).
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
-        queryClient.invalidateQueries({ queryKey: ['transactions'] }),
-        queryClient.invalidateQueries({ queryKey: ['reports'] }),
-        queryClient.invalidateQueries({ queryKey: ['budget'] }),
-      ])
-      setName('')
-      setBalance('')
-      setError(null)
-      onOpenChange(false)
-    },
-    onError: () => setError('Création impossible pour le moment. Réessayez.'),
-  })
-
-  const submit = () => {
-    if (!name.trim() || !institution.trim()) {
-      setError('Renseignez le nom du compte et la banque.')
-      return
-    }
-    const cents = parseEuros(balance)
-    if (cents === null) {
-      setError('Saisissez un solde valide, par exemple 1234,56 (négatif autorisé pour une carte).')
-      return
-    }
-    if (openingDate < MIN_DATE || openingDate > today()) {
-      setError("La date d'ouverture doit être antérieure ou égale à aujourd'hui.")
-      return
-    }
-    setError(null)
-    create.mutate({
-      name: name.trim(),
-      institution: institution.trim(),
-      kind,
-      onBudget,
-      openingBalance: cents,
-      openingDate,
-    })
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Ajouter un compte</DialogTitle>
-          <DialogDescription>
-            Saisissez le solde actuel comme solde d'ouverture. Pour une carte à débit différé,
-            l'encours non prélevé (souvent négatif).
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 overflow-y-auto p-5 pt-2">
-          <div>
-            <label className="label-caps mb-1.5 block">Nom du compte</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Carte World Elite" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label-caps mb-1.5 block">Banque</label>
-              <Input
-                value={institution}
-                onChange={(e) => setInstitution(e.target.value)}
-                placeholder="Ma banque"
-              />
-            </div>
-            <div>
-              <label className="label-caps mb-1.5 block">Type</label>
-              <Select value={kind} onChange={(e) => setKind(e.target.value as AccountKind)}>
-                <option value="checking">Compte courant</option>
-                <option value="savings">Épargne</option>
-                <option value="investment">Investissement</option>
-                <option value="card_deferred">Carte à débit différé</option>
-              </Select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label-caps mb-1.5 block">Solde d'ouverture (€)</label>
-              <SignedAmountInput value={balance} onChange={setBalance} placeholder="0,00" />
-            </div>
-            <div>
-              <label className="label-caps mb-1.5 block">Date d'ouverture</label>
-              <Input
-                type="date"
-                value={openingDate}
-                min={MIN_DATE}
-                max={today()}
-                onChange={(e) => setOpeningDate(e.target.value)}
-              />
-            </div>
-          </div>
-          <label className="flex min-h-[44px] items-center gap-2.5 text-[14px]">
-            <input
-              type="checkbox"
-              checked={onBudget}
-              onChange={(e) => setOnBudget(e.target.checked)}
-              className="h-4 w-4 rounded"
-            />
-            Compte inclus dans le budget
-          </label>
-          {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
-          <Button className="w-full" onClick={submit} disabled={create.isPending}>
-            {create.isPending ? 'Création…' : 'Créer le compte'}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
+import {
+  AccountRow,
+  AccountTile,
+  ClosedAccountRow,
+  type AccountActions,
+  type LinkStatus,
+} from '@/components/accounts/AccountCard'
+import { AccountSheet, type SheetTarget } from '@/components/accounts/AccountSheet'
+import { quoted } from '@/components/accounts/accountKinds'
+import { AddAccountDialog } from '@/components/accounts/AddAccountDialog'
+import { NetWorthHero } from '@/components/accounts/NetWorthHero'
+import { SyncStrip } from '@/components/accounts/SyncStrip'
+import { useAccountStats } from '@/components/accounts/useAccountStats'
+import { cn } from '@/lib/utils'
 
 function AccountsSkeleton() {
   return (
-    <div className="space-y-4">
-      <Skeleton className="h-32 rounded-2xl" />
-      {Array.from({ length: 3 }).map((_, i) => (
-        <Skeleton key={i} className="h-[88px] rounded-2xl" />
-      ))}
+    <div className="space-y-8">
+      <Skeleton className="h-[188px] rounded-3xl lg:h-[164px]" />
+      <div className="space-y-3.5">
+        <Skeleton className="h-6 w-44" />
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-[84px] rounded-2xl lg:h-[164px]" />
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
 
+/** Tuile d'ajout en pointilles, en fin de liste de chaque section. */
+function AddTile({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex min-h-[60px] w-full items-center justify-center gap-2.5 rounded-2xl border border-dashed border-line px-4 text-[14px] font-medium text-soft transition-[border-color,background-color,color,transform] duration-150 ease-spring hover:border-accent/50 hover:bg-accent/[0.04] hover:text-accent-ink active:scale-[0.99] lg:min-h-[72px]"
+    >
+      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface2 transition-colors group-hover:bg-accent/10">
+        <Plus className="h-4 w-4" />
+      </span>
+      {label}
+    </button>
+  )
+}
+
+interface SectionProps {
+  title: string
+  description: string
+  accounts: AccountWithBalance[]
+  addLabel: string
+  onAdd: () => void
+  desktop: boolean
+  stats: Map<string, AccountStats> | null
+  linkOf: (id: string) => LinkStatus | undefined
+  flags: boolean
+  actions: AccountActions
+}
+
+function AccountSection({
+  title,
+  description,
+  accounts,
+  addLabel,
+  onAdd,
+  desktop,
+  stats,
+  linkOf,
+  flags,
+  actions,
+}: SectionProps) {
+  return (
+    <section className="space-y-3.5">
+      <SectionHeader title={title} description={description} />
+      <div className="stagger grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-4">
+        {accounts.map((account) =>
+          desktop ? (
+            <AccountTile
+              key={account.id}
+              account={account}
+              stats={stats?.get(account.id)}
+              link={linkOf(account.id)}
+              flags={flags}
+              actions={actions}
+            />
+          ) : (
+            <AccountRow
+              key={account.id}
+              account={account}
+              stats={stats?.get(account.id)}
+              link={linkOf(account.id)}
+              flags={flags}
+              actions={actions}
+            />
+          ),
+        )}
+        <AddTile label={addLabel} onClick={onAdd} />
+      </div>
+    </section>
+  )
+}
+
+function ClosedSection({
+  accounts,
+  desktop,
+  flags,
+  actions,
+}: {
+  accounts: AccountWithBalance[]
+  desktop: boolean
+  flags: boolean
+  actions: AccountActions
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <section className="space-y-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex min-h-[44px] w-full items-center gap-2.5 rounded-xl px-1 text-left text-soft transition-colors hover:text-ink"
+      >
+        <Archive className="h-4 w-4 shrink-0" />
+        <span className="text-[15px] font-semibold tracking-tight">Comptes clôturés</span>
+        <span className="rounded-full bg-surface2 px-2 py-px text-[12px] font-semibold tnum ring-1 ring-inset ring-line/60">
+          {accounts.length}
+        </span>
+        <ChevronDown
+          className={cn('ml-auto h-4 w-4 transition-transform duration-200 ease-spring', open && 'rotate-180')}
+        />
+      </button>
+      {open && (
+        <div className="animate-fade-up divide-y divide-line/60 overflow-hidden rounded-2xl border border-edge bg-surface shadow-card">
+          {accounts.map((account) => (
+            <ClosedAccountRow key={account.id} account={account} desktop={desktop} flags={flags} actions={actions} />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+const sum = (accounts: AccountWithBalance[]) => accounts.reduce((s, a) => s + a.balance, 0)
+
 export function AccountsPage() {
   const { data: accounts } = useAccounts()
   const { data: connections } = useBankConnections()
-  const [addOpen, setAddOpen] = useState(false)
-  const [editAccount, setEditAccount] = useState<AccountWithBalance | null>(null)
+  // Serveur recent seulement : bascule budget/suivi, cloture et reouverture.
+  const flags = useServerFeatures().has('accountFlags')
+  const desktop = useIsDesktop()
+  const stats = useAccountStats(accounts)
+  const { mutate: mutateFlags } = useSetAccountFlags()
+  const [sheet, setSheet] = useState<SheetTarget | null>(null)
+  const [adding, setAdding] = useState<boolean | null>(null)
+  // Derniere section d'ajout : garde le formulaire stable pendant la fermeture.
+  const [addOnBudget, setAddOnBudget] = useState(true)
+
+  // Statut de synchronisation des comptes lies a une banque (Enable Banking).
+  const links = useMemo(() => {
+    const map = new Map<string, LinkStatus>()
+    for (const connection of connections ?? []) {
+      for (const eb of connection.accounts) if (eb.linkedAccountId) map.set(eb.linkedAccountId, connection.status)
+    }
+    return map
+  }, [connections])
+  const linkOf = useCallback((id: string) => links.get(id), [links])
+
+  const actions = useMemo<AccountActions>(
+    () => ({
+      open: (account, view) => setSheet({ accountId: account.id, view }),
+      close: (account) => {
+        // Cloture reservee aux soldes EXACTEMENT nuls : sinon, la feuille
+        // explique comment y arriver (ajuster a 0 ou virer le reste).
+        if (account.balance !== 0) {
+          setSheet({ accountId: account.id, view: 'close' })
+          return
+        }
+        mutateFlags({ accountId: account.id, closed: true })
+        toast({
+          message: `${quoted(account.name)} clôturé`,
+          description: 'Rangé dans les comptes clôturés.',
+          tone: 'success',
+          action: {
+            label: 'Annuler',
+            onClick: () => mutateFlags({ accountId: latestAccountId(account.id), closed: false }),
+          },
+        })
+      },
+      reopen: (account) => {
+        mutateFlags({ accountId: account.id, closed: false })
+        toast({ message: `${quoted(account.name)} rouvert`, tone: 'success' })
+      },
+    }),
+    [mutateFlags],
+  )
+
+  const closeSheet = useCallback(() => setSheet(null), [])
+  const openAdd = (onBudget: boolean) => {
+    setAddOnBudget(onBudget)
+    setAdding(onBudget)
+  }
 
   if (!accounts) return <AccountsSkeleton />
 
-  const hasConnections = (connections?.length ?? 0) > 0
-
-  const total = accounts.reduce((s, a) => s + a.balance, 0)
-  const onBudget = accounts.filter((a) => a.onBudget)
-  const tracking = accounts.filter((a) => !a.onBudget)
-  const onBudgetTotal = onBudget.reduce((s, a) => s + a.balance, 0)
-  const trackingTotal = tracking.reduce((s, a) => s + a.balance, 0)
+  const active = accounts.filter((a) => !a.closed)
+  const budget = active.filter((a) => a.onBudget)
+  const tracking = active.filter((a) => !a.onBudget)
+  const closed = accounts.filter((a) => a.closed)
+  const monthChange = stats ? accounts.reduce((s, a) => s + (stats.get(a.id)?.monthChange ?? 0), 0) : null
+  const sectionProps = { desktop, stats, linkOf, flags, actions }
 
   return (
-    <div className="space-y-6">
-      <Card className="p-5">
-        <p className="label-caps">Valeur nette</p>
-        <Amount cents={total} className="mt-1 block text-[30px] font-semibold lg:text-[32px]" />
-        <div className="mt-4 flex gap-8 border-t border-line pt-4">
-          <div>
-            <p className="label-caps flex items-center gap-1.5">
-              <Landmark className="h-3.5 w-3.5" />
-              Comptes budget
-            </p>
-            <Amount cents={onBudgetTotal} className="mt-0.5 block text-[16px] font-semibold" />
-          </div>
-          <div>
-            <p className="label-caps flex items-center gap-1.5">
-              <TrendingUp className="h-3.5 w-3.5" />
-              Hors budget
-            </p>
-            <Amount cents={trackingTotal} className="mt-0.5 block text-[16px] font-semibold" />
-          </div>
-        </div>
-      </Card>
+    <div className="space-y-8 lg:space-y-10">
+      <NetWorthHero
+        budgetTotal={sum(accounts.filter((a) => a.onBudget))}
+        trackingTotal={sum(accounts.filter((a) => !a.onBudget))}
+        budgetCount={budget.length}
+        trackingCount={tracking.length}
+        monthChange={monthChange}
+      />
 
-      {hasConnections && (
-        <Card className="p-5">
-          <SyncHealth />
-        </Card>
+      {connections && connections.length > 0 && <SyncStrip connections={connections} />}
+
+      {active.length === 0 ? (
+        <EmptyState
+          icon={Landmark}
+          title="Aucun compte actif"
+          description="Ajoutez un compte pour suivre son solde et alimenter le budget."
+          actionLabel="Ajouter un compte"
+          onAction={() => openAdd(true)}
+        />
+      ) : (
+        <>
+          <AccountSection
+            title="Comptes budget"
+            description="Leur argent se répartit dans les enveloppes."
+            accounts={budget}
+            addLabel="Ajouter un compte"
+            onAdd={() => openAdd(true)}
+            {...sectionProps}
+          />
+          <AccountSection
+            title="Suivi"
+            description="Placements et épargne longue, hors budget."
+            accounts={tracking}
+            addLabel="Ajouter un compte de suivi"
+            onAdd={() => openAdd(false)}
+            {...sectionProps}
+          />
+        </>
       )}
 
-      <div className="flex justify-end">
-        <Button variant="secondary" onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4" />
-          Ajouter un compte
-        </Button>
-      </div>
-      <AddAccountDialog open={addOpen} onOpenChange={setAddOpen} />
-      <EditAccountDialog account={editAccount} onOpenChange={(o) => !o && setEditAccount(null)} />
+      {closed.length > 0 && <ClosedSection accounts={closed} desktop={desktop} flags={flags} actions={actions} />}
 
-      <section className="space-y-3">
-        <h2 className="label-caps px-1">Comptes budget</h2>
-        <div className="space-y-3">
-          {onBudget.map((acc) => (
-            <AccountCard key={acc.id} account={acc} onEdit={setEditAccount} />
-          ))}
-        </div>
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="label-caps px-1">Suivi (hors budget)</h2>
-        <div className="space-y-3">
-          {tracking.map((acc) => (
-            <AccountCard key={acc.id} account={acc} onEdit={setEditAccount} />
-          ))}
-        </div>
-      </section>
+      <AccountSheet target={sheet} onClose={closeSheet} stats={stats} linkOf={linkOf} flags={flags} actions={actions} />
+      <AddAccountDialog
+        open={adding !== null}
+        onOpenChange={(o) => !o && setAdding(null)}
+        defaultOnBudget={adding ?? addOnBudget}
+      />
     </div>
   )
 }
