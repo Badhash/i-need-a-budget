@@ -9,6 +9,18 @@
 //                  - assigned des mois futurs (> M)
 //                  - somme des overspending des mois < M
 //
+// Transactions comptabilisees : compte on-budget, et hors transfert OU moitie
+// CROISEE d'un transfert. Un transfert lie (transferGroupId) entre deux comptes
+// budget deplace de l'argent a l'interieur du budget : neutre pour activity et
+// RTA (sa categorie eventuelle est ignoree). Un transfert entre un compte
+// budget et un compte de suivi (regle YNAB) fait sortir ou entrer de l'argent
+// du budget : sa moitie cote budget compte comme une transaction ordinaire
+// (sans categorie = a categoriser, ignoree ; categorie d'enveloppe = activity ;
+// categorie de revenus = inflow du RTA). La moitie cote suivi est exclue, comme
+// toute transaction d'un compte de suivi. Le caractere croise se deduit des
+// transactions fournies : une moitie on-budget est croisee quand une autre
+// moitie du meme groupe est sur un compte hors budget.
+//
 // Nouveau budget (startMonth optionnel) : tout ce qui precede startMonth est
 // gele. Les transactions des comptes on-budget anterieures a startMonth ne
 // forment plus qu'un SOLDE DE DEPART (somme brute, transferts et non
@@ -41,7 +53,11 @@ export interface Transaction {
   month: string
   /** centimes, negatif = depense */
   amount: number
-  /** non nul = moitie d'un transfert lie : neutre pour activity et RTA */
+  /**
+   * Non nul = moitie d'un transfert lie. Entre deux comptes budget : neutre pour
+   * activity et RTA. Entre un compte budget et un compte de suivi (transfert
+   * croise) : la moitie cote budget compte comme une transaction ordinaire.
+   */
   transferGroupId?: string | null
 }
 
@@ -111,6 +127,55 @@ export function monthRange(from: string, to: string): string[] {
   return out
 }
 
+/** Vue minimale d'une transaction pour la regle des transferts croises. */
+export interface TransferHalf {
+  accountId: string
+  transferGroupId?: string | null
+}
+
+/**
+ * Groupes de transfert dont au moins une moitie est sur un compte HORS budget
+ * (compte de suivi, ou compte absent de `onBudget`). A calculer sur TOUTES les
+ * transactions connues (tous mois confondus) : les deux moities d'une paire
+ * peuvent tomber sur deux mois differents.
+ */
+export function offBudgetTransferGroups(
+  transactions: Iterable<TransferHalf>,
+  onBudget: ReadonlySet<string>,
+): Set<string> {
+  const groups = new Set<string>()
+  for (const t of transactions) {
+    if (t.transferGroupId && !onBudget.has(t.accountId)) groups.add(t.transferGroupId)
+  }
+  return groups
+}
+
+/**
+ * Moitie CROISEE : moitie de transfert situee sur un compte budget dont une
+ * autre moitie est sur un compte hors budget (sortie ou entree d'argent du
+ * budget). Elle se categorise comme une transaction ordinaire.
+ */
+export function isCrossBudgetHalf(
+  t: TransferHalf,
+  onBudget: ReadonlySet<string>,
+  offBudgetGroups: ReadonlySet<string>,
+): boolean {
+  return !!t.transferGroupId && onBudget.has(t.accountId) && offBudgetGroups.has(t.transferGroupId)
+}
+
+/**
+ * Perimetre budget d'une transaction (hors gel du mois de depart) : compte
+ * budget, et pas un transfert entre comptes budget (neutre). Meme regle pour le
+ * moteur, les agregats, le badge « A categoriser » et les rapports.
+ */
+export function countsForBudget(
+  t: TransferHalf,
+  onBudget: ReadonlySet<string>,
+  offBudgetGroups: ReadonlySet<string>,
+): boolean {
+  return onBudget.has(t.accountId) && (!t.transferGroupId || offBudgetGroups.has(t.transferGroupId))
+}
+
 /**
  * Calcule le budget du mois cible : etat de chaque enveloppe et Ready to Assign.
  * Deterministe et sans effet de bord ; l'appelant fournit des donnees deja
@@ -157,12 +222,14 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
     }
   }
 
-  // Transactions comptabilisables : compte on budget, pas un transfert lie,
-  // et pas anterieures au depart du budget (deja dans le solde de depart).
+  // Transactions comptabilisables : compte on budget, hors transfert entre
+  // comptes budget (une moitie croisee compte comme une transaction ordinaire),
+  // et pas anterieures au depart du budget (deja dans le solde de depart). Le
+  // caractere croise se lit sur TOUTES les transactions fournies.
+  const offBudgetGroups = offBudgetTransferGroups(transactions, onBudgetAccounts)
   const counted = transactions.filter(
     (t) =>
-      onBudgetAccounts.has(t.accountId) &&
-      !t.transferGroupId &&
+      countsForBudget(t, onBudgetAccounts, offBudgetGroups) &&
       (startMonth === null || t.month >= startMonth),
   )
   const countedAssignments =

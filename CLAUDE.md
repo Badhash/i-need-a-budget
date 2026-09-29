@@ -98,7 +98,7 @@ Ready to Assign du mois M :
 * `RTA(M) = inflows cumulés jusqu'à M (catégorie "Revenus") − assigned cumulés jusqu'à M − somme des overspending des mois < M`
 * Assigner plus que le RTA est autorisé mais affiche le RTA en négatif (rouge) avec bannière.
 
-Transferts entre comptes : deux transactions liées (transfer_group_id), aucune catégorie, n'impactent ni activity ni RTA.
+Transferts entre comptes : deux transactions liées (transfer_group_id). Entre deux comptes budget, le transfert est neutre : aucune catégorie, n'impacte ni activity ni RTA (une catégorie résiduelle est ignorée). Entre un compte budget et un compte de suivi (transfert croisé, règle YNAB), l'argent sort du budget ou y entre : la moitié côté budget se traite comme une transaction ordinaire — sans catégorie, elle compte dans « À catégoriser » et ne contribue à rien ; catégorisée en enveloppe, c'est de l'activity de l'enveloppe ; catégorisée en revenus, c'est un inflow du Prêt à assigner. La moitié côté suivi ne porte jamais de catégorie. Le moteur déduit le caractère croisé des transactions fournies (une moitié on-budget est croisée quand une autre moitié du même groupe est sur un compte hors budget) ; l'historique gelé avant le mois de départ reste une somme brute.
 
 Comptes hors budget (tracking, ex. PEA) : soldes suivis, transactions sans catégorie, exclus du RTA. Flag `on_budget` sur le compte.
 
@@ -108,7 +108,7 @@ Nouveau budget (`startMonth` optionnel du moteur, stocké dans `user_settings.bu
 
 Mémoire de tiers (REF N, table `payee_memory`, module `supabase/functions/api/payees.ts`, clé partagée `packages/crypto/src/payee.ts`) : chaque catégorisation manuelle (`categorizeTransaction`, `categorizeMany`, `updateTransaction`) sur un compte budget, hors catégorie de revenus, apprend le tiers (`payeeKey(libellé)` = mots stables du libellé, sans dates/montants/références). Historique des 3 dernières catégories ; la catégorie par défaut bascule dès que 2 des 3 concordent. `sync-bank` et `applyRulesToUncategorized` l'utilisent en REPLI des règles (règles d'abord) pour que les imports arrivent déjà catégorisés. L'apprentissage est best-effort (jamais bloquant, table absente tolérée) ; `setPayeeCategory` force (ou efface avec `categoryId: null`) le défaut d'un tiers. `bootstrap`/`bootstrapFull` exposent `payees: {key, categoryId}[]` (une lecture, O(tiers)).
 
-Badge « À catégoriser » (serveur `countsAsUncategorized`, agrégats `uncat_counts`, front) : comptes budget uniquement (les comptes de suivi ne se catégorisent pas : pas de sélecteur, règles non appliquées), sans catégorie, hors transfert, pas dans le futur, pas antérieur au mois de départ.
+Badge « À catégoriser » (serveur `countsAsUncategorized`, agrégats `uncat_counts`, front) : comptes budget uniquement (les comptes de suivi ne se catégorisent pas : pas de sélecteur, règles non appliquées), sans catégorie, hors transfert entre comptes budget (la moitié côté budget d'un transfert croisé compte), pas dans le futur, pas antérieur au mois de départ.
 
 Tous ces calculs vivent dans un module TypeScript pur `packages/engine` (zéro dépendance), utilisé par l'Edge Function `/api`, couvert par Vitest (cas : rollover positif, overspending, mois vide, transfert, futur).
 
