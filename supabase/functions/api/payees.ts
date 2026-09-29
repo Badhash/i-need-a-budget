@@ -175,6 +175,44 @@ export async function setPayeeDefault(
   return key
 }
 
+/**
+ * Oublie une categorie supprimee : retiree des historiques ; les tiers dont
+ * c'etait le defaut basculent sur le reste de l'historique (regle 2 sur 3,
+ * sinon la plus recente) ou sont effaces s'il ne reste rien. Une lecture de
+ * la table (petites lignes, O(tiers)) + une ecriture par tiers touche.
+ */
+export async function forgetPayeeCategory(
+  admin: SupabaseClient,
+  keys: CryptoKeys,
+  userId: string,
+  categoryId: string,
+): Promise<void> {
+  const { data, error } = await admin
+    .from(TABLE)
+    .select('payee_idx, enc_payload:enc_b64')
+    .eq('user_id', userId)
+  if (error) {
+    if (isMissingTable(error)) return
+    throw new Error('lecture payee_memory impossible')
+  }
+  for (const row of (data ?? []) as { payee_idx: string; enc_payload: string }[]) {
+    const m = await decode(keys, userId, row.enc_payload)
+    if (m.categoryId !== categoryId && !m.history.includes(categoryId)) continue
+    const history = m.history.filter((id) => id !== categoryId)
+    const next = m.categoryId === categoryId ? pickDefault(history, history[0] ?? '') : m.categoryId
+    if (!next) {
+      const { error: delError } = await admin
+        .from(TABLE)
+        .delete()
+        .eq('user_id', userId)
+        .eq('payee_idx', row.payee_idx)
+      if (delError) throw new Error('effacement payee_memory impossible')
+      continue
+    }
+    await upsertOne(admin, keys, userId, row.payee_idx, { key: m.key, categoryId: next, history })
+  }
+}
+
 /** Efface toute la memoire de tiers (wipe / import de remplacement). Table absente toleree. */
 export async function clearPayees(admin: SupabaseClient, userId: string): Promise<void> {
   const { error } = await admin.from(TABLE).delete().eq('user_id', userId)

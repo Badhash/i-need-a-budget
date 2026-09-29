@@ -46,7 +46,8 @@ import {
   type AggTx,
 } from './aggregates.ts'
 import { clearUserSettings, loadUserSettings, saveUserSettings } from './settings.ts'
-import { clearPayees, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
+import { clearPayees, forgetPayeeCategory, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
+import { mfaLevelSatisfied } from './mfa.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
@@ -216,9 +217,33 @@ class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Code machine optionnel (ex. mfa_required) que le front peut traiter. */
+    public code?: string,
   ) {
     super(message)
   }
+}
+
+/**
+ * MFA : un utilisateur qui possede un facteur TOTP verifie DOIT presenter un
+ * jeton de niveau aal2. Sans cette verification serveur, le mot de passe seul
+ * (jeton aal1, obtenu hors de l'app) suffirait a lire tout le budget dechiffre.
+ * Le front traite le code mfa_required (retour a l'ecran de verification).
+ */
+function requireMfaLevel(authHeader: string, user: { factors?: { status?: string }[] | null }): void {
+  if (!mfaLevelSatisfied(authHeader, user)) {
+    throw new ApiError(403, 'verification en deux etapes requise', 'mfa_required')
+  }
+}
+
+// Date et mois courants au fuseau de l'utilisateur (Europe/Paris), comme le
+// front (heure locale de l'appareil) : le runtime Deno est en UTC et decalait
+// d'une a deux heures le passage au mois suivant (badge, nouveau budget).
+function todayParis(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' })
+}
+function currentMonthParis(): string {
+  return todayParis().slice(0, 7)
 }
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -877,7 +902,7 @@ function buildBootstrap(data: DecryptedData, payees: { key: string; categoryId: 
   for (const t of data.transactions) {
     balances.set(t.accountId, (balances.get(t.accountId) ?? 0) + t.amount)
   }
-  const currentMonth = new Date().toISOString().slice(0, 7)
+  const currentMonth = currentMonthParis()
   const onBudget = new Set(data.accounts.filter((a) => a.onBudget).map((a) => a.id))
   return {
     accounts: data.accounts.map((a) => ({ ...a, balance: balances.get(a.id) ?? 0 })),
@@ -907,7 +932,7 @@ async function actionBootstrap(userId: string) {
   // En cas d'erreur, fallback silencieux sur le calcul complet.
   if (await aggIsReady(admin, keys, userId)) {
     try {
-      const currentMonth = new Date().toISOString().slice(0, 7)
+      const currentMonth = currentMonthParis()
       const [accounts, groups, categories, balances, uncategorizedCount, settings, payees] =
         await Promise.all([
           loadAll<AccountPayload>('accounts', userId),
@@ -1617,7 +1642,20 @@ async function actionCreateAccount(userId: string, params: Params) {
   }
   const onBudget = params.onBudget !== false
   const openingBalance = requireAmount(params.openingBalance ?? 0)
-  const openingDate = requireDate(params.openingDate ?? new Date().toISOString().slice(0, 10))
+  const openingDate = requireDate(params.openingDate ?? todayParis())
+
+  // Prerequis verifies AVANT d'inserer le compte : un 409 ne doit pas laisser
+  // un compte orphelin sans solde d'ouverture.
+  let incomeCategory: WithId<CategoryPayload> | undefined
+  if (openingBalance !== 0) {
+    const categories = await loadAll<CategoryPayload>('categories', userId)
+    // solde d'ouverture : inflow vers le RTA via une categorie de revenus
+    incomeCategory = categories.find((c) => c.isIncome && c.name === "Solde d'ouverture")
+      ?? categories.find((c) => c.isIncome)
+    if (onBudget && !incomeCategory) {
+      throw new ApiError(409, "initialiser les categories d'abord (action seedDefaults)")
+    }
+  }
 
   const payload: AccountPayload = {
     name,
@@ -1632,13 +1670,6 @@ async function actionCreateAccount(userId: string, params: Params) {
 
   let openingTx: TxPayload | null = null
   if (openingBalance !== 0) {
-    const categories = await loadAll<CategoryPayload>('categories', userId)
-    // solde d'ouverture : inflow vers le RTA via une categorie de revenus
-    const incomeCategory = categories.find((c) => c.isIncome && c.name === "Solde d'ouverture")
-      ?? categories.find((c) => c.isIncome)
-    if (onBudget && !incomeCategory) {
-      throw new ApiError(409, "initialiser les categories d'abord (action seedDefaults)")
-    }
     const keys = await getKeys()
     const bookingMonth = openingDate.slice(0, 7)
     const txPayload: TxPayload = {
@@ -1716,14 +1747,21 @@ async function actionDeleteAccount(userId: string, params: Params) {
   try {
     // Tombstones de dedup pour les imports bancaires du compte : sans eux, si
     // le compte etait re-lie plus tard, sync-bank re-importerait les lignes.
-    const { data: hashRows, error: hashErr } = await admin
-      .from('transactions')
-      .select('id, tx_hash')
-      .eq('user_id', userId)
-      .in('id', ownIds.length > 0 ? ownIds : ['00000000-0000-0000-0000-000000000000'])
-      .not('tx_hash', 'is', null)
-    if (hashErr) throw new ApiError(500, 'lecture transactions impossible')
-    await recordDeletedHashes(userId, (hashRows ?? []).map((r) => r.tx_hash as string))
+    // Lecture par lots de 100 ids (comme la suppression plus bas) : la liste
+    // passe dans l'URL PostgREST, qu'un compte de quelques centaines de lignes
+    // importees ferait deborder (requete refusee, compte insupprimable).
+    const deletedHashes: string[] = []
+    for (let i = 0; i < ownIds.length; i += 100) {
+      const { data: hashRows, error: hashErr } = await admin
+        .from('transactions')
+        .select('id, tx_hash')
+        .eq('user_id', userId)
+        .in('id', ownIds.slice(i, i + 100))
+        .not('tx_hash', 'is', null)
+      if (hashErr) throw new ApiError(500, 'lecture transactions impossible')
+      for (const r of hashRows ?? []) deletedHashes.push(r.tx_hash as string)
+    }
+    await recordDeletedHashes(userId, deletedHashes)
 
     for (const tx of transactions) {
       if (ownIdSet.has(tx.id)) continue
@@ -2000,6 +2038,13 @@ async function actionDeleteCategory(userId: string, params: Params) {
     if (error) throw new ApiError(500, 'suppression rules impossible')
   }
 
+  // Memoire de tiers (REF N) : oublie la categorie supprimee, sinon les
+  // prochains imports du meme tiers arriveraient avec un categoryId inexistant
+  // (ignore par le moteur ET par le badge : ligne invisible du budget).
+  // Best-effort : table absente ou erreur toleree, les consommateurs filtrent
+  // de toute facon les categories inconnues.
+  await forgetPayeeCategory(admin, keys, userId, categoryId).catch(() => {})
+
   const { error } = await admin
     .from('categories')
     .delete()
@@ -2193,16 +2238,20 @@ async function actionDeleteRule(userId: string, params: Params) {
 
 async function actionApplyRulesToUncategorized(userId: string) {
   const keys = await getKeys()
-  const [rules, transactions, accounts, payeeDefaults] = await Promise.all([
+  const [rules, transactions, accounts, categories, payeeDefaults] = await Promise.all([
     loadAll<RulePayload>('rules', userId),
     loadTxFull(userId),
     loadAll<AccountPayload>('accounts', userId),
+    loadAll<CategoryPayload>('categories', userId),
     loadPayeeDefaults(admin, keys, userId).catch(() => new Map<string, string>()),
   ])
   rules.sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
   // Les comptes de suivi ne se categorisent pas : leurs transactions sont
   // hors budget, une categorie n'y aurait aucun effet.
   const onBudget = new Set(accounts.filter((a) => a.onBudget).map((a) => a.id))
+  // Integrite referentielle : une categorie supprimee entre-temps (regle ou
+  // memoire de tiers perimee) ne doit jamais etre ecrite.
+  const knownCategories = new Set(categories.filter((c) => !c.isIncome).map((c) => c.id))
 
   const aggOps: { old: AggTx; next: AggTx }[] = []
   let categorized = 0
@@ -2214,7 +2263,7 @@ async function actionApplyRulesToUncategorized(userId: string) {
       // Regles d'abord, puis repli sur la memoire de tiers (REF N).
       const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
       const categoryId = rule?.categoryId ?? payeeDefaults.get(payeeKey(tx.label)) ?? null
-      if (!categoryId) continue
+      if (!categoryId || !knownCategories.has(categoryId)) continue
       // On retire id du payload et on ne passe PAS d'extra : month_idx et
       // tx_hash de la ligne restent intacts.
       const { id, ...payload } = tx
@@ -2815,7 +2864,7 @@ async function actionRecomputeAggregates(userId: string) {
 // budget demarre dans un futur lointain) et pas anterieur a 2000.
 async function actionNewBudget(userId: string, params: Params) {
   const month = requireMonth(params.month)
-  const currentMonth = new Date().toISOString().slice(0, 7)
+  const currentMonth = currentMonthParis()
   if (month > addMonths(currentMonth, 1)) {
     throw new ApiError(400, 'le mois de depart ne peut pas depasser le mois prochain')
   }
@@ -2989,6 +3038,7 @@ Deno.serve(async (req) => {
     if (!email || !allowedEmails.includes(email)) {
       throw new ApiError(403, 'acces non autorise')
     }
+    requireMfaLevel(authHeader, userData.user)
     const userId = userData.user.id
 
     const rawBody = await readBoundedBody(req, 64_000)
@@ -3014,7 +3064,10 @@ Deno.serve(async (req) => {
   } catch (err) {
     if (err instanceof ApiError) {
       console.error(`api action=${action} status=${err.status} message=${err.message}`)
-      return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers })
+      return new Response(
+        JSON.stringify(err.code ? { error: err.message, code: err.code } : { error: err.message }),
+        { status: err.status, headers },
+      )
     }
     // erreur inattendue : message generique, jamais de contenu metier
     console.error(`api action=${action} status=500 erreur inattendue`)

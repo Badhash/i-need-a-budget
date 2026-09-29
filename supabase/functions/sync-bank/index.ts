@@ -41,6 +41,7 @@ import {
 import { aggMarkStale, aggRecompute } from '../api/aggregates.ts'
 import { loadUserSettings } from '../api/settings.ts'
 import { loadPayeeDefaults } from '../api/payees.ts'
+import { mfaLevelSatisfied } from '../api/mfa.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
@@ -1178,12 +1179,18 @@ async function syncUser(
 
   // Comptes (pour lier uid EB -> id compte interne), regles de categorisation
   // et memoire de tiers (REF N, repli des regles ; table absente = vide).
-  const [accounts, rules, payeeDefaults] = await Promise.all([
+  const [accounts, rules, categories, payeeDefaults] = await Promise.all([
     loadAll<AccountPayload>('accounts', userId),
     loadAll<RulePayload>('rules', userId),
+    loadAll<CategoryPayload>('categories', userId),
     loadPayeeDefaults(admin, keys, userId).catch(() => new Map<string, string>()),
   ])
-  rules.sort((a, b) => a.priority - b.priority)
+  // Meme ordre que /api (applyRulesToUncategorized) : priorite puis id, pour
+  // qu'une egalite de priorite categorise pareil a l'import et a l'application.
+  rules.sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : 1))
+  // Integrite referentielle : une categorie supprimee (memoire de tiers ou
+  // regle perimee) ne doit jamais etre ecrite sur un import.
+  const knownCategories = new Set(categories.filter((c) => !c.isIncome).map((c) => c.id))
 
   const accountByUid = new Map<string, WithId<AccountPayload>>()
   for (const acc of accounts) {
@@ -1306,9 +1313,10 @@ async function syncUser(
 
             // Les comptes de suivi ne se categorisent pas (hors budget).
             // Regles d'abord, puis memoire de tiers apprise des choix manuels.
-            const categoryId = localAccount.onBudget
+            const suggested = localAccount.onBudget
               ? (categorize(rules, mapped.label) ?? payeeDefaults.get(payeeKey(mapped.label)) ?? null)
               : null
+            const categoryId = suggested && knownCategories.has(suggested) ? suggested : null
             const payload: TxPayload = {
               accountId: localAccount.id,
               categoryId,
@@ -1854,6 +1862,10 @@ async function requireUser(req: Request): Promise<string> {
   const email = (userData.user.email ?? '').toLowerCase()
   if (!email || !allowedEmails.includes(email)) {
     throw new ApiError(403, 'acces non autorise')
+  }
+  // Meme exigence MFA que /api : facteur TOTP verifie => jeton aal2 obligatoire.
+  if (!mfaLevelSatisfied(authHeader, userData.user)) {
+    throw new ApiError(403, 'verification en deux etapes requise')
   }
   return userData.user.id
 }
