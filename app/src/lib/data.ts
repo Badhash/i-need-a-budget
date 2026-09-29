@@ -18,6 +18,7 @@ import type { CatColor } from '@/styles/themes'
 import type { BudgetMonth, BudgetGroupBlock, BudgetRow } from '@/lib/budget'
 import type { ReportsData } from '@/lib/reports'
 import { monthOf, today } from '@/lib/format'
+import type { ServerFeature } from '@/lib/features'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -74,6 +75,8 @@ interface BootstrapResponse {
   uncategorizedCount: number
   budgetStartMonth?: string | null
   payees?: { key: string; categoryId: string }[]
+  /** Fonctionnalites serveur optionnelles (cf. lib/features.ts) ; absent = aucune. */
+  features?: string[]
 }
 
 /** Taxonomie hydratee (objets du domaine, prets pour l'UI). */
@@ -86,6 +89,8 @@ export interface Bootstrap {
   budgetStartMonth: string | null
   /** Memoire de tiers (cle payeeKey -> categorie par defaut), calculee serveur. */
   payees: PayeeDefault[]
+  /** Fonctionnalites annoncees par le serveur deploye (cf. lib/features.ts). */
+  features: string[]
 }
 
 export interface PayeeDefault {
@@ -136,6 +141,7 @@ function hydrateBootstrap(raw: BootstrapResponse): Bootstrap {
       onBudget: a.onBudget,
       openingBalance: 0,
       balance: a.balance,
+      closed: a.closed === true,
     })),
     groups: raw.groups.map((g) => ({
       id: g.id,
@@ -143,6 +149,7 @@ function hydrateBootstrap(raw: BootstrapResponse): Bootstrap {
       color: g.color as CatColor,
       icon: g.icon as GroupIcon,
       sortOrder: g.sortOrder,
+      hidden: g.hidden === true,
     })),
     categories: raw.categories.map((c) => ({
       id: c.id,
@@ -150,10 +157,12 @@ function hydrateBootstrap(raw: BootstrapResponse): Bootstrap {
       name: c.name,
       isIncome: c.isIncome,
       sortOrder: c.sortOrder,
+      hidden: c.hidden === true,
     })),
     uncategorizedCount: raw.uncategorizedCount,
     budgetStartMonth: raw.budgetStartMonth ?? null,
     payees: raw.payees ?? [],
+    features: Array.isArray(raw.features) ? raw.features.filter((f): f is string => typeof f === 'string') : [],
   }
 }
 
@@ -181,6 +190,21 @@ export function useCategoriesList(): Category[] {
 
 export function useGroupsList(): CategoryGroup[] {
   return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.groups }).data ?? []
+}
+
+/**
+ * Fonctionnalites annoncees par le serveur deploye (cf. lib/features.ts). Un
+ * serveur ancien n'annonce rien : les interfaces qui en dependent restent
+ * masquees et l'app garde son comportement historique.
+ */
+export function useServerFeatures(): ReadonlySet<string> {
+  const list = useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.features }).data
+  return useMemo(() => new Set(list ?? []), [list])
+}
+
+/** Variante hors composant (mutations, helpers) : lit le cache bootstrap. */
+export function hasServerFeature(queryClient: QueryClient, feature: ServerFeature): boolean {
+  return queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)?.features.includes(feature) ?? false
 }
 
 // Les selecteurs ci-dessous partagent la meme query que bootstrap : tant que la
@@ -294,6 +318,7 @@ function toTransaction(t: ApiTransaction): Transaction {
     amount: t.amount,
     transferGroupId: t.transferGroupId ?? null,
     note: t.notes ?? undefined,
+    counterparty: t.counterparty ?? null,
   }
 }
 

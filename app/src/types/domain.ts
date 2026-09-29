@@ -13,6 +13,8 @@ export interface Account {
   kind: AccountKind
   onBudget: boolean
   openingBalance: number // centimes, au 31/01/2026
+  /** Compte archive (clos) : masque des listes et des selecteurs, solde nul. */
+  closed?: boolean
 }
 
 export interface CategoryGroup {
@@ -21,6 +23,8 @@ export interface CategoryGroup {
   color: CatColor
   icon: GroupIcon
   sortOrder: number
+  /** Groupe masque : ses categories sont masquees du budget et des selecteurs. */
+  hidden?: boolean
 }
 
 export interface Category {
@@ -30,6 +34,9 @@ export interface Category {
   sortOrder: number
   /** true = categorie de revenus (contrat du moteur : porte par la categorie) */
   isIncome: boolean
+  /** Categorie masquee (archivee) : hors grille et selecteurs, toujours comptee
+   * par le moteur (son disponible reste dans le budget). */
+  hidden?: boolean
 }
 
 export interface Transaction {
@@ -42,4 +49,6 @@ export interface Transaction {
   /** non nul = moitie d'un transfert lie (contrat du moteur) */
   transferGroupId?: string | null
   note?: string
+  /** Contrepartie bancaire (nom du tiers fourni par la banque), si connue. */
+  counterparty?: string | null
 }
