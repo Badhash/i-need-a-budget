@@ -59,6 +59,8 @@ export function BottomNav() {
   )
 }
 
+// Decalage et hauteur (6,5rem, h-14) repris par le Toaster, qui pose sa pile
+// juste au-dessus : les modifier ensemble.
 export function Fab() {
   const setAddTxOpen = useUiStore((s) => s.setAddTxOpen)
   return (
