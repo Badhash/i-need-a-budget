@@ -1,6 +1,9 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiCreateRule, useRules, RULES_KEY, type RuleMatcher } from '@/lib/rules'
+import { draftRule, useCreateRule, useRules, type RuleMatcher } from '@/lib/rules'
+import type { RulePreview } from '@/lib/ruleInsights'
+import { toast } from '@/lib/toast'
 import { RuleForm } from '@/components/rules/RuleForm'
+import { applyNowLabel } from '@/components/rules/RulePreviewPanel'
+import { useApplyRulesAction } from '@/components/rules/useApplyRulesAction'
 import {
   Dialog,
   DialogContent,
@@ -19,22 +22,32 @@ interface CreateRuleDialogProps {
 
 /**
  * Creation d'une regle depuis la page Transactions (lien « Creer une regle »
- * du toast) : reutilise le formulaire de la page Regles, pre-rempli avec le
- * libelle court et la categorie qui vient d'etre choisie.
+ * du toast) : reutilise le formulaire de la page Regles (apercu en direct
+ * compris), pre-rempli avec le libelle et la categorie qui vient d'etre
+ * choisie. Creation optimiste : la feuille se ferme aussitot et un toast
+ * propose d'appliquer la regle aux transactions non categorisees qu'elle capte.
  */
 export function CreateRuleDialog({ open, onOpenChange, initialValue, initialCategoryId }: CreateRuleDialogProps) {
-  const queryClient = useQueryClient()
   const { data: rules } = useRules()
-  const nextPriority = rules && rules.length > 0 ? Math.max(...rules.map((r) => r.priority)) + 1 : 1
+  const createRule = useCreateRule()
+  const { apply } = useApplyRulesAction()
 
-  const createMut = useMutation({
-    mutationFn: (input: { matcher: RuleMatcher; categoryId: string }) =>
-      apiCreateRule({ matcher: input.matcher, categoryId: input.categoryId, priority: nextPriority }),
-    onSuccess: () => {
-      onOpenChange(false)
-      void queryClient.invalidateQueries({ queryKey: RULES_KEY })
-    },
-  })
+  const submit = (matcher: RuleMatcher, categoryId: string, preview: RulePreview) => {
+    createRule.mutate({ rule: draftRule(rules, matcher, categoryId) })
+    onOpenChange(false)
+    const n = preview.uncategorized
+    toast({
+      id: 'rule-created',
+      tone: 'success',
+      message: `Règle « ${matcher.value} » créée`,
+      description:
+        n > 0
+          ? `${applyNowLabel(n)} ?`
+          : 'Les prochaines transactions correspondantes seront catégorisées automatiquement.',
+      action: n > 0 ? { label: 'Appliquer', onClick: apply } : undefined,
+      duration: n > 0 ? 8000 : undefined,
+    })
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -46,7 +59,7 @@ export function CreateRuleDialog({ open, onOpenChange, initialValue, initialCate
           </DialogDescription>
         </DialogHeader>
         {open && (
-          <div className="p-5 pt-2">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-2">
             <RuleForm
               key={`${initialValue}|${initialCategoryId ?? ''}`}
               stacked
@@ -54,14 +67,8 @@ export function CreateRuleDialog({ open, onOpenChange, initialValue, initialCate
               initialValue={initialValue}
               initialCategoryId={initialCategoryId}
               submitLabel="Créer la règle"
-              pending={createMut.isPending}
-              onSubmit={(matcher, categoryId) => createMut.mutate({ matcher, categoryId })}
+              onSubmit={submit}
             />
-            {createMut.isError && (
-              <p role="alert" className="mt-3 text-[13px] text-danger">
-                {createMut.error.message || 'La création de la règle a échoué.'}
-              </p>
-            )}
           </div>
         )}
       </DialogContent>
