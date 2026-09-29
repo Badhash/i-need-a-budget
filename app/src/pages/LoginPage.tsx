@@ -115,7 +115,7 @@ export function LoginPage() {
     <div className="relative isolate flex min-h-app items-center justify-center overflow-hidden bg-bg px-4 py-10">
       {/* Aurore de fond : deux lueurs larges et lentes (figees si mouvement reduit). */}
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-        <div className="loader-drift absolute inset-x-0 -top-44 mx-auto h-[36rem] w-[36rem] rounded-full bg-aura-1/25 blur-3xl dark:bg-aura-1/30" />
+        <div className="loader-drift absolute inset-x-0 -top-44 mx-auto h-[36rem] w-[36rem] rounded-full bg-aura-1/20 blur-3xl dark:bg-aura-1/30" />
         <div
           className="loader-drift absolute -bottom-48 -right-24 h-[28rem] w-[28rem] rounded-full bg-aura-2/20 blur-3xl"
           style={{ animationDelay: '-4.5s' }}
