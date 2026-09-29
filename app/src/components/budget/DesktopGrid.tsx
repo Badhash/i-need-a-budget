@@ -238,11 +238,20 @@ export function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivi
     onHide: () => actions.hideGroup(block.group),
   })
 
-  // Clic droit sur une ligne : menu au curseur (le menu natif reste dans les champs).
+  // Clic droit sur une ligne : menu au curseur (le menu natif reste dans les
+  // champs). Ouvert au clavier (Maj+F10, touche Menu), l'evenement n'a pas de
+  // coordonnees utiles : le menu s'ancre alors sous l'element qui a le focus.
   const openPointMenu = (e: React.MouseEvent, kind: 'category' | 'group', id: string) => {
-    if ((e.target as HTMLElement).closest('input, textarea')) return
+    const target = e.target as HTMLElement
+    if (target.closest('input, textarea')) return
     e.preventDefault()
-    setPointMenu({ kind, id, x: e.clientX, y: e.clientY, seq: Date.now() })
+    let { clientX: x, clientY: y } = e
+    if (x === 0 && y === 0) {
+      const rect = target.getBoundingClientRect()
+      x = rect.left + 8
+      y = rect.bottom
+    }
+    setPointMenu({ kind, id, x, y, seq: Date.now() })
   }
 
   let pointModel: GridMenuModel | null = null

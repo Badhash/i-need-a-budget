@@ -141,6 +141,8 @@ export function MoveMoneyPopover({
   const [amountDraft, setAmountDraft] = useState(() =>
     toDraft(defaultAmount(row.available > 0 ? 'move' : 'cover', row, target, month)),
   )
+  // Montant saisi a la main : il n'est plus jamais re-propose automatiquement.
+  const [amountTouched, setAmountTouched] = useState(false)
   const [query, setQuery] = useState('')
   const [activeKey, setActiveKey] = useState<string | null>(null)
 
@@ -168,6 +170,7 @@ export function MoveMoneyPopover({
     if (next === mode) return
     setMode(next)
     setAmountDraft(toDraft(defaultAmount(next, row, target, month)))
+    setAmountTouched(false)
     setActiveKey(null)
   }
 
@@ -226,6 +229,19 @@ export function MoveMoneyPopover({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query])
   const active = flat.find((o) => o.key === activeKey) ?? null
+
+  // Deplacer vers une enveloppe en depassement : on propose juste de quoi la
+  // remettre a 0 (sans depasser ce qui est disponible ici), tant que le montant
+  // n'a pas ete saisi a la main. Retour au disponible entier sinon.
+  const activeShortfall =
+    mode === 'move' && active?.kind === 'envelope' && active.row.available < 0 ? -active.row.available : 0
+  useEffect(() => {
+    if (mode !== 'move' || amountTouched) return
+    const all = Math.max(row.available, 0)
+    setAmountDraft(toDraft(activeShortfall > 0 ? Math.min(all, activeShortfall) : all))
+    // row.available bouge avec le cache : seul le choix du partenaire compte.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey, activeShortfall, mode, amountTouched])
 
   useEffect(() => {
     if (!activeKey) return
@@ -359,7 +375,10 @@ export function MoveMoneyPopover({
           <span className="relative flex-1">
             <input
               value={amountDraft}
-              onChange={(e) => setAmountDraft(e.target.value)}
+              onChange={(e) => {
+                setAmountDraft(e.target.value)
+                setAmountTouched(true)
+              }}
               onFocus={(e) => e.currentTarget.select()}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter') return

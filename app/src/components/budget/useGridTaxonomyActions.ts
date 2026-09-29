@@ -19,7 +19,7 @@ import {
   useUpdateCategoryMutation,
   useUpdateGroupMutation,
 } from '@/lib/taxonomy'
-import { toast } from '@/lib/toast'
+import { dismissToast, toast } from '@/lib/toast'
 
 type Entity = { kind: 'category' | 'group'; id: string }
 
@@ -43,16 +43,34 @@ export function useGridTaxonomyActions() {
   const updateGroup = useUpdateGroupMutation()
   const reorderCategories = useReorderCategoriesMutation()
 
+  // Echec : drapeau remis en place et toast de confirmation retire (l'erreur
+  // reste signalee par la notification globale des mutations).
   const setCategoryHidden = (categoryId: string, hidden: boolean) => {
     const entity: Entity = { kind: 'category', id: categoryId }
     patchHidden(queryClient, entity, hidden)
-    updateCategory.mutate({ categoryId, hidden }, { onError: () => patchHidden(queryClient, entity, !hidden) })
+    updateCategory.mutate(
+      { categoryId, hidden },
+      {
+        onError: () => {
+          patchHidden(queryClient, entity, !hidden)
+          dismissToast(`hidden-${categoryId}`)
+        },
+      },
+    )
   }
 
   const setGroupHidden = (groupId: string, hidden: boolean) => {
     const entity: Entity = { kind: 'group', id: groupId }
     patchHidden(queryClient, entity, hidden)
-    updateGroup.mutate({ groupId, hidden }, { onError: () => patchHidden(queryClient, entity, !hidden) })
+    updateGroup.mutate(
+      { groupId, hidden },
+      {
+        onError: () => {
+          patchHidden(queryClient, entity, !hidden)
+          dismissToast(`hidden-${groupId}`)
+        },
+      },
+    )
   }
 
   const renameCategory = (category: Category, name: string) => {
@@ -74,7 +92,10 @@ export function useGridTaxonomyActions() {
   // capture avant le deplacement, limite aux enveloppes encore dans le groupe).
   const moveCategoryToGroup = (category: Category, from: BudgetGroupBlock, to: CategoryGroup) => {
     const originalOrder = from.rows.map((r) => r.category.id)
-    updateCategory.mutate({ categoryId: category.id, groupId: to.id })
+    updateCategory.mutate(
+      { categoryId: category.id, groupId: to.id },
+      { onError: () => dismissToast(`moved-${category.id}`) },
+    )
     toast({
       id: `moved-${category.id}`,
       message: `${quoted(category.name)} déplacée dans ${quoted(to.name)}`,
