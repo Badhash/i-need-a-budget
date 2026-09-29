@@ -19,17 +19,22 @@ const buttonVariants = cva(
         // Lien d'action (texte accent, sans fond).
         link: 'h-auto px-0 text-accent-ink underline-offset-4 hover:underline active:scale-100',
       },
+      // Hauteur portee par --btn-h (plus haute sur mobile, cible tactile) : la
+      // classe h-[var(--btn-h)] est UNE classe de hauteur, qu'une hauteur
+      // passee par l'appelant (h-12, h-9...) remplace a TOUTES les largeurs
+      // (tailwind-merge). Un lg:h-* dans la variante survivrait a la fusion et
+      // l'emporterait en desktop sur la taille explicite de l'appelant.
       size: {
-        default: 'h-11 px-4 lg:h-10',
-        sm: 'h-9 rounded-lg px-3 text-[13px] lg:h-8',
-        lg: 'h-12 px-5 text-[15px] lg:h-11',
-        icon: 'h-11 w-11 lg:h-10 lg:w-10',
-        iconSm: 'h-9 w-9 rounded-lg lg:h-8 lg:w-8',
+        default: 'h-[var(--btn-h)] px-4 [--btn-h:2.75rem] lg:[--btn-h:2.5rem]',
+        sm: 'h-[var(--btn-h)] rounded-lg px-3 text-[13px] [--btn-h:2.25rem] lg:[--btn-h:2rem]',
+        lg: 'h-[var(--btn-h)] px-5 text-[15px] [--btn-h:3rem] lg:[--btn-h:2.75rem]',
+        icon: 'h-[var(--btn-h)] w-[var(--btn-h)] [--btn-h:2.75rem] lg:[--btn-h:2.5rem]',
+        iconSm: 'h-[var(--btn-h)] w-[var(--btn-h)] rounded-lg [--btn-h:2.25rem] lg:[--btn-h:2rem]',
       },
     },
     compoundVariants: [
       // Un lien garde sa hauteur de ligne quelle que soit la taille demandee.
-      { variant: 'link', className: 'h-auto px-0 lg:h-auto' },
+      { variant: 'link', className: 'h-auto px-0' },
     ],
     defaultVariants: {
       variant: 'default',
