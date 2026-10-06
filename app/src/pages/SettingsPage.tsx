@@ -3,7 +3,7 @@
 // regles, donnees (sauvegarde, restauration, import YNAB, nouveau budget),
 // securite, compte, a propos.
 
-import { ChevronRight, Database, Info, Landmark, Palette, Shapes, ShieldCheck, UserRound, Wand2 } from 'lucide-react'
+import { Bell, ChevronRight, Database, Info, Landmark, Palette, Shapes, ShieldCheck, UserRound, Wand2 } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { useRules } from '@/lib/rules'
 import { APP_VERSION } from '@/lib/version'
@@ -14,6 +14,7 @@ import { BankSection } from '@/components/settings/BankSection'
 import { CategoriesSection } from '@/components/settings/CategoriesSection'
 import { MfaSection } from '@/components/settings/MfaSection'
 import { NewBudgetSection } from '@/components/settings/NewBudgetSection'
+import { NotificationsSection } from '@/components/settings/NotificationsSection'
 import { AboutSection, AccountSection } from '@/components/settings/AccountSection'
 import { BackupCard } from '@/components/settings/data/BackupCard'
 import { YnabImportCard } from '@/components/settings/data/YnabImportCard'
@@ -28,6 +29,7 @@ import {
 
 const SECTIONS: SettingsNavItem[] = [
   { id: 'apparence', label: 'Apparence', icon: Palette },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'banque', label: 'Banque', icon: Landmark },
   { id: 'categories', label: 'Catégories', icon: Shapes },
   { id: 'regles', label: 'Règles', icon: Wand2 },
@@ -90,6 +92,15 @@ export function SettingsPage() {
             description="Trois thèmes complets, chacun en clair et en sombre."
           >
             <AppearanceSection />
+          </SettingsSection>
+
+          <SettingsSection
+            id="notifications"
+            icon={Bell}
+            title="Notifications"
+            description="L’essentiel de ton budget, sans ouvrir l’app."
+          >
+            <NotificationsSection />
           </SettingsSection>
 
           <SettingsSection

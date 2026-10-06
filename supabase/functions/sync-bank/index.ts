@@ -42,6 +42,7 @@ import { aggMarkStale, aggRecompute } from '../api/aggregates.ts'
 import { loadUserSettings } from '../api/settings.ts'
 import { loadPayeeDefaults } from '../api/payees.ts'
 import { mfaLevelSatisfied } from '../api/mfa.ts'
+import { notifyAfterSync } from '../api/push.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
@@ -1644,6 +1645,14 @@ async function actionSync(
   let linked = 0
   let transfersLinked = 0
   const errors: string[] = []
+  // Notifications push (REF O) : seulement apres les synchros planifiees, une
+  // synchro lancee depuis l'app n'a pas besoin de prevenir l'appareil qui l'a
+  // demandee. Best-effort, jamais bloquant.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' })
+  const notify = async (userId: string, outcome: { imported: number; errors: string[] }) => {
+    if (!isCron) return
+    await notifyAfterSync(admin, await getKeys(), userId, outcome, today).catch(() => {})
+  }
   for (const userId of targetUserIds) {
     try {
       const r = await syncUser(userId, sinceDays, connectionId)
@@ -1651,6 +1660,7 @@ async function actionSync(
       linked += r.linked
       transfersLinked += r.transfersLinked
       errors.push(...r.errors)
+      await notify(userId, { imported: r.imported, errors: r.errors })
     } catch (err) {
       // Erreur "dure" (chargement impossible) : journalisee, puis on continue en
       // mode cron. En mode user, on la propage pour un retour d'erreur explicite.
@@ -1662,6 +1672,7 @@ async function actionSync(
         importedCount: 0,
         error: message,
       })
+      await notify(userId, { imported: 0, errors: [message] })
       if (!isCron) throw err
     }
   }
