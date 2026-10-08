@@ -25,9 +25,7 @@ const ANON_KEY = SUPABASE_ANON_KEY
 // reconciliation Realtime la reconnaisse comme redondante (cf. realtimeGate).
 // ^bootstrap couvre bootstrap ET bootstrapFull (le demarrage de l'app n'est pas
 // une ecriture : sans ca, chaque ouverture ouvrait la fenetre de silence 30 s).
-// ^push : les actions de notifications n'ecrivent que push_state, table sans
-// signal Realtime.
-const READ_ACTION = /^(get|list|export|bootstrap|push)/
+const READ_ACTION = /^(get|list|export|bootstrap)/
 
 export class ApiError extends Error {
   constructor(

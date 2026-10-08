@@ -260,16 +260,6 @@ const DEFAULT_STRUCTURE: { group: { name: string; color: string; icon: string };
   { group: { name: 'Épargne & objectifs', color: 'green', icon: 'piggy' }, categories: ["Fonds d'urgence", 'Cadeaux', 'Projets'] },
 ]
 
-const demoPush = {
-  available: true,
-  publicKey: 'BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8',
-  prefs: { imports: true, income: true, overspent: true, monthStart: true, consent: true, syncError: true } as Record<
-    string,
-    boolean
-  >,
-  devices: [] as { endpoint: string; device: string; createdAt: string }[],
-}
-
 const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
   // --- Lectures -------------------------------------------------------------
   bootstrap: (db) => buildBootstrap(db),
@@ -465,20 +455,6 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
     upsertAssignment(db, categoryId, month, amount)
     return { ok: true }
   },
-
-  // --- Notifications push ----------------------------------------------------
-  // Pas de service worker en demo : l'etat sert a l'affichage des reglages,
-  // aucun abonnement reel n'est possible.
-  pushGetState: () => ({ ...demoPush }),
-  pushSetPrefs: (_db, p) => {
-    const prefs = (p.prefs ?? {}) as Record<string, unknown>
-    for (const [k, v] of Object.entries(prefs)) {
-      if (k in demoPush.prefs && typeof v === 'boolean') demoPush.prefs[k] = v
-    }
-    return { ...demoPush }
-  },
-  pushTest: () => ({ sent: 0 }),
-  pushUnsubscribe: () => ({ ...demoPush }),
 
   newBudget: (db, p) => {
     const month = requireMonth(p.month)

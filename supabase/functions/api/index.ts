@@ -44,7 +44,6 @@ import {
   aggReadUncatCount,
   aggRecompute,
   OPENING_CATEGORY,
-  rollupsToEngineInput,
   type AggBatch,
   type AggSourceData,
   type AggTx,
@@ -53,17 +52,6 @@ import { clearUserSettings, loadUserSettings, saveUserSettings } from './setting
 import { clearPayees, forgetPayeeCategory, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
 import { mfaLevelSatisfied } from './mfa.ts'
 import { SERVER_FEATURES } from './features.ts'
-import {
-  DEFAULT_PREFS,
-  getVapidKeys,
-  loadPushState,
-  parseSubscription,
-  PUSH_KINDS,
-  savePushState,
-  sendToDevices,
-  upsertSubscription,
-  type PushState,
-} from './push.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
@@ -1169,6 +1157,69 @@ async function actionBootstrap(userId: string) {
   return buildBootstrap(data, payees)
 }
 
+// Reconstitue une entree moteur depuis les rollups agreges : chaque cellule
+// (categorie, mois) devient UNE transaction synthetique (montant = activity) et
+// UNE assignation (montant = assigned), sur un compte on-budget fictif. Le
+// moteur agrege lui-meme par (categorie, mois) ; les rollups ont deja applique
+// son perimetre (hors-budget, transferts internes et categoryId null exclus,
+// moities croisees comptees, cf. aggRecompute) : le resultat est identique au
+// calcul depuis les transactions brutes (rollover, overspending, RTA compris).
+// La ligne OPENING_CATEGORY (solde de depart du « Nouveau budget ») redevient
+// UNE transaction sans categorie datee du mois precedant le depart : le moteur
+// la verse au solde de depart.
+function rollupsToEngineInput(
+  categories: WithId<CategoryPayload>[],
+  rollups: { categoryId: string; month: string; activity: number; assigned: number }[],
+  month: string,
+  startMonth: string | null,
+) {
+  const accounts: EngineAccount[] = [{ id: '__agg__', onBudget: true }]
+  const engineCategories: EngineCategory[] = categories.map((c) => ({
+    id: c.id,
+    isIncome: c.isIncome,
+  }))
+  const transactions: EngineTransaction[] = []
+  const assignments: EngineAssignment[] = []
+  let i = 0
+  for (const r of rollups) {
+    if (r.categoryId === OPENING_CATEGORY) {
+      if (startMonth !== null && r.activity !== 0) {
+        transactions.push({
+          id: '__opening__',
+          accountId: '__agg__',
+          categoryId: null,
+          month: addMonths(startMonth, -1),
+          amount: r.activity,
+          transferGroupId: null,
+        })
+      }
+      continue
+    }
+    if (r.activity !== 0) {
+      transactions.push({
+        id: `__agg__${i++}`,
+        accountId: '__agg__',
+        categoryId: r.categoryId,
+        month: r.month,
+        amount: r.activity,
+        transferGroupId: null,
+      })
+    }
+    if (r.assigned !== 0) {
+      assignments.push({ categoryId: r.categoryId, month: r.month, amount: r.assigned })
+    }
+  }
+  return {
+    month,
+    accounts,
+    categories: engineCategories,
+    transactions,
+    assignments,
+    startMonth,
+    currentMonth: currentMonthParis(),
+  }
+}
+
 // Reconstructions d'agregats en cours dans CET isolate (anti-rafale locale ;
 // la protection reelle inter-instances est le CAS sur aggregate_state.rev).
 const rebuildInFlight = new Set<string>()
@@ -1340,13 +1391,7 @@ async function actionGetBudgetMonth(userId: string, params: Params) {
         loadUserSettings(admin, keys, userId),
       ])
       return computeBudget(
-        rollupsToEngineInput(
-          categories,
-          rollups,
-          month,
-          settings.budgetStartMonth,
-          currentMonthParis(),
-        ),
+        rollupsToEngineInput(categories, rollups, month, settings.budgetStartMonth),
       )
     } catch {
       // Meme logique que actionBootstrap : invalider pour auto-reparation.
@@ -3380,86 +3425,6 @@ async function actionNewBudget(userId: string, params: Params) {
 // Routeur
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Notifications push (REF O, module push.ts)
-// ---------------------------------------------------------------------------
-
-const PUSH_TABLE_MISSING = 'notifications indisponibles : appliquer O-push-state.sql'
-
-async function requirePushState(userId: string, keys: CryptoKeys): Promise<PushState> {
-  const state = await loadPushState(admin, keys, userId)
-  if (!state) throw new ApiError(503, PUSH_TABLE_MISSING, 'push_unavailable')
-  return state
-}
-
-function pushView(state: PushState, publicKey: string) {
-  return {
-    available: true,
-    publicKey,
-    prefs: state.prefs,
-    devices: state.subscriptions.map((s) => ({ endpoint: s.endpoint, device: s.device, createdAt: s.createdAt })),
-  }
-}
-
-async function actionPushGetState(userId: string) {
-  const keys = await getKeys()
-  const [state, vapid] = await Promise.all([loadPushState(admin, keys, userId), getVapidKeys()])
-  if (!state) return { available: false, publicKey: vapid.publicKey, prefs: DEFAULT_PREFS, devices: [] }
-  return pushView(state, vapid.publicKey)
-}
-
-async function actionPushSubscribe(userId: string, params: Params) {
-  const sub = parseSubscription(params.subscription, params.device)
-  if (!sub) throw new ApiError(400, 'abonnement push invalide')
-  const keys = await getKeys()
-  const [state, vapid] = await Promise.all([requirePushState(userId, keys), getVapidKeys()])
-  const next = upsertSubscription(state, sub)
-  await savePushState(admin, keys, userId, next)
-  return pushView(next, vapid.publicKey)
-}
-
-async function actionPushUnsubscribe(userId: string, params: Params) {
-  if (typeof params.endpoint !== 'string') throw new ApiError(400, 'endpoint manquant')
-  const keys = await getKeys()
-  const [state, vapid] = await Promise.all([requirePushState(userId, keys), getVapidKeys()])
-  const next = { ...state, subscriptions: state.subscriptions.filter((s) => s.endpoint !== params.endpoint) }
-  await savePushState(admin, keys, userId, next)
-  return pushView(next, vapid.publicKey)
-}
-
-async function actionPushSetPrefs(userId: string, params: Params) {
-  const raw = params.prefs
-  if (!raw || typeof raw !== 'object') throw new ApiError(400, 'preferences invalides')
-  const keys = await getKeys()
-  const [state, vapid] = await Promise.all([requirePushState(userId, keys), getVapidKeys()])
-  const prefs = { ...state.prefs }
-  for (const kind of PUSH_KINDS) {
-    const v = (raw as Record<string, unknown>)[kind]
-    if (typeof v === 'boolean') prefs[kind] = v
-  }
-  const next = { ...state, prefs }
-  await savePushState(admin, keys, userId, next)
-  return pushView(next, vapid.publicKey)
-}
-
-async function actionPushTest(userId: string, params: Params) {
-  const keys = await getKeys()
-  const state = await requirePushState(userId, keys)
-  const only = typeof params.endpoint === 'string' ? params.endpoint : undefined
-  const r = await sendToDevices(
-    state,
-    {
-      title: 'Notifications activées',
-      body: 'Tu seras prévenu des nouvelles transactions, dépassements et échéances bancaires.',
-      url: '#/budget',
-      tag: 'test',
-    },
-    only,
-  )
-  if (r.changed) await savePushState(admin, keys, userId, r.state)
-  return { sent: r.sent }
-}
-
 const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknown>> = {
   bootstrap: (u) => actionBootstrap(u),
   bootstrapFull: actionBootstrapFull,
@@ -3506,11 +3471,6 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   importReplaceAssignments: actionImportReplaceAssignments,
   recomputeAggregates: (u) => actionRecomputeAggregates(u),
   newBudget: actionNewBudget,
-  pushGetState: (u) => actionPushGetState(u),
-  pushSubscribe: actionPushSubscribe,
-  pushUnsubscribe: actionPushUnsubscribe,
-  pushSetPrefs: actionPushSetPrefs,
-  pushTest: actionPushTest,
 }
 
 // Actions strictement en LECTURE : elles ne modifient aucune table, donc ne
@@ -3532,13 +3492,6 @@ const READ_ONLY_ACTIONS = new Set<string>([
   'getBankConnections',
   'listSyncLogs',
   'exportData',
-  // Notifications : n'ecrivent que push_state (aucune donnee de budget), donc
-  // ne purgent pas le cache budget.
-  'pushGetState',
-  'pushSubscribe',
-  'pushUnsubscribe',
-  'pushSetPrefs',
-  'pushTest',
 ])
 
 // Lecture du corps bornee sur les octets REELLEMENT recus : l'en-tete

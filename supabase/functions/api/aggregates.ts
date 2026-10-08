@@ -79,16 +79,7 @@ import {
   encryptJson,
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
-import {
-  addMonths,
-  countsForBudget,
-  offBudgetTransferGroups,
-  type Account,
-  type Assignment,
-  type BudgetInput,
-  type Category,
-  type Transaction,
-} from '../../../packages/engine/src/index.ts'
+import { countsForBudget, offBudgetTransferGroups } from '../../../packages/engine/src/index.ts'
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { loadUserSettings } from './settings.ts'
 
@@ -910,68 +901,4 @@ export async function aggRecompute(
   // bascule d'un recompute gagnant concurrent -> invalidation (fallback sur).
   await aggMarkStale(admin, userId).catch(() => {})
   return false
-}
-
-// Reconstitue une entree moteur depuis les rollups agreges : chaque cellule
-// (categorie, mois) devient UNE transaction synthetique (montant = activity) et
-// UNE assignation (montant = assigned), sur un compte on-budget fictif. Le
-// moteur agrege lui-meme par (categorie, mois) ; les rollups ont deja applique
-// son perimetre (hors-budget, transferts internes et categoryId null exclus,
-// moities croisees comptees, cf. aggRecompute) : le resultat est identique au
-// calcul depuis les transactions brutes (rollover, overspending, RTA compris).
-// La ligne OPENING_CATEGORY (solde de depart du « Nouveau budget ») redevient
-// UNE transaction sans categorie datee du mois precedant le depart : le moteur
-// la verse au solde de depart.
-export function rollupsToEngineInput(
-  categories: { id: string; isIncome: boolean }[],
-  rollups: { categoryId: string; month: string; activity: number; assigned: number }[],
-  month: string,
-  startMonth: string | null,
-  currentMonth: string,
-): BudgetInput {
-  const accounts: Account[] = [{ id: '__agg__', onBudget: true }]
-  const engineCategories: Category[] = categories.map((c) => ({
-    id: c.id,
-    isIncome: c.isIncome,
-  }))
-  const transactions: Transaction[] = []
-  const assignments: Assignment[] = []
-  let i = 0
-  for (const r of rollups) {
-    if (r.categoryId === OPENING_CATEGORY) {
-      if (startMonth !== null && r.activity !== 0) {
-        transactions.push({
-          id: '__opening__',
-          accountId: '__agg__',
-          categoryId: null,
-          month: addMonths(startMonth, -1),
-          amount: r.activity,
-          transferGroupId: null,
-        })
-      }
-      continue
-    }
-    if (r.activity !== 0) {
-      transactions.push({
-        id: `__agg__${i++}`,
-        accountId: '__agg__',
-        categoryId: r.categoryId,
-        month: r.month,
-        amount: r.activity,
-        transferGroupId: null,
-      })
-    }
-    if (r.assigned !== 0) {
-      assignments.push({ categoryId: r.categoryId, month: r.month, amount: r.assigned })
-    }
-  }
-  return {
-    month,
-    accounts,
-    categories: engineCategories,
-    transactions,
-    assignments,
-    startMonth,
-    currentMonth,
-  }
 }

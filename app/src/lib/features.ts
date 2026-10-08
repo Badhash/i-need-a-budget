@@ -18,8 +18,6 @@ export const SERVER_FEATURES = {
   refillTargets: 'refillTargets',
   /** importReplaceTransactions accepte transferGroupId (paires de virements YNAB). */
   importTransfers: 'importTransfers',
-  /** Actions push* : notifications Web Push (abonnement, preferences, test). */
-  pushNotifications: 'pushNotifications',
 } as const
 
 export type ServerFeature = (typeof SERVER_FEATURES)[keyof typeof SERVER_FEATURES]

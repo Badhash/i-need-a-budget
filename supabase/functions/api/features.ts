@@ -15,6 +15,4 @@ export const SERVER_FEATURES = [
   'refillTargets',
   // importReplaceTransactions accepte transferGroupId (paires de virements YNAB).
   'importTransfers',
-  // Actions push* : notifications Web Push (abonnement, preferences, test).
-  'pushNotifications',
 ] as const
