@@ -158,7 +158,7 @@ Tables d'agrégats (REF I, dérivées — jamais source de vérité, reconstruit
 
 * Périmètre initial : une banque française compatible Enable Banking (identifiants ASPSP configurés hors dépôt, en secret). Le modèle supporte N connexions.
 * `sync-bank` déclenchée par pg_cron à 07:30 et 19:30 Europe/Paris via pg_net (2 fois par jour, REF G ; attention au décalage heure d'été/hiver, cron en UTC).
-* Dédup : `tx_hash = sha256(account_id + booking_date + amount + libellé normalisé)`.
+* Dédup : `tx_hash = sha256(account_id + booking_date + amount + libellé normalisé)`. Garde « libellé complété » (`packages/crypto/src/labelVariant.ts`) : une opération que la banque renvoie avec un libellé complété ou tronqué autrement (Boursorama) n'est pas réimportée si un import déjà en base a le même compte, le même montant, la même date et un libellé variante (préfixe, hors suffixe carte « CB*1234 ») ; seuls les imports antérieurs au run comptent, chacun absorbe une seule variante.
 * Transactions importées arrivent SANS catégorie → moteur de règles → sinon "À catégoriser" (badge de compteur dans la nav).
 * Re-consentement : bannière visible dès J-14 avant expiration de session, bouton "Reconnecter" qui relance le flow d'auth PSD2.
 * Démarrage : solde d'ouverture saisi manuellement à la date d'activation ; seules les transactions postérieures sont importées. Import CSV historique = feature phase 2.

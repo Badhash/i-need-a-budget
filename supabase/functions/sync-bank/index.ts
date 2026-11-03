@@ -43,6 +43,7 @@ import { loadUserSettings } from '../api/settings.ts'
 import { loadPayeeDefaults } from '../api/payees.ts'
 import { mfaLevelSatisfied } from '../api/mfa.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
+import { isLabelVariant } from '../../../packages/crypto/src/labelVariant.ts'
 
 // ---------------------------------------------------------------------------
 // Types des payloads chiffres (memes contrats que l'Edge Function /api)
@@ -1142,6 +1143,68 @@ function consumeTwin(
 }
 
 // ---------------------------------------------------------------------------
+// Garde anti-doublon "libelle complete" : imports bancaires (tx_hash non NULL)
+// deja en base. Certaines banques (Boursorama) renvoient une operation deja
+// comptabilisee quelques jours plus tard avec un libelle complete ou tronque
+// autrement (voir isLabelVariant) : son tx_hash change, la dedup par hash la
+// laisserait passer et l'operation serait importee en double. On la reconnait
+// a son compte, son montant et sa date IDENTIQUES et a un libelle variante de
+// l'import existant, qui fait foi (categorie deja posee comprise). Seules les
+// lignes presentes AVANT le run comptent : deux lignes distinctes d'une meme
+// reponse bancaire restent deux operations, et chaque import existant
+// n'absorbe qu'UNE variante.
+// ---------------------------------------------------------------------------
+
+type VariantIndex = Map<string, string[]> // `${accountId}|${amount}|${bookingDate}` -> libelles
+
+async function loadImportedVariantsWindow(
+  userId: string,
+  monthIdxs: string[] | null,
+): Promise<VariantIndex> {
+  const rows: TxRow[] = []
+  for (let from = 0; ; from += READ_PAGE) {
+    let query = admin
+      .from('transactions')
+      .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash')
+      .eq('user_id', userId)
+      .not('tx_hash', 'is', null)
+    if (monthIdxs) query = query.in('month_idx', monthIdxs)
+    const { data, error } = await query
+      .order('id', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) throw new ApiError(500, 'lecture transactions impossible')
+    if (!data || data.length === 0) break
+    rows.push(...(data as TxRow[]))
+    if (data.length < READ_PAGE) break
+  }
+  const index: VariantIndex = new Map()
+  for (const tx of await decryptTxRows(userId, rows)) {
+    const key = `${tx.payload.accountId}|${tx.payload.amount}|${tx.payload.bookingDate}`
+    const labels = index.get(key)
+    if (labels) labels.push(tx.payload.label)
+    else index.set(key, [tx.payload.label])
+  }
+  return index
+}
+
+// Consomme l'import existant dont l'operation entrante est une variante de
+// libelle (meme compte, meme montant, meme date) s'il existe.
+function consumeVariant(
+  index: VariantIndex,
+  accountId: string,
+  amount: number,
+  bookingDate: string,
+  label: string,
+): boolean {
+  const labels = index.get(`${accountId}|${amount}|${bookingDate}`)
+  if (!labels) return false
+  const i = labels.findIndex((existing) => isLabelVariant(existing, label))
+  if (i === -1) return false
+  labels.splice(i, 1)
+  return true
+}
+
+// ---------------------------------------------------------------------------
 // Synchronisation d'un utilisateur
 // ---------------------------------------------------------------------------
 
@@ -1269,6 +1332,10 @@ async function syncUser(
   // jusqu'a CARD_TWIN_DAY_TOLERANCE jours avant la premiere date importee.
   const twinMonthIdxs = await dedupWindowMonthIdxs(userId, dateFromByConn, 2)
   const manualTwins = await loadManualTwinsWindow(userId, twinMonthIdxs)
+  // Imports existants de la fenetre, pour reconnaitre une operation que la
+  // banque renvoie avec un libelle complete (meme fenetre que la dedup par hash :
+  // une variante partage la date, donc le mois, de l'import d'origine).
+  const importedVariants = await loadImportedVariantsWindow(userId, dedupMonthIdxs)
 
   let importedTotal = 0
   let linkedCount = 0
@@ -1328,6 +1395,14 @@ async function syncUser(
               localAccount.kind === 'card_deferred' ? CARD_TWIN_DAY_TOLERANCE : TWIN_DAY_TOLERANCE
             if (
               consumeTwin(manualTwins, localAccount.id, mapped.amount, mapped.bookingDate, twinTolerance)
+            ) {
+              seenHashes.add(hash)
+              continue
+            }
+            // Operation deja importee que la banque renvoie avec un libelle
+            // complete : l'import existant fait foi, pas de doublon.
+            if (
+              consumeVariant(importedVariants, localAccount.id, mapped.amount, mapped.bookingDate, mapped.label)
             ) {
               seenHashes.add(hash)
               continue
