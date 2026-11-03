@@ -1275,6 +1275,10 @@ async function syncUser(
   // Integrite referentielle : une categorie supprimee (memoire de tiers ou
   // regle perimee) ne doit jamais etre ecrite sur un import.
   const knownCategories = new Set(categories.filter((c) => !c.isIncome).map((c) => c.id))
+  // Compte carte a debit differe dans le budget : son prelevement mensuel sur le
+  // compte courant sera relie en virement (linkDeferredCardSettlements), il ne
+  // doit donc pas etre categorise a l'import (voir plus bas).
+  const hasOnBudgetCard = accounts.some((a) => a.kind === 'card_deferred' && !a.closed && a.onBudget)
 
   // Un compte clos (archive, solde nul) ne recoit plus d'activite : il n'est
   // plus synchronise, comme un compte EB non lie.
@@ -1409,11 +1413,23 @@ async function syncUser(
             }
             seenHashes.add(hash)
 
+            // Prelevement mensuel d'une carte a debit differe, quand la carte est
+            // un compte du budget : jamais categorise a l'import. Il est relie
+            // juste apres en virement compte courant -> carte, qui ne prend que
+            // les debits sans categorie ; une regle ou la memoire de tiers (ex.
+            // « Carte De Credit ») l'aurait bloque et le releve aurait ete compte
+            // une seconde fois, dans une enveloppe, en plus des achats carte.
+            const cardSettlement =
+              hasOnBudgetCard &&
+              localAccount.kind !== 'card_deferred' &&
+              mapped.amount < 0 &&
+              CARD_SETTLEMENT_RE.test(normalizeLabel(mapped.label))
             // Les comptes de suivi ne se categorisent pas (hors budget).
             // Regles d'abord, puis memoire de tiers apprise des choix manuels.
-            const suggested = localAccount.onBudget
-              ? (categorize(rules, mapped.label) ?? payeeDefaults.get(payeeKey(mapped.label)) ?? null)
-              : null
+            const suggested =
+              localAccount.onBudget && !cardSettlement
+                ? (categorize(rules, mapped.label) ?? payeeDefaults.get(payeeKey(mapped.label)) ?? null)
+                : null
             const categoryId = suggested && knownCategories.has(suggested) ? suggested : null
             const payload: TxPayload = {
               accountId: localAccount.id,
