@@ -38,12 +38,14 @@ jobs:
         if: steps.guard.outputs.configured == 'true'
         with:
           version: latest
-      # Deploie l'Edge Function /api (verify_jwt vient de config.toml).
+      # Deploie l'Edge Function /api (verify_jwt vient de config.toml). Le CLI
+      # (version latest) exige --yes hors terminal et --remote=<ref> remplace
+      # --project-ref (deprecie).
       - name: Deployer la fonction api
         if: steps.guard.outputs.configured == 'true'
-        run: supabase functions deploy api --project-ref "$SUPABASE_PROJECT_ID"
+        run: supabase functions deploy api --remote="$SUPABASE_PROJECT_ID" --yes
       # Deploie l'Edge Function sync-bank (verify_jwt = false via config.toml : la
       # fonction verifie a la main le JWT utilisateur ou le secret x-cron-secret).
       - name: Deployer la fonction sync-bank
         if: steps.guard.outputs.configured == 'true'
-        run: supabase functions deploy sync-bank --project-ref "$SUPABASE_PROJECT_ID"
+        run: supabase functions deploy sync-bank --remote="$SUPABASE_PROJECT_ID" --yes
