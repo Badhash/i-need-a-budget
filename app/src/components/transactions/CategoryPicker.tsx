@@ -245,7 +245,9 @@ function PickerPanel({ triggerRef, includeIncome, label, value, onClose, onChoos
           .filter(
             (c) =>
               c.groupId === group.id &&
-              (includeIncome || !c.isIncome) &&
+              // La valeur actuelle reste listee, meme une categorie de revenus
+              // sur une depense (« Ajustement de solde » a la baisse).
+              (includeIncome || !c.isIncome || c.id === value) &&
               (c.id === value || (!c.hidden && !group.hidden)) &&
               (!q || norm(c.name).includes(q)),
           )

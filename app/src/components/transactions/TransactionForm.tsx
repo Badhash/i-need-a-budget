@@ -207,12 +207,15 @@ export function TransactionForm({
   // Categories proposees : ni masquees ni d'un groupe masque, sauf la valeur
   // actuelle. Depense : enveloppes seulement. Entree d'argent : revenus
   // d'abord, puis les enveloppes (un remboursement est une entree SUR une
-  // enveloppe de depense).
+  // enveloppe de depense). Exception : une depense DEJA rangee en revenus
+  // (« Ajustement de solde » a la baisse, qui sort du Pret a assigner) garde
+  // sa categorie ; sinon, la modifier la ferait passer « À catégoriser ».
   const categoryOptions = useMemo<ComboboxOption[]>(() => {
     const hiddenGroups = new Set(groups.filter((g) => g.hidden).map((g) => g.id))
+    const keptIncomeId = initial.kind === 'expense' ? initial.categoryId : ''
     const visible = categories.filter(
       (c) =>
-        (wantIncome || !c.isIncome) &&
+        (wantIncome || !c.isIncome || c.id === keptIncomeId) &&
         (c.id === initial.categoryId || (!c.hidden && !hiddenGroups.has(c.groupId))),
     )
     const isIncomeGroup = (groupId: string) => visible.some((c) => c.groupId === groupId && c.isIncome)
@@ -225,7 +228,7 @@ export function TransactionForm({
       }
     }
     return opts
-  }, [groups, categories, wantIncome, initial.categoryId])
+  }, [groups, categories, wantIncome, initial.categoryId, initial.kind])
 
   // Comptes proposes : ouverts (budget puis suivi) ; un compte clos ne reste
   // que s'il est la valeur actuelle (edition d'une ancienne transaction).
