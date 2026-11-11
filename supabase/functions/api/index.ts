@@ -1174,6 +1174,10 @@ async function actionBootstrap(userId: string) {
     }
   }
 
+  // Agregats non prets : calcul complet (toujours juste) et reconstruction
+  // planifiee, sinon chaque lecture relit l'historique jusqu'au prochain
+  // lancement de l'app.
+  await scheduleAggRebuildSafe(userId, keys)
   const [data, payees] = await Promise.all([loadBudgetData(userId), loadPayeeList(keys, userId)])
   return buildBootstrap(data, payees)
 }
@@ -1420,6 +1424,7 @@ async function actionGetBudgetMonth(userId: string, params: Params) {
     }
   }
 
+  await scheduleAggRebuildSafe(userId, keys)
   const data = await loadBudgetData(userId)
   return computeBudget(toEngineInput(data, month))
 }
