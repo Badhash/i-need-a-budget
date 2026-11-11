@@ -203,9 +203,9 @@ describe('transport base64 (enc_payload)', () => {
   })
 
   it('decode ce que encode(...,base64) de Postgres produirait (vecteur connu)', () => {
-    // Buffer.from(x).toString('base64') == encode(x,'base64') cote Postgres
+    // encode('\x0102030405'::bytea, 'base64') cote Postgres = 'AQIDBAU='
     const bytes = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05])
-    const expected = Buffer.from(bytes).toString('base64')
+    const expected = 'AQIDBAU='
     expect(bytesToBase64(bytes)).toBe(expected)
     expect(base64ToBytes(expected)).toEqual(bytes)
   })

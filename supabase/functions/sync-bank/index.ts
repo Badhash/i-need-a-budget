@@ -425,7 +425,7 @@ async function logSyncSafe(userId: string, payload: SyncLogPayload): Promise<voi
 // ---------------------------------------------------------------------------
 
 // Import de la cle privee PEM PKCS8 en cle RSASSA-PKCS1-v1_5 SHA-256 (signature).
-function pemToPkcs8Der(pem: string): Uint8Array {
+function pemToPkcs8Der(pem: string): Uint8Array<ArrayBuffer> {
   const body = pem
     .replace(/-----BEGIN [^-]+-----/g, '')
     .replace(/-----END [^-]+-----/g, '')

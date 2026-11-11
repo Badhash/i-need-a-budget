@@ -135,7 +135,7 @@ export async function deriveKeys(masterKeyB64: string): Promise<CryptoKeys> {
  * lignes de la meme table du meme utilisateur, et rollback d'une ligne vers
  * une version anterieure.
  */
-function buildAad(context: readonly string[]): Uint8Array {
+function buildAad(context: readonly string[]): Uint8Array<ArrayBuffer> {
   assertNoSeparator(context)
   return encoder.encode(['aad', String(FORMAT_VERSION), ...context].join(DOMAIN_SEP))
 }
