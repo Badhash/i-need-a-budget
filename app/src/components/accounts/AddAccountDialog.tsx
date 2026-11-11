@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { newAccountVars, useCreateAccount } from '@/lib/accounts'
 import { fmtEUR } from '@/lib/format'
 import { toast } from '@/lib/toast'
@@ -35,9 +35,15 @@ export function AddAccountDialog({
   const [draft, setDraft] = useState<AccountDraft>(() => emptyDraft({ onBudget: defaultOnBudget }))
   const [error, setError] = useState<{ message: string; field?: DraftField } | null>(null)
 
+  // Garde de double soumission : le dialogue reste monte pendant son animation
+  // de sortie, un double clic (ou deux Entree) creait deux comptes et deux
+  // soldes d'ouverture, donc un Pret a assigner credite deux fois.
+  const submitted = useRef(false)
+
   // Formulaire neuf a chaque ouverture (section d'origine prise en compte).
   useEffect(() => {
     if (!open) return
+    submitted.current = false
     setDraft(
       emptyDraft({
         onBudget: defaultOnBudget,
@@ -49,11 +55,13 @@ export function AddAccountDialog({
   }, [open, defaultOnBudget])
 
   const submit = () => {
+    if (submitted.current) return
     const check = validateDraft(draft, true)
     if (check.error) {
       setError({ message: check.error, field: check.field })
       return
     }
+    submitted.current = true
     const name = draft.name.trim()
     create.mutate(
       newAccountVars({
