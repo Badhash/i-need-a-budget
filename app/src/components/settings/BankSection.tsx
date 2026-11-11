@@ -52,7 +52,9 @@ const STATUS_META: Record<BankConnection['status'], { label: string; variant: Ba
 }
 
 // Duree d'une session Enable Banking (consentement PSD2).
-const CONSENT_DAYS = 180
+// Duree demandee par sync-bank a l'ouverture de la session (startAuth : 90 jours,
+// plafond PSD2 usuel). A 180, la jauge demarrait a moitie vide des le premier jour.
+const CONSENT_DAYS = 90
 const DAY = 86_400_000
 
 function fmtValidUntil(iso: string | null): string | null {

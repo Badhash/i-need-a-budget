@@ -115,7 +115,7 @@ export function SettingsHero({ onJump }: { onJump: (sectionId: string) => void }
           <p className="truncate text-[17px] font-semibold tracking-tight text-ink lg:text-[20px]">
             {email || 'Compte'}
           </p>
-          <p className="text-[12.5px] text-soft">Budget chiffré de bout en bout, rien qu’à toi.</p>
+          <p className="text-[12.5px] text-soft">Budget chiffré côté serveur, rien qu’à toi.</p>
         </div>
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-2.5 lg:mt-5">

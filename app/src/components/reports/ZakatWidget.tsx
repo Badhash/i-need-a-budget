@@ -38,7 +38,12 @@ function eurToCents(input: string): number {
 
 export function ZakatWidget({ className }: { className?: string }) {
   const { data: txs } = useTransactions()
-  const [date, setDate] = useState(() => readLS(ZAKAT_DATE_KEY, `${today().slice(0, 4)}-01-01`))
+  // « || » : une date vide deja enregistree par une ancienne version retombe
+  // aussi sur le defaut.
+  const [date, setDate] = useState(() => {
+    const fallback = `${today().slice(0, 4)}-01-01`
+    return readLS(ZAKAT_DATE_KEY, fallback) || fallback
+  })
   const [nisab, setNisab] = useState(() => readLS(NISAB_KEY, ''))
 
   // Valeur nette a la date choisie : somme de toutes les transactions (tous
@@ -91,6 +96,10 @@ export function ZakatWidget({ className }: { className?: string }) {
             value={date}
             max={today()}
             onChange={(e) => {
+              // Champ vide (bouton « Effacer » d'iOS) : on garde la derniere date
+              // valide. Une date vide etait enregistree et le widget affichait
+              // « Invalid Date » a chaque ouverture.
+              if (!e.target.value) return
               setDate(e.target.value)
               writeLS(ZAKAT_DATE_KEY, e.target.value)
             }}
