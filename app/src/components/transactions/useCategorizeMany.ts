@@ -4,7 +4,7 @@
 // categories posees par ce lot sont retirees.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiCategorizeMany } from '@/lib/data'
+import { apiCategorizeMany, BOOTSTRAP_KEY } from '@/lib/data'
 import {
   applyCategorizeManyOptimistic,
   revertCategorizeOptimistic,
@@ -12,13 +12,16 @@ import {
 } from '@/lib/categorize'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { followTxId } from '@/lib/txIds'
+import { pauseReads } from '@/lib/pauseReads'
 
 export interface CategorizeManyVars {
   txIds: string[]
   categoryId: string | null
 }
 
-// Limite serveur : au-dela, on tronque (le cache optimiste suit la meme borne).
+// Limite serveur par appel. Au-dela, le lot part en plusieurs appels enchaines
+// dans UNE tache de la file : il etait auparavant tronque en silence a 200
+// alors que le toast annoncait le nombre demande.
 export const CATEGORIZE_MANY_MAX = 200
 
 export function useCategorizeMany() {
@@ -26,20 +29,26 @@ export function useCategorizeMany() {
   return useMutation({
     mutationFn: ({ txIds, categoryId }: CategorizeManyVars) =>
       enqueue(
-        () =>
-          apiCategorizeMany(
-            txIds.slice(0, CATEGORIZE_MANY_MAX).map((id) => resolveId(followTxId(id))),
-            categoryId === null ? null : resolveId(categoryId),
-          ),
+        async () => {
+          // Ids resolus a l'execution (file) ; valeurs absolues, donc un rejeu
+          // complet apres une coupure reseau est sans effet de bord.
+          const ids = txIds.map((id) => resolveId(followTxId(id)))
+          const category = categoryId === null ? null : resolveId(categoryId)
+          let updated = 0
+          for (let from = 0; from < ids.length; from += CATEGORIZE_MANY_MAX) {
+            const res = await apiCategorizeMany(ids.slice(from, from + CATEGORIZE_MANY_MAX), category)
+            updated += res.updated
+          }
+          return { ok: true as const, updated }
+        },
         { deps: categoryId === null ? [] : [categoryId] },
       ),
     onMutate: async ({ txIds, categoryId }) => {
-      await queryClient.cancelQueries({ queryKey: ['transactions'] })
-      return applyCategorizeManyOptimistic(
-        queryClient,
-        txIds.slice(0, CATEGORIZE_MANY_MAX).map(followTxId),
-        categoryId,
-      )
+      await Promise.all([
+        pauseReads(queryClient, ['transactions']),
+        pauseReads(queryClient, BOOTSTRAP_KEY),
+      ])
+      return applyCategorizeManyOptimistic(queryClient, txIds.map(followTxId), categoryId)
     },
     onError: (_err, _vars, contexts) => {
       if (contexts) revertCategorizeOptimistic(queryClient, contexts)
