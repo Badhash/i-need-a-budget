@@ -235,8 +235,12 @@ export function TriagePage() {
     if (last.kind === 'pick') {
       categorize.mutate({ txId: last.txId, categoryId: null })
       setDone((n) => Math.max(0, n - 1))
-      // La bascule « Toujours pour ce tiers » a change le defaut : on le remet.
-      if (last.payee && last.payee.forced !== (last.payee.initial === last.categoryId)) {
+      // Tout choix apprend le tiers cote serveur (le premier choix d'un tiers
+      // inconnu devient son defaut) et retirer la categorie ne desapprend
+      // rien : on remet donc toujours la memoire dans l'etat d'avant (null =
+      // oublier). Sinon un appui par erreur restait memorise et les prochains
+      // imports de ce tiers arrivaient classes dans la mauvaise enveloppe.
+      if (last.payee) {
         payeeDefault.mutate({ key: last.payee.key, label: last.payee.label, categoryId: last.payee.initial })
       }
       setEnter('undo-pick')
