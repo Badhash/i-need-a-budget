@@ -2371,6 +2371,16 @@ const DEFAULT_STRUCTURE: { group: Omit<GroupPayload, 'sortOrder' | 'hidden'>; ca
   { group: { name: 'Épargne & objectifs', color: 'green', icon: 'piggy' }, categories: ["Fonds d'urgence", 'Cadeaux', 'Projets'] },
 ]
 
+// Vrai si l'utilisateur a deja du contenu qui reference des categories.
+async function hasBudgetContent(userId: string): Promise<boolean> {
+  for (const table of ['transactions', 'assignments', 'targets', 'rules']) {
+    const { data, error } = await admin.from(table).select('id').eq('user_id', userId).limit(1)
+    if (error) throw new ApiError(500, `lecture ${table} impossible`)
+    if (data && data.length > 0) return true
+  }
+  return false
+}
+
 async function actionSeedDefaults(userId: string) {
   // Idempotence : les inserts PostgREST ne sont pas transactionnels. Un seed
   // complet possede forcement une categorie de revenus (inseree en premier) ;
@@ -2388,6 +2398,13 @@ async function actionSeedDefaults(userId: string) {
     existingGroups.length >= expectedGroups && existingCategories.length >= expectedCats
   if (complete) throw new ApiError(409, 'des categories existent deja')
   if (existingGroups.length > 0 || existingCategories.length > 0) {
+    // La purge ne vaut que pour un seed interrompu sur un compte vierge. Un
+    // budget deja utilise avec moins de categories que le modele (defauts
+    // supprimes, taxonomie importee de YNAB) perdrait toutes ses categories :
+    // transactions, assignations, objectifs et regles pointeraient dans le vide.
+    if (await hasBudgetContent(userId)) {
+      throw new ApiError(409, 'des categories existent deja')
+    }
     const delCats = await admin.from('categories').delete().eq('user_id', userId)
     const delGroups = await admin.from('category_groups').delete().eq('user_id', userId)
     if (delCats.error || delGroups.error) {
