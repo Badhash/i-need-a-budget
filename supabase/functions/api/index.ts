@@ -50,7 +50,7 @@ import {
 } from './aggregates.ts'
 import { clearUserSettings, loadUserSettings, saveUserSettings } from './settings.ts'
 import { clearPayees, forgetPayeeCategory, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
-import { mfaLevelSatisfied } from './mfa.ts'
+import { jwtClaims, mfaLevelSatisfied } from './mfa.ts'
 import { SERVER_FEATURES } from './features.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
@@ -3585,6 +3585,14 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get('authorization')
     if (!authHeader) throw new ApiError(401, 'authentification requise')
+    // La cle anon publique du bundle est un JWT valide du projet : elle passe la
+    // verification de la plateforme. On l'ecarte ici, sans appel au service Auth,
+    // pour qu'un appelant sans compte ne puisse pas en consommer le quota.
+    // Simple pre-filtre : l'identite reste etablie par auth.getUser() ci-dessous.
+    const claims = jwtClaims(authHeader)
+    if (claims.role !== 'authenticated' || typeof claims.sub !== 'string') {
+      throw new ApiError(401, 'session invalide')
+    }
     const authClient = createClient(SUPABASE_URL, ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
       auth: { persistSession: false, autoRefreshToken: false },
