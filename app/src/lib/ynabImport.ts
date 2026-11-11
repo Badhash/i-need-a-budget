@@ -1277,6 +1277,11 @@ async function execute(run: ImportRun, report: (p: ImportProgress) => void): Pro
           run.cursor++
           report(progressOf(run))
         }
+        // Les agregats ont ete invalides par l'import et rien ne les
+        // reconstruisait avant le prochain lancement de l'app : chaque lecture
+        // relisait tout l'historique importe. Une seule reconstruction ici,
+        // best-effort (le calcul complet sert en cas d'echec).
+        await apiCall('recomputeAggregates').catch(() => {})
         run.step = 'targets'
         run.cursor = 0
         break
