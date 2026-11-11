@@ -1637,9 +1637,13 @@ async function actionCategorizeMany(userId: string, params: Params) {
       (!r.payload.transferGroupId || isCrossHalfOf({ id: r.id, ...r.payload }, groups, onBudget)),
   )
 
-  if (targets.some((r) => r.payload.transferGroupId)) {
-    // Au moins une moitie croisee : pas de maintenance incrementale pour le
-    // lot (cf. withAggregatesStale), une invalidation autour des ecritures.
+  if (
+    targets.some((r) => r.payload.transferGroupId) ||
+    targets.length > AGG_INCREMENTAL_BATCH_MAX
+  ) {
+    // Au moins une moitie croisee, ou gros lot (cf. AGG_INCREMENTAL_BATCH_MAX) :
+    // pas de maintenance incrementale pour le lot (cf. withAggregatesStale), une
+    // invalidation autour des ecritures.
     await withAggregatesStale(userId, async () => {
       for (const r of targets) await updateTx(userId, r.id, { ...r.payload, categoryId })
     })
