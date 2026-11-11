@@ -515,8 +515,10 @@ function parseBudget(
     // retirer de l'argent d'une enveloppe = "Assigned" negatif sur le mois.
     // Les ignorer gonfle la somme des assignes et effondre le Ready to Assign
     // (constate sur donnees reelles : -57 000 EUR d'ecart).
-    if (amount === 0) continue
+    // La categorie est creee meme sans montant : une enveloppe YNAB vide et
+    // sans transaction disparaissait sinon de l'import.
     const catKey = ensureCategory(acc, group, category)
+    if (amount === 0) continue
     byKey.set(`${month}||${catKey}`, { categoryKey: catKey, month, amount })
   }
   return { assignments: [...byKey.values()], ignored }
