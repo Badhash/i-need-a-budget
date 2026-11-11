@@ -1,0 +1,74 @@
+name: Tests et typecheck
+
+# Filet avant fusion : jusqu'ici aucun workflow n'executait les tests du moteur
+# et de la crypto, ni le typecheck des Edge Functions.
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  packages:
+    name: Moteur et crypto
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [engine, crypto]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/${{ matrix.package }}/package-lock.json
+      - name: Installer les dependances
+        working-directory: packages/${{ matrix.package }}
+        run: npm ci
+      - name: Typecheck
+        working-directory: packages/${{ matrix.package }}
+        run: npx tsc --noEmit
+      - name: Tests
+        working-directory: packages/${{ matrix.package }}
+        run: npx vitest run
+
+  functions:
+    name: Edge Functions (typecheck Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Deno via npm : pas d'action tierce supplementaire. Le deploiement
+      # Supabase ne typecheck pas, une erreur de type partait donc en production.
+      - name: Typecheck des fonctions
+        run: npx --yes deno@2 check supabase/functions/api/index.ts supabase/functions/sync-bank/index.ts
+
+  app:
+    name: Front (typecheck et build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Installer les dependances
+        working-directory: app
+        run: npm ci
+      # Valeurs factices : seul le build est verifie ici, rien n'est deploye.
+      - name: Typecheck et build
+        working-directory: app
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_ANON_KEY: ci-placeholder

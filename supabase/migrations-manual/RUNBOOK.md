@@ -96,3 +96,28 @@ mais ne part qu'au prochain déploiement des Edge Functions (jeton CI à renouve
   pour un versement sur le PEA, une catégorie de revenus pour un retrait).
 - Vérification : la réponse de `bootstrap` contient `features` avec
   `crossBudgetTransfers`, `accountFlags`, `refillTargets`, `importTransfers`.
+
+## Durcissement issu de l'audit de novembre 2026 (à appliquer)
+
+Deux scripts sans dépendance de code, à coller dans le SQL Editor. Ils ne sont
+**pas encore appliqués en production** au moment où ils entrent dans le dépôt.
+
+1. **`O-revoke-rpc-execute.sql`** — retire explicitement `EXECUTE` sur les RPC
+   `enc_insert` / `enc_update` et sur les colonnes calculées `enc_b64` aux rôles
+   `anon` et `authenticated` (les scripts D et H ne révoquaient que `public`, ce
+   qui ne retire pas les droits accordés nommément par Supabase). Idempotent. Le
+   fichier se termine par cinq requêtes de vérification en lecture seule (RLS,
+   droits des tables, index, policy Realtime, triggers) : le schéma de base
+   n'étant pas versionné, c'est le seul moyen de confirmer l'état réel.
+2. **`P-cron-secret-vault.sql`** — remplace les jobs de `G-cron-2x.sql` par des
+   jobs qui lisent le secret `x-cron-secret` dans Supabase Vault au lieu de le
+   porter en clair dans `cron.job`. Purge aussi `cron.job_run_details`, qui
+   contient l'ancien secret. Faire ensuite tourner le secret.
+
+Notes sur ce document :
+
+- La REF J (`J-account-idx.sql`, action `backfillAccountIdx`) décrite plus haut
+  n'a aucun code correspondant dans le dépôt : ni l'index `account_idx` des
+  transactions ni l'action n'existent. Ne pas appliquer ce script sans le code.
+- Le déploiement des Edge Functions passe désormais par les tests du moteur et
+  de la crypto et par un typecheck Deno (`.github/workflows/ci.yml`).
