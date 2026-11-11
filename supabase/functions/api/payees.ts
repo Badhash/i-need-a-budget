@@ -59,19 +59,40 @@ export async function loadPayeeDefaults(
   userId: string,
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>()
-  const { data, error } = await admin
-    .from(TABLE)
-    .select('enc_payload:enc_b64')
-    .eq('user_id', userId)
-  if (error) {
-    if (isMissingTable(error)) return out
-    throw new Error('lecture payee_memory impossible')
-  }
-  for (const row of data ?? []) {
-    const m = await decode(keys, userId, (row as { enc_payload: string }).enc_payload)
+  for (const row of (await loadAllRows(admin, userId)) ?? []) {
+    const m = await decode(keys, userId, row.enc_payload)
     if (m.key && m.categoryId) out.set(m.key, m.categoryId)
   }
   return out
+}
+
+const READ_PAGE = 1000
+
+// Toutes les lignes de l'utilisateur, par pages : PostgREST plafonne une
+// reponse a 1000 lignes, au-dela la memoire etait tronquee en silence (tiers
+// connus plus proposes, defauts vers une categorie supprimee jamais nettoyes).
+// null = table absente.
+async function loadAllRows(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<{ payee_idx: string; enc_payload: string }[] | null> {
+  const rows: { payee_idx: string; enc_payload: string }[] = []
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data, error } = await admin
+      .from(TABLE)
+      .select('payee_idx, enc_payload:enc_b64')
+      .eq('user_id', userId)
+      .order('payee_idx', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (error) {
+      if (isMissingTable(error)) return null
+      throw new Error('lecture payee_memory impossible')
+    }
+    if (!data || data.length === 0) break
+    rows.push(...(data as { payee_idx: string; enc_payload: string }[]))
+    if (data.length < READ_PAGE) break
+  }
+  return rows
 }
 
 async function loadOne(
@@ -187,15 +208,7 @@ export async function forgetPayeeCategory(
   userId: string,
   categoryId: string,
 ): Promise<void> {
-  const { data, error } = await admin
-    .from(TABLE)
-    .select('payee_idx, enc_payload:enc_b64')
-    .eq('user_id', userId)
-  if (error) {
-    if (isMissingTable(error)) return
-    throw new Error('lecture payee_memory impossible')
-  }
-  for (const row of (data ?? []) as { payee_idx: string; enc_payload: string }[]) {
+  for (const row of (await loadAllRows(admin, userId)) ?? []) {
     const m = await decode(keys, userId, row.enc_payload)
     if (m.categoryId !== categoryId && !m.history.includes(categoryId)) continue
     const history = m.history.filter((id) => id !== categoryId)
