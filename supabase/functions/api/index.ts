@@ -52,6 +52,7 @@ import { clearUserSettings, loadUserSettings, saveUserSettings } from './setting
 import { clearPayees, forgetPayeeCategory, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
 import { jwtClaims, mfaLevelSatisfied } from './mfa.ts'
 import { SERVER_FEATURES } from './features.ts'
+import { CARD_SETTLEMENT_RE } from './cardSettlement.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
@@ -2846,36 +2847,62 @@ async function actionApplyRulesToUncategorized(userId: string) {
   // Integrite referentielle : une categorie supprimee entre-temps (regle ou
   // memoire de tiers perimee) ne doit jamais etre ecrite.
   const knownCategories = new Set(categories.filter((c) => !c.isIncome).map((c) => c.id))
+  // Prelevement mensuel d'une carte a debit differe du budget : jamais
+  // categorise (meme garde que sync-bank a l'import). Il attend d'etre relie en
+  // virement compte courant -> carte ; range dans une enveloppe, la liaison le
+  // refuserait et le releve serait compte une seconde fois.
+  const cardAccounts = new Set(accounts.filter((a) => a.kind === 'card_deferred').map((a) => a.id))
+  const hasOnBudgetCard = accounts.some((a) => a.kind === 'card_deferred' && !a.closed && a.onBudget)
 
-  const aggOps: { old: AggTx; next: AggTx }[] = []
-  let categorized = 0
+  // 1. Selection, sans ecrire.
+  const matches: { id: string; old: TxPayload; next: TxPayload }[] = []
+  for (const tx of transactions) {
+    // On ne touche qu'aux transactions non categorisees et hors transfert,
+    // sur les comptes budget.
+    if (tx.categoryId || tx.transferGroupId || !onBudget.has(tx.accountId)) continue
+    if (
+      hasOnBudgetCard &&
+      !cardAccounts.has(tx.accountId) &&
+      tx.amount < 0 &&
+      CARD_SETTLEMENT_RE.test(normalizeLabel(tx.label))
+    ) {
+      continue
+    }
+    // Regles d'abord, puis repli sur la memoire de tiers (REF N).
+    const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
+    const categoryId = rule?.categoryId ?? payeeDefaults.get(payeeKey(tx.label)) ?? null
+    if (!categoryId || !knownCategories.has(categoryId)) continue
+    // On retire id du payload et on ne passe PAS d'extra : month_idx et
+    // tx_hash de la ligne restent intacts.
+    const { id, ...payload } = tx
+    matches.push({ id, old: payload, next: { ...payload, categoryId } })
+  }
+  if (matches.length === 0) return { categorized: 0 }
+
+  // 2. Gros lot : invalidation autour des ecritures (cf. AGG_INCREMENTAL_BATCH_MAX).
+  if (matches.length > AGG_INCREMENTAL_BATCH_MAX) {
+    await withAggregatesStale(userId, async () => {
+      for (const m of matches) await updateTx(userId, m.id, m.next)
+    })
+    return { categorized: matches.length }
+  }
+
+  // 3. Petit lot : maintenance incrementale.
+  let written = 0
   try {
-    for (const tx of transactions) {
-      // On ne touche qu'aux transactions non categorisees et hors transfert,
-      // sur les comptes budget.
-      if (tx.categoryId || tx.transferGroupId || !onBudget.has(tx.accountId)) continue
-      // Regles d'abord, puis repli sur la memoire de tiers (REF N).
-      const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
-      const categoryId = rule?.categoryId ?? payeeDefaults.get(payeeKey(tx.label)) ?? null
-      if (!categoryId || !knownCategories.has(categoryId)) continue
-      // On retire id du payload et on ne passe PAS d'extra : month_idx et
-      // tx_hash de la ligne restent intacts.
-      const { id, ...payload } = tx
-      await updateTx(userId, id, { ...payload, categoryId })
-      aggOps.push({ old: payload, next: { ...payload, categoryId } })
-      categorized += 1
+    for (const m of matches) {
+      await updateTx(userId, m.id, m.next)
+      written += 1
     }
   } catch (err) {
     // Lot partiellement applique : agregats invalides (fallback calcul complet).
-    if (aggOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
+    if (written > 0) await aggMarkStale(admin, userId).catch(() => {})
     throw err
   }
-  if (aggOps.length > 0) {
-    await aggMaintain(userId, keys, async (b) => {
-      for (const op of aggOps) await b.replaceTx(op.old, op.next)
-    })
-  }
-  return { categorized }
+  await aggMaintain(userId, keys, async (b) => {
+    for (const m of matches) await b.replaceTx(m.old, m.next)
+  })
+  return { categorized: matches.length }
 }
 
 // ---------------------------------------------------------------------------
