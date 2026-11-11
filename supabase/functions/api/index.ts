@@ -3632,8 +3632,24 @@ Deno.serve(async (req) => {
     try {
       const result = await ACTIONS[action](userId, (body.params as Params) ?? {})
       return new Response(JSON.stringify(result), { status: 200, headers })
+    } catch (err) {
+      // Filet REF I : une ecriture qui echoue cote serveur (5xx ou exception
+      // inattendue) a pu commiter une partie de ses ecritures sans maintenance.
+      // On invalide les agregats plutot que de risquer un marqueur 'ready' faux.
+      if (isWrite && !(err instanceof ApiError && err.status < 500)) {
+        await aggMarkStale(admin, userId).catch(() => {})
+        await getKeys()
+          .then((keys) => scheduleAggRebuildSafe(userId, keys))
+          .catch(() => {})
+      }
+      throw err
     } finally {
-      if (isWrite) endWrite(userId)
+      if (isWrite) {
+        endWrite(userId)
+        // Purge aussi APRES l'ecriture : une lecture de repli lancee pendant
+        // l'action avait pu remettre en cache un instantane d'avant le commit.
+        invalidateBudgetCache(userId)
+      }
     }
   } catch (err) {
     if (err instanceof ApiError) {
