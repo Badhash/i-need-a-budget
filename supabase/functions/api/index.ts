@@ -255,22 +255,54 @@ function currentMonthParis(): string {
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
 
+// Fenetre acceptee pour un mois ou une date : de 1990 a dix ans apres le mois
+// courant. Sans borne, un mois « 9999-12 » faisait derouler ~96 000 mois par
+// enveloppe au moteur (plusieurs secondes de CPU, au-dela du budget d'une Edge
+// Function).
+const MIN_MONTH = '1990-01'
+const MAX_MONTHS_AHEAD = 120
+
+function monthInWindow(month: string): boolean {
+  return month >= MIN_MONTH && month <= addMonths(currentMonthParis(), MAX_MONTHS_AHEAD)
+}
+
 function requireMonth(value: unknown): string {
-  if (typeof value !== 'string' || !MONTH_RE.test(value)) {
+  if (typeof value !== 'string' || !MONTH_RE.test(value) || !monthInWindow(value)) {
     throw new ApiError(400, 'mois invalide (YYYY-MM attendu)')
   }
   return value
 }
 
+// Vrai si la date existe au calendrier (refuse 2025-02-31, que V8 lirait comme
+// le 3 mars).
+function isCalendarDate(value: string): boolean {
+  const [y, m, d] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(y, m - 1, d))
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
+}
+
 function requireDate(value: unknown): string {
-  if (typeof value !== 'string' || !DATE_RE.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    !DATE_RE.test(value) ||
+    !isCalendarDate(value) ||
+    !monthInWindow(value.slice(0, 7))
+  ) {
     throw new ApiError(400, 'date invalide (YYYY-MM-DD attendue)')
   }
   return value
 }
 
+// Plafond d'un montant : un milliard d'euros. Au-dela, des sommes pourraient
+// sortir des entiers surs et faire diverger agregats et calcul complet.
+const MAX_AMOUNT_CENTS = 100_000_000_000
+
 function requireAmount(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    Math.abs(value) > MAX_AMOUNT_CENTS
+  ) {
     throw new ApiError(400, 'montant invalide (centimes entiers attendus)')
   }
   return value
