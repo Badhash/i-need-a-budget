@@ -11,6 +11,7 @@ import type {
 } from '@/components/budget/CategoryActionSheet'
 import { useBudgetHistory, type AssignChange, type HistoryStep } from '@/stores/budgetHistory'
 import { pauseReads } from '@/lib/pauseReads'
+import { useUiStore } from '@/stores/ui'
 
 // Une enveloppe est "vide" quand ses trois colonnes sont a 0 : rien d'assigne,
 // aucune activite, aucun disponible reporte. Des qu'UNE colonne est non nulle,
@@ -151,14 +152,21 @@ function rollbackAssign(queryClient: QueryClient, month: string, context: Assign
 
 // Pas de refetch du mois assigne (deja exact en optimiste). Les AUTRES mois en
 // cache, eux, sont perimes : une assignation en M pese sur le Pret a assigner
-// de M-1 et sur le report de M+1. On les marque perimes ; etant inactifs, ils
-// ne sont refetches qu'a leur prochain affichage.
+// de M-1 et sur le report de M+1. On les marque perimes SANS les refetcher
+// (refetchType 'none') : ils le seront a leur prochain affichage. Sans cela,
+// le mois precedent, garde « actif » par les valeurs rapides de la ligne en
+// edition (useAssignSuggestions), etait retelecharge a chaque assignation.
+// Seul le mois reellement affiche, s'il n'est plus celui de l'ecriture
+// (mutation aboutie apres un changement de mois), est relu.
 function invalidateOtherMonths(queryClient: QueryClient, month: string, context: AssignContext | undefined): void {
   const m = context?.key[1] ?? month
   void queryClient.invalidateQueries({
     queryKey: ['budget'],
     predicate: (q) => q.queryKey[1] !== m,
+    refetchType: 'none',
   })
+  const shown = useUiStore.getState().month
+  if (shown !== m) void queryClient.invalidateQueries({ queryKey: ['budget', shown] })
 }
 
 /** Saisie d'UNE enveloppe (feuille mobile, edition inline desktop, « Vider »). */
