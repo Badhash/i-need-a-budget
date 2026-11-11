@@ -25,6 +25,7 @@ import { RULES_KEY, fetchRules } from '@/lib/rules'
 import { TARGETS_KEY, fetchTargets } from '@/lib/targets'
 import { maxMonth, MIN_MONTH, addMonths } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
+import { toast } from '@/lib/toast'
 import { AppLoader } from '@/components/shared/AppLoader'
 
 /**
@@ -185,30 +186,56 @@ export function App() {
     if (status !== 'authed') return
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
-    if (!code || finalizedCodeRef.current === code) return
+    // Nettoyer l'URL (parametres du retour de consentement) sans recharger ni
+    // toucher au hash.
+    const cleanUrl = () => {
+      for (const key of ['code', 'state', 'error', 'error_description']) params.delete(key)
+      const search = params.toString()
+      window.history.replaceState(
+        null,
+        '',
+        window.location.origin +
+          window.location.pathname +
+          (search ? `?${search}` : '') +
+          window.location.hash,
+      )
+    }
+    // Consentement refuse ou annule chez la banque : retour sans code, avec
+    // error + state. Il etait ignore (aucun message, URL laissee telle quelle).
+    if (!code) {
+      if (params.has('error') && params.has('state') && finalizedCodeRef.current !== 'error') {
+        finalizedCodeRef.current = 'error'
+        cleanUrl()
+        toast({
+          message: 'Connexion bancaire non finalisée',
+          description: 'La banque n’a pas validé le consentement. Relance la connexion depuis Réglages.',
+          tone: 'warning',
+        })
+        void router.navigate({ to: '/reglages' })
+      }
+      return
+    }
+    if (finalizedCodeRef.current === code) return
     finalizedCodeRef.current = code
 
     void (async () => {
       try {
         await bankFinalizeAuth(code)
         await queryClient.invalidateQueries({ queryKey: ['bankConnections'] })
+      } catch (err) {
+        // Un retour de consentement ne doit jamais casser l'app, mais l'echec
+        // doit se voir : la connexion restait « expirée » sans explication.
+        console.error('Finalisation de la connexion bancaire echouee', err)
+        toast({
+          message: 'Connexion bancaire non finalisée',
+          description: 'Le code de la banque a été refusé ou a expiré. Relance la connexion.',
+          tone: 'danger',
+        })
+      } finally {
+        cleanUrl()
         // Retour de consentement : ramener l'utilisateur sur les reglages
         // (section bancaire), pas sur le budget.
         void router.navigate({ to: '/reglages' })
-      } catch (err) {
-        // Echec silencieux : un retour de consentement ne doit jamais casser l'app.
-        console.error('Finalisation de la connexion bancaire echouee', err)
-      } finally {
-        // Nettoyer l'URL (retirer code/state) sans recharger ni toucher au hash.
-        params.delete('code')
-        params.delete('state')
-        const search = params.toString()
-        const cleanUrl =
-          window.location.origin +
-          window.location.pathname +
-          (search ? `?${search}` : '') +
-          window.location.hash
-        window.history.replaceState(null, '', cleanUrl)
       }
     })()
   }, [status, queryClient])
