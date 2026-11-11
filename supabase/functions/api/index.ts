@@ -70,6 +70,12 @@ interface AccountPayload {
   closed: boolean
   connectionId?: string | null
   providerAccountUid?: string | null
+  /**
+   * Date (YYYY-MM-DD) de la premiere association a un compte bancaire : sync-bank
+   * n'importe pas les operations anterieures, deja comprises dans le solde
+   * d'ouverture saisi a la main (hors import d'historique explicite).
+   */
+  syncFrom?: string | null
 }
 
 interface GroupPayload {
@@ -3036,6 +3042,16 @@ async function actionLinkBankAccount(userId: string, params: Params) {
       ? null
       : requireUuid(params.accountId, 'accountId')
 
+  // syncFrom explicite (optionnel) : null = aucune borne. La restauration d'une
+  // sauvegarde l'envoie, car l'historique du compte vient alors du fichier et
+  // non d'un solde d'ouverture saisi aujourd'hui. Absent = regle par defaut.
+  const explicitSyncFrom =
+    params.syncFrom === undefined
+      ? undefined
+      : params.syncFrom === null
+        ? null
+        : requireDate(params.syncFrom)
+
   const accounts = await loadAll<AccountPayload>('accounts', userId)
   if (accountId && !accounts.some((a) => a.id === accountId)) throw new ApiError(404, 'compte inconnu')
   // Association : la connexion doit exister et porter ce compte bancaire (sinon
@@ -3063,7 +3079,20 @@ async function actionLinkBankAccount(userId: string, params: Params) {
   if (accountId) {
     const target = accounts.find((a) => a.id === accountId)!
     const { id, ...rest } = target
-    await updateEncrypted('accounts', userId, id, { ...rest, connectionId, providerAccountUid })
+    // Premiere association de ce compte : les operations anterieures a
+    // aujourd'hui sont deja dans son solde d'ouverture, sync-bank ne les
+    // importera pas. Un compte deja associe (re-association apres un
+    // re-consentement) garde sa borne : aucune operation n'est sautee.
+    const syncFrom =
+      explicitSyncFrom !== undefined
+        ? explicitSyncFrom
+        : (rest.syncFrom ?? (rest.providerAccountUid ? null : todayParis()))
+    await updateEncrypted('accounts', userId, id, {
+      ...rest,
+      connectionId,
+      providerAccountUid,
+      syncFrom,
+    })
   }
   return { ok: true }
 }
