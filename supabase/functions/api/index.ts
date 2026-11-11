@@ -3339,8 +3339,14 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
     })
   }
   if (rows.length > 0) {
-    const { error } = await admin.rpc('enc_insert', { p_table: 'transactions', p_rows: rows })
-    if (error) throw new ApiError(500, 'ecriture transactions impossible')
+    try {
+      const { error } = await admin.rpc('enc_insert', { p_table: 'transactions', p_rows: rows })
+      if (error) throw new ApiError(500, 'ecriture transactions impossible')
+    } finally {
+      // Re-invalidation apres l'insert (cf. withAggregatesStale) : un recompute
+      // concurrent parti avant ce lot ne doit pas basculer 'ready' sans lui.
+      await aggMarkStale(admin, userId).catch(() => {})
+    }
   }
   return { inserted: rows.length }
 }
@@ -3381,12 +3387,16 @@ async function actionImportReplaceAssignments(userId: string, params: Params) {
   if (rows.length > 0) {
     // Upsert par (user_id, assign_idx) : idempotent si un meme (categorie, mois)
     // revient dans un lot ulterieur. Le parser garantit l'unicite intra-lot.
-    const { error } = await admin.rpc('enc_insert', {
-      p_table: 'assignments',
-      p_rows: rows,
-      p_conflict: 'user_id,assign_idx',
-    })
-    if (error) throw new ApiError(500, 'ecriture assignments impossible')
+    try {
+      const { error } = await admin.rpc('enc_insert', {
+        p_table: 'assignments',
+        p_rows: rows,
+        p_conflict: 'user_id,assign_idx',
+      })
+      if (error) throw new ApiError(500, 'ecriture assignments impossible')
+    } finally {
+      await aggMarkStale(admin, userId).catch(() => {})
+    }
   }
   return { upserted: rows.length }
 }
