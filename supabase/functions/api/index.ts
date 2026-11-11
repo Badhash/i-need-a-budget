@@ -2073,6 +2073,12 @@ async function actionDeleteTransaction(userId: string, params: Params) {
       : (b) => b.replaceTx(mirror.payload, { ...mirror.payload, transferGroupId: null })
 
   const writes = async () => {
+    // Tombstone AVANT toute ecriture (upsert idempotent) : si l'enregistrement
+    // echoue, rien n'est supprime (sinon la ligne reviendrait par la sync), et
+    // le miroir n'a pas encore ete touche (aucun demi-etat sous 'ready').
+    const ownHash = data.tx_hash as string | null
+    if (ownHash !== null) await recordDeletedHashes(userId, [ownHash])
+
     if (mirror) {
       if (mirror.txHash === null) {
         const { error: delErr } = await admin
@@ -2088,11 +2094,6 @@ async function actionDeleteTransaction(userId: string, params: Params) {
         })
       }
     }
-
-    // Tombstone AVANT le delete : si l'enregistrement echoue, on ne supprime pas
-    // (sinon la ligne reviendrait par la sync).
-    const ownHash = data.tx_hash as string | null
-    if (ownHash !== null) await recordDeletedHashes(userId, [ownHash])
 
     const { error: delErr } = await admin
       .from('transactions')
