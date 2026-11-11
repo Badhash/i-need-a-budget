@@ -564,11 +564,21 @@ export async function aggBegin(
   keys: CryptoKeys,
   userId: string,
 ): Promise<AggSession | null> {
-  const state = await readState(admin, keys, userId)
-  if (state === null) return null
   // Fence AVANT les ajustements : voir l'en-tete du module.
   const fenceRev = await bumpStateRev(admin, userId)
-  if (fenceRev === null) return null // marqueur disparu : agregats invalides
+  if (fenceRev === null) return null // marqueur absent : agregats invalides
+  // Le statut est lu APRES la fence. Lu avant, un recompute qui basculait
+  // 'ready' entre la lecture et la fence passait inapercu : la maintenance
+  // etait sautee (statut 'building' perime) sous un marqueur desormais 'ready',
+  // et l'ecriture manquait aux agregats sans que rien ne les invalide.
+  const state = await readState(admin, keys, userId)
+  if (state === null) return null
+  if (state.rev !== fenceRev) {
+    // Le marqueur a encore bouge juste apres notre fence : situation ambigue,
+    // on invalide (les lectures retombent sur le calcul complet, toujours juste).
+    await aggMarkStale(admin, userId)
+    return null
+  }
   if (state.payload.version !== AGG_VERSION || state.payload.status !== 'ready') return null
   const [onBudget, settings] = await Promise.all([
     loadOnBudget(admin, keys, userId),
@@ -598,18 +608,21 @@ export async function aggBegin(
  * intercale : nos ajustements ont pu atterrir sur des tables reconstruites qui
  * les integraient deja (double comptage). On invalide — faux positif possible
  * avec une simple maintenance concurrente, mais la degradation (fallback +
- * reconstruction) est toujours sure.
+ * reconstruction) est toujours sure. Renvoie true si les agregats viennent
+ * d'etre invalides (l'appelant planifie alors leur reconstruction).
  */
 export async function aggPostCheck(
   admin: Db,
   keys: CryptoKeys,
   userId: string,
   fenceRev: number,
-): Promise<void> {
+): Promise<boolean> {
   const state = await readState(admin, keys, userId)
   if (state !== null && state.rev !== fenceRev) {
     await aggMarkStale(admin, userId)
+    return true
   }
+  return false
 }
 
 // ---------------------------------------------------------------------------

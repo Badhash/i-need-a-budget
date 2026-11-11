@@ -1365,6 +1365,10 @@ async function execute(run: ImportRun, report: (p: ImportProgress) => void): Pro
                 connectionId: link.connectionId,
                 providerAccountUid: link.providerAccountUid,
                 accountId,
+                // Compte restaure : son historique vient de la sauvegarde, la
+                // synchro ne doit pas ignorer les operations anterieures a
+                // aujourd'hui (borne posee a la premiere association).
+                syncFrom: null,
               })
               run.linksRestored++
             } catch (err) {

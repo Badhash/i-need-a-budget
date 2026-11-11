@@ -50,8 +50,9 @@ import {
 } from './aggregates.ts'
 import { clearUserSettings, loadUserSettings, saveUserSettings } from './settings.ts'
 import { clearPayees, forgetPayeeCategory, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
-import { mfaLevelSatisfied } from './mfa.ts'
+import { jwtClaims, mfaLevelSatisfied } from './mfa.ts'
 import { SERVER_FEATURES } from './features.ts'
+import { CARD_SETTLEMENT_RE } from './cardSettlement.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,12 @@ interface AccountPayload {
   closed: boolean
   connectionId?: string | null
   providerAccountUid?: string | null
+  /**
+   * Date (YYYY-MM-DD) de la premiere association a un compte bancaire : sync-bank
+   * n'importe pas les operations anterieures, deja comprises dans le solde
+   * d'ouverture saisi a la main (hors import d'historique explicite).
+   */
+  syncFrom?: string | null
 }
 
 interface GroupPayload {
@@ -205,14 +212,14 @@ const ALLOWED_ORIGINS = new Set([
   'http://localhost:5173',
   'http://localhost:4173',
 ])
-// Origine non reconnue -> 'null' (fail-closed) : un navigateur tiers n'obtient
-// pas l'en-tete. La protection reelle des donnees reste le JWT, pas le CORS.
-const FALLBACK_ORIGIN = CONFIGURED_ORIGINS[0] ?? 'null'
-
+// Origine non reconnue : AUCUN en-tete Access-Control-Allow-Origin (fail-closed).
+// L'ancienne valeur de repli 'null' etait justement l'origine des contextes
+// opaques (iframe sandbox, file://, data:), qui passaient donc le CORS. La
+// protection reelle des donnees reste le JWT, pas le CORS.
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') ?? ''
   return {
-    'Access-Control-Allow-Origin': ALLOWED_ORIGINS.has(origin) ? origin : FALLBACK_ORIGIN,
+    ...(ALLOWED_ORIGINS.has(origin) ? { 'Access-Control-Allow-Origin': origin } : {}),
     'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     Vary: 'Origin',
@@ -255,22 +262,54 @@ function currentMonthParis(): string {
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
 
+// Fenetre acceptee pour un mois ou une date : de 1990 a dix ans apres le mois
+// courant. Sans borne, un mois « 9999-12 » faisait derouler ~96 000 mois par
+// enveloppe au moteur (plusieurs secondes de CPU, au-dela du budget d'une Edge
+// Function).
+const MIN_MONTH = '1990-01'
+const MAX_MONTHS_AHEAD = 120
+
+function monthInWindow(month: string): boolean {
+  return month >= MIN_MONTH && month <= addMonths(currentMonthParis(), MAX_MONTHS_AHEAD)
+}
+
 function requireMonth(value: unknown): string {
-  if (typeof value !== 'string' || !MONTH_RE.test(value)) {
+  if (typeof value !== 'string' || !MONTH_RE.test(value) || !monthInWindow(value)) {
     throw new ApiError(400, 'mois invalide (YYYY-MM attendu)')
   }
   return value
 }
 
+// Vrai si la date existe au calendrier (refuse 2025-02-31, que V8 lirait comme
+// le 3 mars).
+function isCalendarDate(value: string): boolean {
+  const [y, m, d] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(y, m - 1, d))
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
+}
+
 function requireDate(value: unknown): string {
-  if (typeof value !== 'string' || !DATE_RE.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    !DATE_RE.test(value) ||
+    !isCalendarDate(value) ||
+    !monthInWindow(value.slice(0, 7))
+  ) {
     throw new ApiError(400, 'date invalide (YYYY-MM-DD attendue)')
   }
   return value
 }
 
+// Plafond d'un montant : un milliard d'euros. Au-dela, des sommes pourraient
+// sortir des entiers surs et faire diverger agregats et calcul complet.
+const MAX_AMOUNT_CENTS = 100_000_000_000
+
 function requireAmount(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    Math.abs(value) > MAX_AMOUNT_CENTS
+  ) {
     throw new ApiError(400, 'montant invalide (centimes entiers attendus)')
   }
   return value
@@ -456,13 +495,34 @@ async function aggMaintain(
   keys: CryptoKeys,
   fn: (batch: AggBatch) => Promise<void>,
 ): Promise<void> {
+  let invalidated = false
   try {
     const session = await aggBegin(admin, keys, userId)
     if (!session) return
     await fn(session.batch)
-    await aggPostCheck(admin, keys, userId, session.fenceRev)
+    invalidated = await aggPostCheck(admin, keys, userId, session.fenceRev)
   } catch {
-    await aggMarkStale(admin, userId).catch(() => {})
+    try {
+      await aggMarkStale(admin, userId)
+    } catch {
+      // Ni maintenance ni invalidation : repondre 200 laisserait un marqueur
+      // 'ready' sur des agregats faux. L'action echoue, le front le signale.
+      throw new ApiError(500, 'maintenance des agregats impossible, reessayez')
+    }
+    invalidated = true
+  }
+  // Agregats invalides : sans reconstruction planifiee, chaque lecture relirait
+  // tout l'historique jusqu'a la prochaine ouverture de l'app (bootstrapFull).
+  if (invalidated) await scheduleAggRebuildSafe(userId, keys)
+}
+
+// Planifie la reconstruction des agregats sans jamais faire echouer l'appelant
+// (dedupliquee et differee a l'accalmie des ecritures, cf. scheduleAggRebuild).
+async function scheduleAggRebuildSafe(userId: string, keys: CryptoKeys): Promise<void> {
+  try {
+    await scheduleAggRebuild(userId, keys)
+  } catch {
+    // jamais bloquant : le calcul complet sert en attendant
   }
 }
 
@@ -478,12 +538,25 @@ async function aggMaintain(
 // scheduleAggRebuild). Sans elle, categoriser un virement vers le PEA ferait
 // relire tout l'historique a chaque bootstrap/getBudgetMonth jusqu'a la
 // prochaine ouverture. Entre-temps, le calcul complet sert (toujours juste).
-async function withAggregatesStale<T>(userId: string, write: () => Promise<T>): Promise<T> {
+// Invalide les agregats ou fait echouer l'action : ecrire sous un marqueur
+// 'ready' sans maintenance le laisserait faux.
+async function markAggregatesStaleOrFail(userId: string): Promise<void> {
   try {
     await aggMarkStale(admin, userId)
   } catch {
     throw new ApiError(500, 'invalidation des agregats impossible, reessayez')
   }
+}
+
+// Au-dela de ce nombre de lignes, un lot ne maintient plus les agregats ligne a
+// ligne (8 requetes par ligne, sequentielles) : il les invalide autour de ses
+// ecritures et laisse la reconstruction en arriere-plan les remettre a jour. Si
+// le worker est tue au milieu du lot, le marqueur est deja absent : jamais de
+// 'ready' sur un lot a moitie applique.
+const AGG_INCREMENTAL_BATCH_MAX = 25
+
+async function withAggregatesStale<T>(userId: string, write: () => Promise<T>): Promise<T> {
+  await markAggregatesStaleOrFail(userId)
   let result: T
   try {
     result = await write()
@@ -1153,6 +1226,10 @@ async function actionBootstrap(userId: string) {
     }
   }
 
+  // Agregats non prets : calcul complet (toujours juste) et reconstruction
+  // planifiee, sinon chaque lecture relit l'historique jusqu'au prochain
+  // lancement de l'app.
+  await scheduleAggRebuildSafe(userId, keys)
   const [data, payees] = await Promise.all([loadBudgetData(userId), loadPayeeList(keys, userId)])
   return buildBootstrap(data, payees)
 }
@@ -1399,22 +1476,36 @@ async function actionGetBudgetMonth(userId: string, params: Params) {
     }
   }
 
+  await scheduleAggRebuildSafe(userId, keys)
   const data = await loadBudgetData(userId)
   return computeBudget(toEngineInput(data, month))
 }
+
+const TX_PAGE = 1000
 
 async function actionGetTransactions(userId: string, params: Params) {
   const month = requireMonth(params.month)
   const keys = await getKeys()
   const idx = await txMonthIdx(keys, userId, month)
-  const { data, error } = await admin
-    .from('transactions')
-    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
-    .eq('user_id', userId)
-    .eq('month_idx', idx)
-  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  // Pagination : PostgREST plafonne une reponse a 1000 lignes. Sans elle, un
+  // mois plus charge etait tronque en silence (et la reprise d'import YNAB,
+  // qui compte les lignes du mois, reinserait un lot deja ecrit).
+  const data: TxRow[] = []
+  for (let from = 0; ; from += TX_PAGE) {
+    const { data: page, error } = await admin
+      .from('transactions')
+      .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
+      .eq('user_id', userId)
+      .eq('month_idx', idx)
+      .order('id', { ascending: true })
+      .range(from, from + TX_PAGE - 1)
+    if (error) throw new ApiError(500, 'lecture transactions impossible')
+    if (!page || page.length === 0) break
+    data.push(...(page as TxRow[]))
+    if (page.length < TX_PAGE) break
+  }
   const rows = await Promise.all(
-    (data ?? []).map(async (r) => ({ id: r.id, ...(await decodeTx(keys, userId, r as TxRow)) })),
+    data.map(async (r) => ({ id: r.id, ...(await decodeTx(keys, userId, r)) })),
   )
   rows.sort((a, b) => (a.bookingDate < b.bookingDate ? 1 : -1))
   return { transactions: rows }
@@ -1565,9 +1656,13 @@ async function actionCategorizeMany(userId: string, params: Params) {
       (!r.payload.transferGroupId || isCrossHalfOf({ id: r.id, ...r.payload }, groups, onBudget)),
   )
 
-  if (targets.some((r) => r.payload.transferGroupId)) {
-    // Au moins une moitie croisee : pas de maintenance incrementale pour le
-    // lot (cf. withAggregatesStale), une invalidation autour des ecritures.
+  if (
+    targets.some((r) => r.payload.transferGroupId) ||
+    targets.length > AGG_INCREMENTAL_BATCH_MAX
+  ) {
+    // Au moins une moitie croisee, ou gros lot (cf. AGG_INCREMENTAL_BATCH_MAX) :
+    // pas de maintenance incrementale pour le lot (cf. withAggregatesStale), une
+    // invalidation autour des ecritures.
     await withAggregatesStale(userId, async () => {
       for (const r of targets) await updateTx(userId, r.id, { ...r.payload, categoryId })
     })
@@ -1984,6 +2079,12 @@ async function actionDeleteTransaction(userId: string, params: Params) {
       : (b) => b.replaceTx(mirror.payload, { ...mirror.payload, transferGroupId: null })
 
   const writes = async () => {
+    // Tombstone AVANT toute ecriture (upsert idempotent) : si l'enregistrement
+    // echoue, rien n'est supprime (sinon la ligne reviendrait par la sync), et
+    // le miroir n'a pas encore ete touche (aucun demi-etat sous 'ready').
+    const ownHash = data.tx_hash as string | null
+    if (ownHash !== null) await recordDeletedHashes(userId, [ownHash])
+
     if (mirror) {
       if (mirror.txHash === null) {
         const { error: delErr } = await admin
@@ -1999,11 +2100,6 @@ async function actionDeleteTransaction(userId: string, params: Params) {
         })
       }
     }
-
-    // Tombstone AVANT le delete : si l'enregistrement echoue, on ne supprime pas
-    // (sinon la ligne reviendrait par la sync).
-    const ownHash = data.tx_hash as string | null
-    if (ownHash !== null) await recordDeletedHashes(userId, [ownHash])
 
     const { error: delErr } = await admin
       .from('transactions')
@@ -2300,6 +2396,16 @@ const DEFAULT_STRUCTURE: { group: Omit<GroupPayload, 'sortOrder' | 'hidden'>; ca
   { group: { name: 'Épargne & objectifs', color: 'green', icon: 'piggy' }, categories: ["Fonds d'urgence", 'Cadeaux', 'Projets'] },
 ]
 
+// Vrai si l'utilisateur a deja du contenu qui reference des categories.
+async function hasBudgetContent(userId: string): Promise<boolean> {
+  for (const table of ['transactions', 'assignments', 'targets', 'rules']) {
+    const { data, error } = await admin.from(table).select('id').eq('user_id', userId).limit(1)
+    if (error) throw new ApiError(500, `lecture ${table} impossible`)
+    if (data && data.length > 0) return true
+  }
+  return false
+}
+
 async function actionSeedDefaults(userId: string) {
   // Idempotence : les inserts PostgREST ne sont pas transactionnels. Un seed
   // complet possede forcement une categorie de revenus (inseree en premier) ;
@@ -2317,6 +2423,13 @@ async function actionSeedDefaults(userId: string) {
     existingGroups.length >= expectedGroups && existingCategories.length >= expectedCats
   if (complete) throw new ApiError(409, 'des categories existent deja')
   if (existingGroups.length > 0 || existingCategories.length > 0) {
+    // La purge ne vaut que pour un seed interrompu sur un compte vierge. Un
+    // budget deja utilise avec moins de categories que le modele (defauts
+    // supprimes, taxonomie importee de YNAB) perdrait toutes ses categories :
+    // transactions, assignations, objectifs et regles pointeraient dans le vide.
+    if (await hasBudgetContent(userId)) {
+      throw new ApiError(409, 'des categories existent deja')
+    }
     const delCats = await admin.from('categories').delete().eq('user_id', userId)
     const delGroups = await admin.from('category_groups').delete().eq('user_id', userId)
     if (delCats.error || delGroups.error) {
@@ -2758,36 +2871,62 @@ async function actionApplyRulesToUncategorized(userId: string) {
   // Integrite referentielle : une categorie supprimee entre-temps (regle ou
   // memoire de tiers perimee) ne doit jamais etre ecrite.
   const knownCategories = new Set(categories.filter((c) => !c.isIncome).map((c) => c.id))
+  // Prelevement mensuel d'une carte a debit differe du budget : jamais
+  // categorise (meme garde que sync-bank a l'import). Il attend d'etre relie en
+  // virement compte courant -> carte ; range dans une enveloppe, la liaison le
+  // refuserait et le releve serait compte une seconde fois.
+  const cardAccounts = new Set(accounts.filter((a) => a.kind === 'card_deferred').map((a) => a.id))
+  const hasOnBudgetCard = accounts.some((a) => a.kind === 'card_deferred' && !a.closed && a.onBudget)
 
-  const aggOps: { old: AggTx; next: AggTx }[] = []
-  let categorized = 0
+  // 1. Selection, sans ecrire.
+  const matches: { id: string; old: TxPayload; next: TxPayload }[] = []
+  for (const tx of transactions) {
+    // On ne touche qu'aux transactions non categorisees et hors transfert,
+    // sur les comptes budget.
+    if (tx.categoryId || tx.transferGroupId || !onBudget.has(tx.accountId)) continue
+    if (
+      hasOnBudgetCard &&
+      !cardAccounts.has(tx.accountId) &&
+      tx.amount < 0 &&
+      CARD_SETTLEMENT_RE.test(normalizeLabel(tx.label))
+    ) {
+      continue
+    }
+    // Regles d'abord, puis repli sur la memoire de tiers (REF N).
+    const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
+    const categoryId = rule?.categoryId ?? payeeDefaults.get(payeeKey(tx.label)) ?? null
+    if (!categoryId || !knownCategories.has(categoryId)) continue
+    // On retire id du payload et on ne passe PAS d'extra : month_idx et
+    // tx_hash de la ligne restent intacts.
+    const { id, ...payload } = tx
+    matches.push({ id, old: payload, next: { ...payload, categoryId } })
+  }
+  if (matches.length === 0) return { categorized: 0 }
+
+  // 2. Gros lot : invalidation autour des ecritures (cf. AGG_INCREMENTAL_BATCH_MAX).
+  if (matches.length > AGG_INCREMENTAL_BATCH_MAX) {
+    await withAggregatesStale(userId, async () => {
+      for (const m of matches) await updateTx(userId, m.id, m.next)
+    })
+    return { categorized: matches.length }
+  }
+
+  // 3. Petit lot : maintenance incrementale.
+  let written = 0
   try {
-    for (const tx of transactions) {
-      // On ne touche qu'aux transactions non categorisees et hors transfert,
-      // sur les comptes budget.
-      if (tx.categoryId || tx.transferGroupId || !onBudget.has(tx.accountId)) continue
-      // Regles d'abord, puis repli sur la memoire de tiers (REF N).
-      const rule = rules.find((r) => matchLabel(tx.label, r.matcher))
-      const categoryId = rule?.categoryId ?? payeeDefaults.get(payeeKey(tx.label)) ?? null
-      if (!categoryId || !knownCategories.has(categoryId)) continue
-      // On retire id du payload et on ne passe PAS d'extra : month_idx et
-      // tx_hash de la ligne restent intacts.
-      const { id, ...payload } = tx
-      await updateTx(userId, id, { ...payload, categoryId })
-      aggOps.push({ old: payload, next: { ...payload, categoryId } })
-      categorized += 1
+    for (const m of matches) {
+      await updateTx(userId, m.id, m.next)
+      written += 1
     }
   } catch (err) {
     // Lot partiellement applique : agregats invalides (fallback calcul complet).
-    if (aggOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
+    if (written > 0) await aggMarkStale(admin, userId).catch(() => {})
     throw err
   }
-  if (aggOps.length > 0) {
-    await aggMaintain(userId, keys, async (b) => {
-      for (const op of aggOps) await b.replaceTx(op.old, op.next)
-    })
-  }
-  return { categorized }
+  await aggMaintain(userId, keys, async (b) => {
+    for (const m of matches) await b.replaceTx(m.old, m.next)
+  })
+  return { categorized: matches.length }
 }
 
 // ---------------------------------------------------------------------------
@@ -2903,8 +3042,29 @@ async function actionLinkBankAccount(userId: string, params: Params) {
       ? null
       : requireUuid(params.accountId, 'accountId')
 
+  // syncFrom explicite (optionnel) : null = aucune borne. La restauration d'une
+  // sauvegarde l'envoie, car l'historique du compte vient alors du fichier et
+  // non d'un solde d'ouverture saisi aujourd'hui. Absent = regle par defaut.
+  const explicitSyncFrom =
+    params.syncFrom === undefined
+      ? undefined
+      : params.syncFrom === null
+        ? null
+        : requireDate(params.syncFrom)
+
   const accounts = await loadAll<AccountPayload>('accounts', userId)
   if (accountId && !accounts.some((a) => a.id === accountId)) throw new ApiError(404, 'compte inconnu')
+  // Association : la connexion doit exister et porter ce compte bancaire (sinon
+  // liaison fantome, ou uid d'une autre connexion detourne). Le detachement
+  // (accountId null) reste permis meme pour un uid qui n'existe plus.
+  if (accountId) {
+    const connections = await loadAll<BankConnectionPayload>('bank_connections', userId)
+    const connection = connections.find((c) => c.id === connectionId)
+    if (!connection) throw new ApiError(404, 'connexion bancaire inconnue')
+    if (!(connection.accounts ?? []).some((a) => a.uid === providerAccountUid)) {
+      throw new ApiError(404, 'compte bancaire inconnu pour cette connexion')
+    }
+  }
 
   for (const a of accounts) {
     if (a.providerAccountUid === providerAccountUid && a.id !== accountId) {
@@ -2919,7 +3079,20 @@ async function actionLinkBankAccount(userId: string, params: Params) {
   if (accountId) {
     const target = accounts.find((a) => a.id === accountId)!
     const { id, ...rest } = target
-    await updateEncrypted('accounts', userId, id, { ...rest, connectionId, providerAccountUid })
+    // Premiere association de ce compte : les operations anterieures a
+    // aujourd'hui sont deja dans son solde d'ouverture, sync-bank ne les
+    // importera pas. Un compte deja associe (re-association apres un
+    // re-consentement) garde sa borne : aucune operation n'est sautee.
+    const syncFrom =
+      explicitSyncFrom !== undefined
+        ? explicitSyncFrom
+        : (rest.syncFrom ?? (rest.providerAccountUid ? null : todayParis()))
+    await updateEncrypted('accounts', userId, id, {
+      ...rest,
+      connectionId,
+      providerAccountUid,
+      syncFrom,
+    })
   }
   return { ok: true }
 }
@@ -3241,7 +3414,7 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
   // Defensif : la sequence normale (importReplaceBegin) a deja invalide les
   // agregats, mais un appel hors sequence ne doit pas ecrire sous un marqueur
   // 'ready' (inserts en masse sans maintenance).
-  await aggMarkStale(admin, userId).catch(() => {})
+  await markAggregatesStaleOrFail(userId)
 
   // Chargement des ids valides UNE fois (integrite referentielle : pas de FK SQL).
   const [accounts, categories] = await Promise.all([
@@ -3300,8 +3473,14 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
     })
   }
   if (rows.length > 0) {
-    const { error } = await admin.rpc('enc_insert', { p_table: 'transactions', p_rows: rows })
-    if (error) throw new ApiError(500, 'ecriture transactions impossible')
+    try {
+      const { error } = await admin.rpc('enc_insert', { p_table: 'transactions', p_rows: rows })
+      if (error) throw new ApiError(500, 'ecriture transactions impossible')
+    } finally {
+      // Re-invalidation apres l'insert (cf. withAggregatesStale) : un recompute
+      // concurrent parti avant ce lot ne doit pas basculer 'ready' sans lui.
+      await aggMarkStale(admin, userId).catch(() => {})
+    }
   }
   return { inserted: rows.length }
 }
@@ -3309,7 +3488,7 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
 async function actionImportReplaceAssignments(userId: string, params: Params) {
   const raw = requireArray(params.assignments, 'assignments', 500)
   // Defensif : voir actionImportReplaceTransactions.
-  await aggMarkStale(admin, userId).catch(() => {})
+  await markAggregatesStaleOrFail(userId)
 
   const categories = await loadAll<CategoryPayload>('categories', userId)
   const byId = new Map(categories.map((c) => [c.id, c]))
@@ -3342,12 +3521,16 @@ async function actionImportReplaceAssignments(userId: string, params: Params) {
   if (rows.length > 0) {
     // Upsert par (user_id, assign_idx) : idempotent si un meme (categorie, mois)
     // revient dans un lot ulterieur. Le parser garantit l'unicite intra-lot.
-    const { error } = await admin.rpc('enc_insert', {
-      p_table: 'assignments',
-      p_rows: rows,
-      p_conflict: 'user_id,assign_idx',
-    })
-    if (error) throw new ApiError(500, 'ecriture assignments impossible')
+    try {
+      const { error } = await admin.rpc('enc_insert', {
+        p_table: 'assignments',
+        p_rows: rows,
+        p_conflict: 'user_id,assign_idx',
+      })
+      if (error) throw new ApiError(500, 'ecriture assignments impossible')
+    } finally {
+      await aggMarkStale(admin, userId).catch(() => {})
+    }
   }
   return { upserted: rows.length }
 }
@@ -3396,18 +3579,29 @@ async function actionNewBudget(userId: string, params: Params) {
     throw new ApiError(500, 'invalidation des agregats impossible, reessayez')
   }
 
-  const { error } = await admin.from('assignments').delete().eq('user_id', userId)
-  if (error) throw new ApiError(500, 'effacement assignments impossible')
-
   const keys = await getKeys()
   try {
-    await saveUserSettings(admin, keys, userId, { budgetStartMonth: month })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : ''
-    if (msg.includes('user_settings absente')) {
-      throw new ApiError(503, 'table user_settings absente : appliquer M-user-settings.sql')
+    // Le mois de depart D'ABORD : si son ecriture echoue (table user_settings
+    // absente, erreur transitoire), rien n'a encore ete efface. L'ordre inverse
+    // supprimait toutes les assignations puis repondait en erreur.
+    try {
+      await saveUserSettings(admin, keys, userId, { budgetStartMonth: month })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.includes('user_settings absente')) {
+        throw new ApiError(503, 'table user_settings absente : appliquer M-user-settings.sql')
+      }
+      throw new ApiError(500, 'ecriture user_settings impossible')
     }
-    throw new ApiError(500, 'ecriture user_settings impossible')
+    // Un echec ici laisse un etat rejouable : le mois de depart est pose et le
+    // moteur ignore deja les assignations anterieures.
+    const { error } = await admin.from('assignments').delete().eq('user_id', userId)
+    if (error) throw new ApiError(500, 'effacement assignments impossible')
+  } finally {
+    // Re-invalidation APRES les ecritures, succes ou echec (meme protocole que
+    // withAggregatesStale) : un recompute concurrent parti d'un instantane
+    // anterieur voit sa bascule finale vers 'ready' echouer.
+    await aggMarkStale(admin, userId).catch(() => {})
   }
   invalidateBudgetCache(userId)
 
@@ -3536,6 +3730,14 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get('authorization')
     if (!authHeader) throw new ApiError(401, 'authentification requise')
+    // La cle anon publique du bundle est un JWT valide du projet : elle passe la
+    // verification de la plateforme. On l'ecarte ici, sans appel au service Auth,
+    // pour qu'un appelant sans compte ne puisse pas en consommer le quota.
+    // Simple pre-filtre : l'identite reste etablie par auth.getUser() ci-dessous.
+    const claims = jwtClaims(authHeader)
+    if (claims.role !== 'authenticated' || typeof claims.sub !== 'string') {
+      throw new ApiError(401, 'session invalide')
+    }
     const authClient = createClient(SUPABASE_URL, ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
       auth: { persistSession: false, autoRefreshToken: false },
@@ -3583,8 +3785,24 @@ Deno.serve(async (req) => {
     try {
       const result = await ACTIONS[action](userId, (body.params as Params) ?? {})
       return new Response(JSON.stringify(result), { status: 200, headers })
+    } catch (err) {
+      // Filet REF I : une ecriture qui echoue cote serveur (5xx ou exception
+      // inattendue) a pu commiter une partie de ses ecritures sans maintenance.
+      // On invalide les agregats plutot que de risquer un marqueur 'ready' faux.
+      if (isWrite && !(err instanceof ApiError && err.status < 500)) {
+        await aggMarkStale(admin, userId).catch(() => {})
+        await getKeys()
+          .then((keys) => scheduleAggRebuildSafe(userId, keys))
+          .catch(() => {})
+      }
+      throw err
     } finally {
-      if (isWrite) endWrite(userId)
+      if (isWrite) {
+        endWrite(userId)
+        // Purge aussi APRES l'ecriture : une lecture de repli lancee pendant
+        // l'action avait pu remettre en cache un instantane d'avant le commit.
+        invalidateBudgetCache(userId)
+      }
     }
   } catch (err) {
     if (err instanceof ApiError) {
