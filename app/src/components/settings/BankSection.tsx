@@ -30,6 +30,7 @@ import {
   type EbAccountLink,
 } from '@/lib/bank'
 import { fmtEUR, today } from '@/lib/format'
+import { toast } from '@/lib/toast'
 import { apiCreateAccount, useAccountsList } from '@/lib/data'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -176,7 +177,12 @@ export function BankSection() {
       if (standalone) markConsentPending()
       window.location.assign(url)
     } catch (err) {
-      setConnectMessage(err instanceof Error ? err.message : 'Connexion bancaire indisponible.')
+      const message = err instanceof Error ? err.message : 'Connexion bancaire indisponible.'
+      setConnectMessage(message)
+      // Le message ci-dessus n'est rendu que dans la carte « Ajouter une
+      // banque » : un echec de « Reconnecter » (banniere d'expiration comprise)
+      // restait invisible.
+      toast({ message: 'Connexion bancaire impossible', description: message, tone: 'danger' })
       setConnecting(false)
     }
   }
