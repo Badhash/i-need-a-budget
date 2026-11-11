@@ -69,7 +69,7 @@ sur la branche `claude/fervent-euler-5e07sf`, et ce qui reste à faire.
 | `d1e578b` | API : garde-fous des agrégats, « Nouveau budget » non destructif, validations, pagination |
 | `b5cba00` | Front : lectures annulées relancées, egress de l'historique, saisie des montants, bundle |
 | `8ab328f` | CI de tests avant déploiement, scripts SQL de durcissement |
-| suivant | Durée de consentement, texte sur le chiffrement, widget Zakat, ce document |
+| `7a0e760` | Durée de consentement, texte sur le chiffrement, widget Zakat, ce document, CLAUDE.md |
 
 ## 4. Reste à faire, par priorité
 
