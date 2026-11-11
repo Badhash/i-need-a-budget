@@ -42,6 +42,7 @@ import { aggMarkStale, aggRecompute } from '../api/aggregates.ts'
 import { loadUserSettings } from '../api/settings.ts'
 import { loadPayeeDefaults } from '../api/payees.ts'
 import { mfaLevelSatisfied } from '../api/mfa.ts'
+import { CARD_SETTLEMENT_RE } from '../api/cardSettlement.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 import { isLabelVariant } from '../../../packages/crypto/src/labelVariant.ts'
 
@@ -772,10 +773,8 @@ function lastSuccessfulRunDate(
 // Cartes a debit differe : liaison automatique du prelevement mensuel
 // ---------------------------------------------------------------------------
 
-// Libelles typiques du prelevement de reglement d'une carte a debit differe
-// (ex. "CARTE DEPENSES", "DEPENSES CARTE", "CARTE X1234 AU 05/07"). Applique au
-// libelle passe par normalizeLabel (accents retires, espaces normalises).
-const CARD_SETTLEMENT_RE = /CARTE\s+DEPENSES|DEPENSES\s+CARTE|CARTE\s+X?\d{4}\s+AU\s+\d{2}\/\d{2}/i
+// Libelle du prelevement de reglement : CARD_SETTLEMENT_RE, partage avec /api
+// (voir ../api/cardSettlement.ts).
 
 // Detecte les prelevements de reglement de carte a debit differe importes et
 // les transforme en transferts :
