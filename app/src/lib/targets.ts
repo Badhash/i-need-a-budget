@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tan
 import { apiCall } from '@/lib/api'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { monthRange } from '@/lib/format'
+import { pauseReads } from '@/lib/pauseReads'
 
 /**
  * Types d'objectif :
@@ -148,7 +149,7 @@ export function useSetTargetMutation() {
         deps: [input.categoryId],
       }),
     onMutate: async (input): Promise<TargetsContext> => {
-      await queryClient.cancelQueries({ queryKey: TARGETS_KEY })
+      await pauseReads(queryClient, TARGETS_KEY)
       const previous = queryClient.getQueryData<Target[]>(TARGETS_KEY)
       queryClient.setQueryData<Target[]>(TARGETS_KEY, (old) => {
         const list = old ?? []
@@ -177,7 +178,7 @@ export function useDeleteTargetMutation() {
     mutationFn: (categoryId: string) =>
       enqueue(() => apiDeleteTarget(resolveId(categoryId)), { deps: [categoryId] }),
     onMutate: async (categoryId): Promise<TargetsContext> => {
-      await queryClient.cancelQueries({ queryKey: TARGETS_KEY })
+      await pauseReads(queryClient, TARGETS_KEY)
       const previous = queryClient.getQueryData<Target[]>(TARGETS_KEY)
       queryClient.setQueryData<Target[]>(TARGETS_KEY, (old) => old?.filter((t) => t.categoryId !== categoryId))
       return { previous }

@@ -41,6 +41,7 @@ import { enqueue, isTempId, newTempId, registerRealId, resolveId } from '@/lib/m
 import { forgetPayeeOptimistic, learnPayeeOptimistic, scheduleBudgetRefetch } from '@/lib/categorize'
 import { followTxId, registerConfirmedTx, txRowKey } from '@/lib/txIds'
 import { fmtDayLong, today } from '@/lib/format'
+import { pauseReads } from '@/lib/pauseReads'
 
 type BalanceDelta = { accountId: string; delta: number }
 
@@ -279,7 +280,10 @@ export function useAddTransaction(onFailure: (vars: AddTransactionVars, error: u
         { deps: input.categoryId === null ? [] : [input.categoryId] },
       ),
     onMutate: async (vars): Promise<AddContext> => {
-      await queryClient.cancelQueries({ queryKey: TRANSACTIONS_KEY })
+      await Promise.all([
+        pauseReads(queryClient, TRANSACTIONS_KEY),
+        pauseReads(queryClient, BOOTSTRAP_KEY),
+      ])
       const tx: Transaction = {
         id: vars.tempId,
         accountId: vars.accountId,
@@ -366,7 +370,10 @@ export function useUpdateTransaction(onFailure: (previous: Transaction) => void)
       )
     },
     onMutate: async (input): Promise<UpdateContext | undefined> => {
-      await queryClient.cancelQueries({ queryKey: TRANSACTIONS_KEY })
+      await Promise.all([
+        pauseReads(queryClient, TRANSACTIONS_KEY),
+        pauseReads(queryClient, BOOTSTRAP_KEY),
+      ])
       const before = findTx(queryClient, followTxId(input.transactionId))
       if (!before) return undefined
       const after: Transaction = {
@@ -591,7 +598,10 @@ export function useConvertToTransfer() {
         { deps: [txId] },
       ),
     onMutate: async ({ txId, targetAccountId }): Promise<ConvertContext | undefined> => {
-      await queryClient.cancelQueries({ queryKey: TRANSACTIONS_KEY })
+      await Promise.all([
+        pauseReads(queryClient, TRANSACTIONS_KEY),
+        pauseReads(queryClient, BOOTSTRAP_KEY),
+      ])
       const before = findTx(queryClient, txId)
       if (!before || before.transferGroupId) return undefined
       const keep = conversionKeepsCategory(queryClient, before, targetAccountId)
@@ -656,7 +666,10 @@ export function useRevertTransfer() {
     mutationFn: ({ txId }: { txId: string }) =>
       enqueue(() => apiCall('convertTransferToNormal', { transactionId: resolveId(txId) }), { deps: [txId] }),
     onMutate: async ({ txId }): Promise<RevertContext | undefined> => {
-      await queryClient.cancelQueries({ queryKey: TRANSACTIONS_KEY })
+      await Promise.all([
+        pauseReads(queryClient, TRANSACTIONS_KEY),
+        pauseReads(queryClient, BOOTSTRAP_KEY),
+      ])
       const list = readTxs(queryClient) ?? []
       const kept = list.find((t) => t.id === txId)
       if (!kept?.transferGroupId) return undefined

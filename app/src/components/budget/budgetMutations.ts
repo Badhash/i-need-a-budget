@@ -10,6 +10,7 @@ import type {
   MoveTarget,
 } from '@/components/budget/CategoryActionSheet'
 import { useBudgetHistory, type AssignChange, type HistoryStep } from '@/stores/budgetHistory'
+import { pauseReads } from '@/lib/pauseReads'
 
 // Une enveloppe est "vide" quand ses trois colonnes sont a 0 : rien d'assigne,
 // aucune activite, aucun disponible reporte. Des qu'UNE colonne est non nulle,
@@ -121,7 +122,7 @@ async function optimisticAssign(
   history: { record: boolean; label?: string },
 ): Promise<AssignContext> {
   const key = ['budget', month] as const
-  await queryClient.cancelQueries({ queryKey: key })
+  await pauseReads(queryClient, key)
   const previous = queryClient.getQueryData<BudgetMonth>(key)
   let stepId: number | null = null
   if (history.record && previous) {
