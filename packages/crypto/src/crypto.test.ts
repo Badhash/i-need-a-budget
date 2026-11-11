@@ -128,6 +128,22 @@ describe('index aveugles', () => {
     const c = await txHashIdx(keys, USER, 'acc-1', '2026-07-10', -5801, 'sncf connect')
     expect(c).not.toBe(a)
   })
+
+  it('txHashIdx : le rang d occurrence distingue deux operations identiques', async () => {
+    const keys = await deriveKeys(KEY_A)
+    const args = [keys, USER, 'acc-1', '2026-07-10', -215, 'CARTE 12/03 RATP'] as const
+    const first = await txHashIdx(...args)
+    // La premiere occurrence garde le hash historique (lignes deja en base).
+    expect(await txHashIdx(...args, 1)).toBe(first)
+    const second = await txHashIdx(...args, 2)
+    const third = await txHashIdx(...args, 3)
+    expect(second).not.toBe(first)
+    expect(third).not.toBe(second)
+    // Stable d'un run a l'autre : meme rang, meme hash.
+    expect(await txHashIdx(...args, 2)).toBe(second)
+    // Le rang n'est pas confondable avec un libelle qui se termine par « 2 ».
+    expect(await txHashIdx(keys, USER, 'acc-1', '2026-07-10', -215, 'CARTE 12/03 RATP 2')).not.toBe(second)
+  })
 })
 
 describe('contexte AAD', () => {
