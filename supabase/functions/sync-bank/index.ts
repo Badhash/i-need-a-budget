@@ -151,6 +151,16 @@ class ApiError extends Error {
   }
 }
 
+// Message d'erreur tel qu'il peut partir dans les journaux de la fonction : sans
+// le contexte « [banque, compte, depuis ...] » ni le corps de reponse de la
+// banque. Le message complet reste reserve a l'utilisateur et a sync_logs
+// (chiffre).
+function logSafe(message: string): string {
+  return message
+    .replace(/^\[[^\]]*\]\s*/, '')
+    .replace(/(Enable Banking a repondu \d{3})[\s\S]*$/, '$1')
+}
+
 // ---------------------------------------------------------------------------
 // CORS (identique a /api : origines configurees hors depot + localhost dev)
 // ---------------------------------------------------------------------------
@@ -2122,7 +2132,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify(result), { status: 200, headers })
   } catch (err) {
     if (err instanceof ApiError) {
-      console.error(`sync-bank action=${action} status=${err.status} message=${err.message}`)
+      console.error(`sync-bank action=${action} status=${err.status} message=${logSafe(err.message)}`)
       return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers })
     }
     console.error(`sync-bank action=${action} status=500 erreur inattendue`)
