@@ -1475,18 +1475,31 @@ async function actionGetBudgetMonth(userId: string, params: Params) {
   return computeBudget(toEngineInput(data, month))
 }
 
+const TX_PAGE = 1000
+
 async function actionGetTransactions(userId: string, params: Params) {
   const month = requireMonth(params.month)
   const keys = await getKeys()
   const idx = await txMonthIdx(keys, userId, month)
-  const { data, error } = await admin
-    .from('transactions')
-    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
-    .eq('user_id', userId)
-    .eq('month_idx', idx)
-  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  // Pagination : PostgREST plafonne une reponse a 1000 lignes. Sans elle, un
+  // mois plus charge etait tronque en silence (et la reprise d'import YNAB,
+  // qui compte les lignes du mois, reinserait un lot deja ecrit).
+  const data: TxRow[] = []
+  for (let from = 0; ; from += TX_PAGE) {
+    const { data: page, error } = await admin
+      .from('transactions')
+      .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
+      .eq('user_id', userId)
+      .eq('month_idx', idx)
+      .order('id', { ascending: true })
+      .range(from, from + TX_PAGE - 1)
+    if (error) throw new ApiError(500, 'lecture transactions impossible')
+    if (!page || page.length === 0) break
+    data.push(...(page as TxRow[]))
+    if (page.length < TX_PAGE) break
+  }
   const rows = await Promise.all(
-    (data ?? []).map(async (r) => ({ id: r.id, ...(await decodeTx(keys, userId, r as TxRow)) })),
+    data.map(async (r) => ({ id: r.id, ...(await decodeTx(keys, userId, r)) })),
   )
   rows.sort((a, b) => (a.bookingDate < b.bookingDate ? 1 : -1))
   return { transactions: rows }
