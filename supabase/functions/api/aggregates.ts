@@ -608,18 +608,21 @@ export async function aggBegin(
  * intercale : nos ajustements ont pu atterrir sur des tables reconstruites qui
  * les integraient deja (double comptage). On invalide — faux positif possible
  * avec une simple maintenance concurrente, mais la degradation (fallback +
- * reconstruction) est toujours sure.
+ * reconstruction) est toujours sure. Renvoie true si les agregats viennent
+ * d'etre invalides (l'appelant planifie alors leur reconstruction).
  */
 export async function aggPostCheck(
   admin: Db,
   keys: CryptoKeys,
   userId: string,
   fenceRev: number,
-): Promise<void> {
+): Promise<boolean> {
   const state = await readState(admin, keys, userId)
   if (state !== null && state.rev !== fenceRev) {
     await aggMarkStale(admin, userId)
+    return true
   }
+  return false
 }
 
 // ---------------------------------------------------------------------------

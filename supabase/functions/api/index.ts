@@ -456,13 +456,34 @@ async function aggMaintain(
   keys: CryptoKeys,
   fn: (batch: AggBatch) => Promise<void>,
 ): Promise<void> {
+  let invalidated = false
   try {
     const session = await aggBegin(admin, keys, userId)
     if (!session) return
     await fn(session.batch)
-    await aggPostCheck(admin, keys, userId, session.fenceRev)
+    invalidated = await aggPostCheck(admin, keys, userId, session.fenceRev)
   } catch {
-    await aggMarkStale(admin, userId).catch(() => {})
+    try {
+      await aggMarkStale(admin, userId)
+    } catch {
+      // Ni maintenance ni invalidation : repondre 200 laisserait un marqueur
+      // 'ready' sur des agregats faux. L'action echoue, le front le signale.
+      throw new ApiError(500, 'maintenance des agregats impossible, reessayez')
+    }
+    invalidated = true
+  }
+  // Agregats invalides : sans reconstruction planifiee, chaque lecture relirait
+  // tout l'historique jusqu'a la prochaine ouverture de l'app (bootstrapFull).
+  if (invalidated) await scheduleAggRebuildSafe(userId, keys)
+}
+
+// Planifie la reconstruction des agregats sans jamais faire echouer l'appelant
+// (dedupliquee et differee a l'accalmie des ecritures, cf. scheduleAggRebuild).
+async function scheduleAggRebuildSafe(userId: string, keys: CryptoKeys): Promise<void> {
+  try {
+    await scheduleAggRebuild(userId, keys)
+  } catch {
+    // jamais bloquant : le calcul complet sert en attendant
   }
 }
 
