@@ -436,6 +436,11 @@ function parseRegister(text: string): { rows: RegisterRow[]; ignored: number } {
   if (iAccount === -1 || iDate === -1) {
     throw new Error('Register.csv : colonnes Compte / Date introuvables.')
   }
+  // Sans aucune colonne de montant, toutes les transactions valaient 0 EUR et
+  // le remplacement destructif pouvait partir sans la moindre alerte.
+  if (iOutflow === -1 && iInflow === -1) {
+    throw new Error('Register.csv : colonnes Outflow / Inflow (montants) introuvables.')
+  }
 
   const at = (r: string[], i: number) => (i >= 0 && i < r.length ? r[i] : '')
   const rows: RegisterRow[] = []
