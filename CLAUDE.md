@@ -25,6 +25,7 @@ Application de budget par enveloppes (zero-based) pour usage personnel, inspiré
     /sync-bank          → poll Enable Banking, dédup, chiffrement, insert
     /api                → lecture/écriture déchiffrée (endpoint unique, actions typées)
       aggregates.ts     → agrégats chiffrés pré-calculés (REF I, partagé avec sync-bank)
+      cardSettlement.ts → libellé du prélèvement de carte à débit différé (partagé avec sync-bank)
   /migrations-manual    → scripts SQL des optimisations egress (RUNBOOK.md) à coller dans le SQL Editor
 /.github/workflows      → ci (tests moteur/crypto, typecheck Deno des fonctions, build du front), deploy pages, deploy Edge Functions (après ci), ping anti-pause quotidien
 ```
@@ -135,7 +136,7 @@ Tous ces calculs vivent dans un module TypeScript pur `packages/engine` (zéro d
 
 Toutes les tables : (id, user_id, enc_payload bytea, created_at) + index aveugles listés. Contenu du payload chiffré par table :
 
-* `accounts` — payload : name, institution, kind, on_budget, closed, connection_id null, provider_account_uid null (identifiant de compte Enable Banking : contrat explicite pour sync-bank)
+* `accounts` — payload : name, institution, kind, on_budget, closed, connection_id null, provider_account_uid null (identifiant de compte Enable Banking : contrat explicite pour sync-bank), syncFrom null (date de la première association bancaire, posée par `linkBankAccount` : sync-bank n'importe pas les opérations antérieures, déjà dans le solde d'ouverture ; `syncFrom: null` explicite à la restauration d'une sauvegarde)
 * `transactions` — index aveugles : month_idx, tx_hash (unique par user, NULL pour les saisies manuelles : la dédup ne concerne que les imports bancaires) ; payload scindé (REF H) : `enc_core` = account_id, category_id null, booking_date, booking_month, amount, transfer_group_id null ; `enc_text` = label, counterparty, notes ; `enc_payload` legacy en lecture seule (fallback)
 * `category_groups` — payload : name, color, icon, sort_order, hidden
 * `categories` — payload : group_id, name, is_income, sort_order, hidden
@@ -158,10 +159,11 @@ Tables d'agrégats (REF I, dérivées — jamais source de vérité, reconstruit
 
 * Périmètre initial : une banque française compatible Enable Banking (identifiants ASPSP configurés hors dépôt, en secret). Le modèle supporte N connexions.
 * `sync-bank` déclenchée par pg_cron à 07:30 et 19:30 Europe/Paris via pg_net (2 fois par jour, REF G ; attention au décalage heure d'été/hiver, cron en UTC).
-* Dédup : `tx_hash = sha256(account_id + booking_date + amount + libellé normalisé)`. Garde « libellé complété » (`packages/crypto/src/labelVariant.ts`) : une opération que la banque renvoie avec un libellé complété ou tronqué autrement (Boursorama) n'est pas réimportée si un import déjà en base a le même compte, le même montant, la même date et un libellé variante (préfixe, hors suffixe carte « CB*1234 ») ; seuls les imports antérieurs au run comptent, chacun absorbe une seule variante.
+* Dédup : `tx_hash = sha256(account_id + booking_date + amount + libellé normalisé)`, complété du rang d'occurrence à partir de la deuxième opération strictement identique d'une même réponse bancaire (la première garde le hash historique) : deux achats identiques le même jour restent deux lignes. Une opération resservie deux fois avec la même référence banque ne compte qu'une fois. Garde « libellé complété » (`packages/crypto/src/labelVariant.ts`) : une opération que la banque renvoie avec un libellé complété ou tronqué autrement (Boursorama) n'est pas réimportée si un import déjà en base a le même compte, le même montant, la même date et un libellé variante (préfixe, hors suffixe carte « CB*1234 ») ; seuls les imports antérieurs au run comptent, chacun absorbe une seule variante, et un import resservi à l'identique consomme d'abord sa propre entrée (la réponse d'un compte est lue en entier avant d'écrire).
 * Transactions importées arrivent SANS catégorie → moteur de règles → sinon "À catégoriser" (badge de compteur dans la nav).
 * Carte à débit différé (compte `card_deferred` du budget) : son prélèvement mensuel sur le compte courant (libellé « CARTE DEPENSES… », `CARD_SETTLEMENT_RE`) n'est jamais catégorisé à l'import (ni règle ni mémoire de tiers) ; `linkDeferredCardSettlements` le relie aussitôt en virement compte courant → carte (transaction miroir créée sur la carte si elle n'est pas synchronisée). Les achats carte se comptent une seule fois (détail ou ajustement du solde de la carte), le relevé est neutre.
-* Re-consentement : bannière visible dès J-14 avant expiration de session, bouton "Reconnecter" qui relance le flow d'auth PSD2.
+* Re-consentement : bannière visible dès J-14 avant expiration de session, bouton "Reconnecter" qui relance le flow d'auth PSD2. Les uid de comptes Enable Banking étant propres à la session, `finalizeAuth` reporte les associations sur les comptes locaux (`identification_hash`, sinon IBAN affiné par produit et nom) ; une clé ambiguë n'apparie rien et le compte se ré-associe à la main.
+* Robustesse d'un run : un `try/catch` par compte (un compte en échec ne bloque pas les autres), délai de 25 s par appel Enable Banking, aucun « ok » journalisé pour une connexion dont aucun compte n'est associé. En mode cron la réponse HTTP ne contient que des compteurs (pg_net la conserve en clair) : le détail des erreurs vit dans `sync_logs`, chiffré.
 * Démarrage : solde d'ouverture saisi manuellement à la date d'activation ; seules les transactions postérieures sont importées. Import CSV historique = feature phase 2.
 
 ## Conventions de travail
