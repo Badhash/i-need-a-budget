@@ -3494,18 +3494,29 @@ async function actionNewBudget(userId: string, params: Params) {
     throw new ApiError(500, 'invalidation des agregats impossible, reessayez')
   }
 
-  const { error } = await admin.from('assignments').delete().eq('user_id', userId)
-  if (error) throw new ApiError(500, 'effacement assignments impossible')
-
   const keys = await getKeys()
   try {
-    await saveUserSettings(admin, keys, userId, { budgetStartMonth: month })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : ''
-    if (msg.includes('user_settings absente')) {
-      throw new ApiError(503, 'table user_settings absente : appliquer M-user-settings.sql')
+    // Le mois de depart D'ABORD : si son ecriture echoue (table user_settings
+    // absente, erreur transitoire), rien n'a encore ete efface. L'ordre inverse
+    // supprimait toutes les assignations puis repondait en erreur.
+    try {
+      await saveUserSettings(admin, keys, userId, { budgetStartMonth: month })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.includes('user_settings absente')) {
+        throw new ApiError(503, 'table user_settings absente : appliquer M-user-settings.sql')
+      }
+      throw new ApiError(500, 'ecriture user_settings impossible')
     }
-    throw new ApiError(500, 'ecriture user_settings impossible')
+    // Un echec ici laisse un etat rejouable : le mois de depart est pose et le
+    // moteur ignore deja les assignations anterieures.
+    const { error } = await admin.from('assignments').delete().eq('user_id', userId)
+    if (error) throw new ApiError(500, 'effacement assignments impossible')
+  } finally {
+    // Re-invalidation APRES les ecritures, succes ou echec (meme protocole que
+    // withAggregatesStale) : un recompute concurrent parti d'un instantane
+    // anterieur voit sa bascule finale vers 'ready' echouer.
+    await aggMarkStale(admin, userId).catch(() => {})
   }
   invalidateBudgetCache(userId)
 
