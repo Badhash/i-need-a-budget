@@ -27,10 +27,13 @@ export default defineConfig(({ mode }) => {
     build: {
       rollupOptions: {
         output: {
+          // Seul le socle charge au demarrage est regroupe. Recharts n'y figure
+          // PAS : declare ici, son chunk emportait clsx (partage avec cn()) et
+          // etait donc precharge a chaque lancement (426 kB) alors que seule la
+          // page Rapports, chargee a la demande, s'en sert. Meme chose pour
+          // react-table (page Transactions). Rollup les range avec leurs pages.
           manualChunks: {
-            react: ['react', 'react-dom'],
-            charts: ['recharts'],
-            tanstack: ['@tanstack/react-query', '@tanstack/react-router', '@tanstack/react-table'],
+            tanstack: ['@tanstack/react-query', '@tanstack/react-router'],
           },
         },
       },
