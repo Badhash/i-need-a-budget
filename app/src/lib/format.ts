@@ -1,10 +1,21 @@
 // Formatage fr-FR : montants en centimes -> "1 234,56 €", dates, mois.
 
 // Dates dynamiques (fuseau local) : l'app doit rester juste au fil des jours.
-function isoLocal(d: Date): string {
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${m}-${day}`
+// Date du jour au fuseau Europe/Paris, comme le serveur (todayParis dans
+// /api). Avec l'heure de l'appareil, un telephone dans un autre fuseau
+// divergeait du serveur autour de minuit : mois courant, badge « À
+// catégoriser », date de saisie refusee comme future.
+const parisDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Paris',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+function isoParis(d: Date): string {
+  const parts = parisDate.formatToParts(d)
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')}`
 }
 
 // FONCTIONS et non constantes de module : une PWA iOS reste residente des
@@ -13,7 +24,7 @@ function isoLocal(d: Date): string {
 // (date de saisie « hier », aujourd'hui refuse comme futur, mois non remis a
 // jour au 1er). Chaque appel relit l'horloge.
 export function today(): string {
-  return isoLocal(new Date())
+  return isoParis(new Date())
 }
 export function currentMonth(): string {
   return today().slice(0, 7)
@@ -21,8 +32,7 @@ export function currentMonth(): string {
 export const MIN_MONTH = '2026-02'
 // Assignation sur les mois futurs autorisee : horizon glissant de 6 mois.
 export function maxMonth(): string {
-  const now = new Date()
-  return isoLocal(new Date(now.getFullYear(), now.getMonth() + 6, 1)).slice(0, 7)
+  return addMonths(currentMonth(), 6)
 }
 
 const eur = new Intl.NumberFormat('fr-FR', {
