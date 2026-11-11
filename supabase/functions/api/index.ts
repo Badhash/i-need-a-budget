@@ -205,14 +205,14 @@ const ALLOWED_ORIGINS = new Set([
   'http://localhost:5173',
   'http://localhost:4173',
 ])
-// Origine non reconnue -> 'null' (fail-closed) : un navigateur tiers n'obtient
-// pas l'en-tete. La protection reelle des donnees reste le JWT, pas le CORS.
-const FALLBACK_ORIGIN = CONFIGURED_ORIGINS[0] ?? 'null'
-
+// Origine non reconnue : AUCUN en-tete Access-Control-Allow-Origin (fail-closed).
+// L'ancienne valeur de repli 'null' etait justement l'origine des contextes
+// opaques (iframe sandbox, file://, data:), qui passaient donc le CORS. La
+// protection reelle des donnees reste le JWT, pas le CORS.
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') ?? ''
   return {
-    'Access-Control-Allow-Origin': ALLOWED_ORIGINS.has(origin) ? origin : FALLBACK_ORIGIN,
+    ...(ALLOWED_ORIGINS.has(origin) ? { 'Access-Control-Allow-Origin': origin } : {}),
     'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     Vary: 'Origin',
