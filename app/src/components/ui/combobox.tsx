@@ -104,7 +104,11 @@ export function Combobox({
             setQuery('')
           }}
           onChange={(e) => {
-            setQuery(e.target.value)
+            // Liste fermee (apres Echap) : le champ affiche le libelle choisi et
+            // la frappe s'y ajoutait (« Loyerr », aucun resultat). On ne garde
+            // que ce qui vient d'etre tape.
+            const typed = e.target.value
+            setQuery(!open && typed.startsWith(selectedLabel) ? typed.slice(selectedLabel.length) : typed)
             setOpen(true)
           }}
           onBlur={() => {
