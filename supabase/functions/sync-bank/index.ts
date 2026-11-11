@@ -2096,6 +2096,16 @@ Deno.serve(async (req) => {
             const message = err instanceof ApiError ? err.message : 'reconciliation echouee'
             result = { ...syncResult, errors: [...syncResult.errors, message] }
           }
+        } else if (isCron) {
+          // Mode cron : la reponse est conservee en clair par pg_net
+          // (net._http_response). On n'y met donc aucun message d'erreur (ils
+          // nomment la banque et le compte) : le detail est dans sync_logs,
+          // chiffre.
+          result = {
+            imported: syncResult.imported,
+            transfersLinked: syncResult.transfersLinked,
+            errorCount: syncResult.errors.length,
+          }
         } else {
           result = syncResult
         }
