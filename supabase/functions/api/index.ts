@@ -3038,6 +3038,17 @@ async function actionLinkBankAccount(userId: string, params: Params) {
 
   const accounts = await loadAll<AccountPayload>('accounts', userId)
   if (accountId && !accounts.some((a) => a.id === accountId)) throw new ApiError(404, 'compte inconnu')
+  // Association : la connexion doit exister et porter ce compte bancaire (sinon
+  // liaison fantome, ou uid d'une autre connexion detourne). Le detachement
+  // (accountId null) reste permis meme pour un uid qui n'existe plus.
+  if (accountId) {
+    const connections = await loadAll<BankConnectionPayload>('bank_connections', userId)
+    const connection = connections.find((c) => c.id === connectionId)
+    if (!connection) throw new ApiError(404, 'connexion bancaire inconnue')
+    if (!(connection.accounts ?? []).some((a) => a.uid === providerAccountUid)) {
+      throw new ApiError(404, 'compte bancaire inconnu pour cette connexion')
+    }
+  }
 
   for (const a of accounts) {
     if (a.providerAccountUid === providerAccountUid && a.id !== accountId) {
