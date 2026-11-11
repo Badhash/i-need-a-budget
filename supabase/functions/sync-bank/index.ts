@@ -126,6 +126,8 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 // Base de l'API Enable Banking (production). Aucune URL de banque en dur : les
 // ASPSP sont resolus par nom via EB.
 const EB_BASE_URL = 'https://api.enablebanking.com'
+// Delai maximal d'un appel a l'API Enable Banking.
+const EB_TIMEOUT_MS = 25_000
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -496,14 +498,22 @@ async function ebFetch(
   init: { method: 'GET' | 'POST'; body?: unknown } = { method: 'GET' },
 ): Promise<unknown> {
   const token = await getEbToken()
-  const res = await fetch(`${EB_BASE_URL}${path}`, {
-    method: init.method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${EB_BASE_URL}${path}`, {
+      method: init.method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      // Sans delai, une banque qui ne repond pas retenait la fonction jusqu'a
+      // sa limite de duree : elle etait tuee sans journal ni recalcul.
+      signal: AbortSignal.timeout(EB_TIMEOUT_MS),
+    })
+  } catch {
+    throw new ApiError(504, 'Enable Banking ne repond pas (delai depasse ou reseau)')
+  }
   if (!res.ok) {
     // Detail de l'erreur EB remonte pour le diagnostic (c'est un message
     // d'erreur d'API, pas une donnee de compte). A restreindre une fois
