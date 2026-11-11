@@ -499,12 +499,25 @@ async function scheduleAggRebuildSafe(userId: string, keys: CryptoKeys): Promise
 // scheduleAggRebuild). Sans elle, categoriser un virement vers le PEA ferait
 // relire tout l'historique a chaque bootstrap/getBudgetMonth jusqu'a la
 // prochaine ouverture. Entre-temps, le calcul complet sert (toujours juste).
-async function withAggregatesStale<T>(userId: string, write: () => Promise<T>): Promise<T> {
+// Invalide les agregats ou fait echouer l'action : ecrire sous un marqueur
+// 'ready' sans maintenance le laisserait faux.
+async function markAggregatesStaleOrFail(userId: string): Promise<void> {
   try {
     await aggMarkStale(admin, userId)
   } catch {
     throw new ApiError(500, 'invalidation des agregats impossible, reessayez')
   }
+}
+
+// Au-dela de ce nombre de lignes, un lot ne maintient plus les agregats ligne a
+// ligne (8 requetes par ligne, sequentielles) : il les invalide autour de ses
+// ecritures et laisse la reconstruction en arriere-plan les remettre a jour. Si
+// le worker est tue au milieu du lot, le marqueur est deja absent : jamais de
+// 'ready' sur un lot a moitie applique.
+const AGG_INCREMENTAL_BATCH_MAX = 25
+
+async function withAggregatesStale<T>(userId: string, write: () => Promise<T>): Promise<T> {
+  await markAggregatesStaleOrFail(userId)
   let result: T
   try {
     result = await write()
@@ -3267,7 +3280,7 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
   // Defensif : la sequence normale (importReplaceBegin) a deja invalide les
   // agregats, mais un appel hors sequence ne doit pas ecrire sous un marqueur
   // 'ready' (inserts en masse sans maintenance).
-  await aggMarkStale(admin, userId).catch(() => {})
+  await markAggregatesStaleOrFail(userId)
 
   // Chargement des ids valides UNE fois (integrite referentielle : pas de FK SQL).
   const [accounts, categories] = await Promise.all([
@@ -3335,7 +3348,7 @@ async function actionImportReplaceTransactions(userId: string, params: Params) {
 async function actionImportReplaceAssignments(userId: string, params: Params) {
   const raw = requireArray(params.assignments, 'assignments', 500)
   // Defensif : voir actionImportReplaceTransactions.
-  await aggMarkStale(admin, userId).catch(() => {})
+  await markAggregatesStaleOrFail(userId)
 
   const categories = await loadAll<CategoryPayload>('categories', userId)
   const byId = new Map(categories.map((c) => [c.id, c]))
