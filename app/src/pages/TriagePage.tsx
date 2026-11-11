@@ -93,6 +93,9 @@ export function TriagePage() {
   // Compteur de la session (l'historique d'annulation, lui, est borne).
   const [done, setDone] = useState(0)
   const [reviewSkipped, setReviewSkipped] = useState(false)
+  // Cartes deja repassees pendant la revue en cours : quand elles l'ont toutes
+  // ete, la revue se termine au lieu de tourner en boucle.
+  const reviewedRef = useRef(new Set<string>())
   const [leaving, setLeaving] = useState<Leaving | null>(null)
   const [enter, setEnter] = useState<Enter>('deck')
   const [dragX, setDragX] = useState(0)
@@ -211,8 +214,18 @@ export function TriagePage() {
     setHistory((h) => [...h.slice(-HISTORY_LIMIT + 1), { kind: 'skip', txId: current.id, label: parseBankLabel(current.label).short }])
     setFront((f) => f.filter((id) => id !== current.id))
     setSkipped((s) => [...s.filter((id) => id !== current.id), current.id])
+    // Revue des cartes passees : « Passer » replacait la carte en fin de file et
+    // la revue tournait sans fin sur les memes cartes. Apres un tour complet, on
+    // revient a l'ecran « il en reste N ».
+    if (reviewing) {
+      reviewedRef.current.add(current.id)
+      if (later.every((t) => reviewedRef.current.has(t.id))) {
+        reviewedRef.current = new Set()
+        setReviewSkipped(false)
+      }
+    }
     fly(current, 'left', null, dragX)
-  }, [current, fly, dragX])
+  }, [current, fly, dragX, reviewing, later])
 
   const undo = useCallback(() => {
     const last = history[history.length - 1]
@@ -380,7 +393,14 @@ export function TriagePage() {
           <TriageNothing />
         )
       ) : (
-        <TriageSkippedLeft count={later.length} onReview={() => setReviewSkipped(true)} onFinish={goBack} />
+        <TriageSkippedLeft
+          count={later.length}
+          onReview={() => {
+            reviewedRef.current = new Set()
+            setReviewSkipped(true)
+          }}
+          onFinish={goBack}
+        />
       )
     return (
       <div className="mx-auto max-w-lg space-y-4 lg:max-w-4xl lg:space-y-6">
