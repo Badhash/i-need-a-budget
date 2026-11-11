@@ -26,7 +26,7 @@ Application de budget par enveloppes (zero-based) pour usage personnel, inspiré
     /api                → lecture/écriture déchiffrée (endpoint unique, actions typées)
       aggregates.ts     → agrégats chiffrés pré-calculés (REF I, partagé avec sync-bank)
   /migrations-manual    → scripts SQL des optimisations egress (RUNBOOK.md) à coller dans le SQL Editor
-/.github/workflows      → deploy pages, deploy Edge Functions, ping anti-pause quotidien
+/.github/workflows      → ci (tests moteur/crypto, typecheck Deno des fonctions, build du front), deploy pages, deploy Edge Functions (après ci), ping anti-pause quotidien
 ```
 
 Le schéma SQL n'est pas versionné dans le dépôt : il est appliqué directement
@@ -172,5 +172,7 @@ Tables d'agrégats (REF I, dérivées — jamais source de vérité, reconstruit
 * Toute modif de schéma = appliquée dans le SQL Editor (source de vérité = base de production, non versionnée), et le script ajouté dans `supabase/migrations-manual/` (+ RUNBOOK.md).
 * Budget egress Supabase free tier (5 Go/mois) : c'est LA contrainte d'exploitation. Toute nouvelle lecture doit être scopée (jamais de refetch global, jamais de re-lecture de l'historique complet hors `bootstrapFull`), et TOUTE nouvelle action d'écriture qui touche transactions/assignments/accounts doit soit maintenir les agrégats (`aggMaintain`), soit les invalider (`aggMarkStale`) — jamais écrire sous un marqueur « ready » sans maintenance.
 * Ne jamais installer de dépendance non listée dans la stack sans la proposer d'abord.
+* Avant de pousser : `npx vitest run` et `npx tsc --noEmit` dans `packages/engine` et `packages/crypto`, `npm run build` dans `app`, `deno check` sur les deux Edge Functions (le workflow `ci.yml` rejoue le tout ; le déploiement des fonctions en dépend).
+* Un lot d'écritures de plus de 25 transactions ne maintient pas les agrégats ligne à ligne : il passe par `withAggregatesStale` (invalidation autour des écritures, reconstruction en arrière-plan). État des constats d'audit et reste à faire : `AUDIT.md`.
 * Chaque vue livrée : vérifier light + dark + mobile + desktop.
 * Sécurité : jamais de secrets en dur, jamais de données bancaires réelles dans les fixtures de test.
