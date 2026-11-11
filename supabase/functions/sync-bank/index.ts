@@ -42,6 +42,7 @@ import { aggMarkStale, aggRecompute } from '../api/aggregates.ts'
 import { loadUserSettings } from '../api/settings.ts'
 import { loadPayeeDefaults } from '../api/payees.ts'
 import { mfaLevelSatisfied } from '../api/mfa.ts'
+import { CARD_SETTLEMENT_RE } from '../api/cardSettlement.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 import { isLabelVariant } from '../../../packages/crypto/src/labelVariant.ts'
 
@@ -57,6 +58,10 @@ interface AccountPayload {
   closed: boolean
   connectionId?: string | null
   providerAccountUid?: string | null
+  // Date de premiere association au compte bancaire, posee par /api
+  // (linkBankAccount) : les operations anterieures sont deja dans le solde
+  // d'ouverture saisi a la main.
+  syncFrom?: string | null
 }
 
 interface CategoryPayload {
@@ -100,7 +105,9 @@ interface RulePayload {
 interface BankConnectionPayload {
   institution: string
   sessionId: string
-  accounts: { uid: string; name?: string; iban?: string; product?: string }[]
+  // `hash` = identification_hash EB : identifiant du compte STABLE d'une session
+  // a l'autre (l'uid, lui, est propre a la session).
+  accounts: { uid: string; name?: string; iban?: string; product?: string; hash?: string }[]
   validUntil: string | null // ISO 8601
   sessionState: 'active' | 'expired'
 }
@@ -125,6 +132,8 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 // Base de l'API Enable Banking (production). Aucune URL de banque en dur : les
 // ASPSP sont resolus par nom via EB.
 const EB_BASE_URL = 'https://api.enablebanking.com'
+// Delai maximal d'un appel a l'API Enable Banking.
+const EB_TIMEOUT_MS = 25_000
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -146,6 +155,16 @@ class ApiError extends Error {
   ) {
     super(message)
   }
+}
+
+// Message d'erreur tel qu'il peut partir dans les journaux de la fonction : sans
+// le contexte « [banque, compte, depuis ...] » ni le corps de reponse de la
+// banque. Le message complet reste reserve a l'utilisateur et a sync_logs
+// (chiffre).
+function logSafe(message: string): string {
+  return message
+    .replace(/^\[[^\]]*\]\s*/, '')
+    .replace(/(Enable Banking a repondu \d{3})[\s\S]*$/, '$1')
 }
 
 // ---------------------------------------------------------------------------
@@ -495,14 +514,22 @@ async function ebFetch(
   init: { method: 'GET' | 'POST'; body?: unknown } = { method: 'GET' },
 ): Promise<unknown> {
   const token = await getEbToken()
-  const res = await fetch(`${EB_BASE_URL}${path}`, {
-    method: init.method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${EB_BASE_URL}${path}`, {
+      method: init.method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      // Sans delai, une banque qui ne repond pas retenait la fonction jusqu'a
+      // sa limite de duree : elle etait tuee sans journal ni recalcul.
+      signal: AbortSignal.timeout(EB_TIMEOUT_MS),
+    })
+  } catch {
+    throw new ApiError(504, 'Enable Banking ne repond pas (delai depasse ou reseau)')
+  }
   if (!res.ok) {
     // Detail de l'erreur EB remonte pour le diagnostic (c'est un message
     // d'erreur d'API, pas une donnee de compte). A restreindre une fois
@@ -597,6 +624,9 @@ interface EbTransaction {
   remittance_information?: string[] | string
   creditor?: { name?: string }
   debtor?: { name?: string }
+  // HYP EB : identifiants d'operation attribues par la banque (optionnels).
+  entry_reference?: string
+  transaction_id?: string
 }
 
 interface MappedTx {
@@ -605,6 +635,15 @@ interface MappedTx {
   amount: number
   label: string
   counterparty: string | null
+}
+
+// Reference d'operation fournie par la banque, si elle existe. Sert uniquement
+// a reconnaitre une MEME operation resservie deux fois dans une reponse (voir
+// le rang d'occurrence dans syncUser) : jamais une cle de dedup a elle seule,
+// certaines banques ne la renseignent pas ou la partagent entre operations.
+function ebTransactionRef(tx: EbTransaction): string | null {
+  const ref = tx.transaction_id ?? tx.entry_reference
+  return typeof ref === 'string' && ref.trim() ? ref.trim() : null
 }
 
 // Renvoie null si la transaction n'est pas exploitable (date manquante).
@@ -772,10 +811,8 @@ function lastSuccessfulRunDate(
 // Cartes a debit differe : liaison automatique du prelevement mensuel
 // ---------------------------------------------------------------------------
 
-// Libelles typiques du prelevement de reglement d'une carte a debit differe
-// (ex. "CARTE DEPENSES", "DEPENSES CARTE", "CARTE X1234 AU 05/07"). Applique au
-// libelle passe par normalizeLabel (accents retires, espaces normalises).
-const CARD_SETTLEMENT_RE = /CARTE\s+DEPENSES|DEPENSES\s+CARTE|CARTE\s+X?\d{4}\s+AU\s+\d{2}\/\d{2}/i
+// Libelle du prelevement de reglement : CARD_SETTLEMENT_RE, partage avec /api
+// (voir ../api/cardSettlement.ts).
 
 // Detecte les prelevements de reglement de carte a debit differe importes et
 // les transforme en transferts :
@@ -1204,6 +1241,22 @@ function consumeVariant(
   return true
 }
 
+// Un import existant que la banque ressert a l'identique (meme hash) retire sa
+// propre entree de l'index : il ne peut alors plus absorber une AUTRE operation
+// du meme compte, meme date et meme montant dont le libelle le prolonge.
+function consumeExactVariant(
+  index: VariantIndex,
+  accountId: string,
+  amount: number,
+  bookingDate: string,
+  label: string,
+): void {
+  const labels = index.get(`${accountId}|${amount}|${bookingDate}`)
+  if (!labels) return
+  const i = labels.indexOf(label)
+  if (i !== -1) labels.splice(i, 1)
+}
+
 // ---------------------------------------------------------------------------
 // Synchronisation d'un utilisateur
 // ---------------------------------------------------------------------------
@@ -1350,20 +1403,45 @@ async function syncUser(
 
   for (const conn of connectionsToSync) {
     let importedForConn = 0
-    // Contexte de diagnostic : compte EB en cours de poll, pour que le journal
-    // d'erreur identifie la banque, le compte et la fenetre interrogee (une
-    // erreur ASPSP nue ne permet pas de savoir laquelle des connexions echoue).
-    let currentAccountLabel: string | null = null
-    try {
-      const dateFrom = dateFromByConn.get(conn.id)!
+    // Comptes reellement interroges : une connexion dont aucun compte EB n'est
+    // lie a un compte local n'a rien synchronise et ne doit pas journaliser un
+    // « ok » (il ferait avancer la borne incrementale sur du vide).
+    let polledAccounts = 0
+    const connErrors: string[] = []
+    const dateFrom = dateFromByConn.get(conn.id)!
+    // Etat de la session EB (diagnostic), demande une seule fois par connexion.
+    let sessionDiag: Promise<string | null> | null = null
 
-      for (const ebAccount of conn.payload.accounts) {
-        const localAccount = accountByUid.get(ebAccount.uid)
-        // Un compte EB non encore lie a un compte interne est ignore : la
-        // liaison (providerAccountUid) se fait cote /api.
-        if (!localAccount) continue
-        linkedCount += 1
-        currentAccountLabel = ebAccount.product ?? ebAccount.name ?? localAccount.name
+    for (const ebAccount of conn.payload.accounts) {
+      const localAccount = accountByUid.get(ebAccount.uid)
+      // Un compte EB non encore lie a un compte interne est ignore : la
+      // liaison (providerAccountUid) se fait cote /api.
+      if (!localAccount) continue
+      linkedCount += 1
+      // Contexte de diagnostic : compte EB en cours de poll, pour que le journal
+      // d'erreur identifie la banque, le compte et la fenetre interrogee (une
+      // erreur ASPSP nue ne permet pas de savoir laquelle des connexions echoue).
+      const accountLabel = ebAccount.product ?? ebAccount.name ?? localAccount.name
+
+      // Un compte en echec n'interrompt pas les autres comptes de la connexion :
+      // chacun a son propre try/catch, l'erreur est memorisee et la connexion est
+      // journalisee « error » (sa borne incrementale n'avance pas).
+      try {
+        // 1. Lecture de TOUTE la reponse du compte avant d'ecrire : le rang
+        //    d'occurrence et la pre-passe des variantes portent sur la reponse
+        //    complete, pas sur l'ordre d'arrivee des pages.
+        const incoming: { mapped: MappedTx; hash: string }[] = []
+        // Rang d'occurrence d'une operation strictement identique (meme compte,
+        // date, montant, libelle) dans la reponse : la 1re garde le hash
+        // historique, la n-ieme porte son rang. Sans lui, deux operations
+        // legitimes identiques le meme jour (deux tickets de transport) n'en
+        // donnaient qu'une. La banque ressert toutes les occurrences d'une date
+        // a chaque poll : le rang est stable d'un run a l'autre.
+        const occurrences = new Map<string, number>()
+        // References banque deja vues pour un meme hash de base : une operation
+        // resservie deux fois dans la reponse (pages qui se recouvrent) porte la
+        // meme reference et ne compte pas comme une nouvelle occurrence.
+        const refsByHash = new Map<string, Set<string>>()
 
         // Pagination EB via continuation_key. Bornee pour eviter toute boucle
         // infinie : nombre de pages plafonne et arret si la cle se repete.
@@ -1381,8 +1459,15 @@ async function syncUser(
           for (const ebTx of page.transactions ?? []) {
             const mapped = mapEbTransaction(ebTx)
             if (!mapped) continue
+            // Compte associe apres la connexion : la fenetre de dates est celle
+            // de la connexion, mais ce qui precede l'association du compte est
+            // deja dans son solde d'ouverture. Un import d'historique explicite
+            // (sinceDays, suivi d'une reconciliation) passe outre.
+            if (sinceDays == null && localAccount.syncFrom && mapped.bookingDate < localAccount.syncFrom) {
+              continue
+            }
 
-            const hash = await txHashIdx(
+            const baseHash = await txHashIdx(
               keys,
               userId,
               localAccount.id,
@@ -1390,69 +1475,28 @@ async function syncUser(
               mapped.amount,
               mapped.label,
             )
-            // Dedup : deja en base OU deja inseree dans ce run (seenHashes est
-            // mis a jour au fur et a mesure).
-            if (seenHashes.has(hash)) continue
-            // Jumeau sans hash (YNAB / manuel) au meme compte, meme montant,
-            // date proche : la copie existante fait foi, on n'insere pas.
-            const twinTolerance =
-              localAccount.kind === 'card_deferred' ? CARD_TWIN_DAY_TOLERANCE : TWIN_DAY_TOLERANCE
-            if (
-              consumeTwin(manualTwins, localAccount.id, mapped.amount, mapped.bookingDate, twinTolerance)
-            ) {
-              seenHashes.add(hash)
-              continue
+            const ref = ebTransactionRef(ebTx)
+            if (ref) {
+              const refs = refsByHash.get(baseHash)
+              if (refs?.has(ref)) continue
+              if (refs) refs.add(ref)
+              else refsByHash.set(baseHash, new Set([ref]))
             }
-            // Operation deja importee que la banque renvoie avec un libelle
-            // complete : l'import existant fait foi, pas de doublon.
-            if (
-              consumeVariant(importedVariants, localAccount.id, mapped.amount, mapped.bookingDate, mapped.label)
-            ) {
-              seenHashes.add(hash)
-              continue
-            }
-            seenHashes.add(hash)
-
-            // Prelevement mensuel d'une carte a debit differe, quand la carte est
-            // un compte du budget : jamais categorise a l'import. Il est relie
-            // juste apres en virement compte courant -> carte, qui ne prend que
-            // les debits sans categorie ; une regle ou la memoire de tiers (ex.
-            // « Carte De Credit ») l'aurait bloque et le releve aurait ete compte
-            // une seconde fois, dans une enveloppe, en plus des achats carte.
-            const cardSettlement =
-              hasOnBudgetCard &&
-              localAccount.kind !== 'card_deferred' &&
-              mapped.amount < 0 &&
-              CARD_SETTLEMENT_RE.test(normalizeLabel(mapped.label))
-            // Les comptes de suivi ne se categorisent pas (hors budget).
-            // Regles d'abord, puis memoire de tiers apprise des choix manuels.
-            const suggested =
-              localAccount.onBudget && !cardSettlement
-                ? (categorize(rules, mapped.label) ?? payeeDefaults.get(payeeKey(mapped.label)) ?? null)
-                : null
-            const categoryId = suggested && knownCategories.has(suggested) ? suggested : null
-            const payload: TxPayload = {
-              accountId: localAccount.id,
-              categoryId,
-              bookingDate: mapped.bookingDate,
-              bookingMonth: mapped.bookingMonth,
-              amount: mapped.amount,
-              label: mapped.label,
-              counterparty: mapped.counterparty,
-              transferGroupId: null,
-              notes: null,
-            }
-            // Invalidation des agregats AVANT le premier insert (voir
-            // aggStaleBeforeWrite) : un crash/echec partiel apres ce point
-            // laisse un etat non-pret, jamais un 'ready' faux.
-            await aggStaleBeforeWrite(userId, aggWrites)
-            await insertImportedTransaction(
-              userId,
-              payload,
-              await txMonthIdx(keys, userId, mapped.bookingMonth),
-              hash,
-            )
-            importedForConn += 1
+            const occurrence = (occurrences.get(baseHash) ?? 0) + 1
+            occurrences.set(baseHash, occurrence)
+            const hash =
+              occurrence === 1
+                ? baseHash
+                : await txHashIdx(
+                    keys,
+                    userId,
+                    localAccount.id,
+                    mapped.bookingDate,
+                    mapped.amount,
+                    mapped.label,
+                    occurrence,
+                  )
+            incoming.push({ mapped, hash })
           }
 
           const nextKey = page.continuation_key ?? null
@@ -1461,42 +1505,131 @@ async function syncUser(
           if (nextKey !== null && nextKey === continuationKey) break
           continuationKey = nextKey
         } while (continuationKey && pageCount < 1000)
-      }
 
-      importedTotal += importedForConn
+        // 2. Pre-passe : un import existant que la banque ressert A L'IDENTIQUE
+        //    (hash deja connu) consomme sa propre entree de variantes. Sans cela
+        //    il pouvait absorber en plus une vraie seconde operation dont le
+        //    libelle le prolonge (meme compte, meme date, meme montant).
+        const fresh: { mapped: MappedTx; hash: string }[] = []
+        for (const item of incoming) {
+          if (seenHashes.has(item.hash)) {
+            consumeExactVariant(
+              importedVariants,
+              localAccount.id,
+              item.mapped.amount,
+              item.mapped.bookingDate,
+              item.mapped.label,
+            )
+            continue
+          }
+          fresh.push(item)
+        }
+
+        // 3. Insertion des operations nouvelles.
+        for (const { mapped, hash } of fresh) {
+          // Dedup : deja inseree dans ce run (seenHashes est mis a jour au fur
+          // et a mesure).
+          if (seenHashes.has(hash)) continue
+          // Jumeau sans hash (YNAB / manuel) au meme compte, meme montant,
+          // date proche : la copie existante fait foi, on n'insere pas.
+          const twinTolerance =
+            localAccount.kind === 'card_deferred' ? CARD_TWIN_DAY_TOLERANCE : TWIN_DAY_TOLERANCE
+          if (
+            consumeTwin(manualTwins, localAccount.id, mapped.amount, mapped.bookingDate, twinTolerance)
+          ) {
+            seenHashes.add(hash)
+            continue
+          }
+          // Operation deja importee que la banque renvoie avec un libelle
+          // complete : l'import existant fait foi, pas de doublon.
+          if (
+            consumeVariant(importedVariants, localAccount.id, mapped.amount, mapped.bookingDate, mapped.label)
+          ) {
+            seenHashes.add(hash)
+            continue
+          }
+          seenHashes.add(hash)
+
+          // Prelevement mensuel d'une carte a debit differe, quand la carte est
+          // un compte du budget : jamais categorise a l'import. Il est relie
+          // juste apres en virement compte courant -> carte, qui ne prend que
+          // les debits sans categorie ; une regle ou la memoire de tiers (ex.
+          // « Carte De Credit ») l'aurait bloque et le releve aurait ete compte
+          // une seconde fois, dans une enveloppe, en plus des achats carte.
+          const cardSettlement =
+            hasOnBudgetCard &&
+            localAccount.kind !== 'card_deferred' &&
+            mapped.amount < 0 &&
+            CARD_SETTLEMENT_RE.test(normalizeLabel(mapped.label))
+          // Les comptes de suivi ne se categorisent pas (hors budget).
+          // Regles d'abord, puis memoire de tiers apprise des choix manuels.
+          const suggested =
+            localAccount.onBudget && !cardSettlement
+              ? (categorize(rules, mapped.label) ?? payeeDefaults.get(payeeKey(mapped.label)) ?? null)
+              : null
+          const categoryId = suggested && knownCategories.has(suggested) ? suggested : null
+          const payload: TxPayload = {
+            accountId: localAccount.id,
+            categoryId,
+            bookingDate: mapped.bookingDate,
+            bookingMonth: mapped.bookingMonth,
+            amount: mapped.amount,
+            label: mapped.label,
+            counterparty: mapped.counterparty,
+            transferGroupId: null,
+            notes: null,
+          }
+          // Invalidation des agregats AVANT le premier insert (voir
+          // aggStaleBeforeWrite) : un crash/echec partiel apres ce point
+          // laisse un etat non-pret, jamais un 'ready' faux.
+          await aggStaleBeforeWrite(userId, aggWrites)
+          await insertImportedTransaction(
+            userId,
+            payload,
+            await txMonthIdx(keys, userId, mapped.bookingMonth),
+            hash,
+          )
+          importedForConn += 1
+        }
+        polledAccounts += 1
+      } catch (err) {
+        // Le message est prefixe par la banque, le compte et la borne date_from :
+        // sans ce contexte, deux connexions produisent des erreurs
+        // indistinguables dans le journal.
+        const base = err instanceof ApiError ? err.message : 'synchronisation echouee'
+        const context = [conn.payload.institution, accountLabel, `depuis ${dateFrom}`]
+          .filter(Boolean)
+          .join(', ')
+        // Diagnostic supplementaire sur un refus EB/ASPSP : l'etat reel de la
+        // session cote Enable Banking (AUTHORIZED, REVOKED, EXPIRED...) permet de
+        // distinguer un consentement mort d'un incident banque. Metadonnee d'API
+        // uniquement, aucune donnee de compte. Best-effort.
+        if (err instanceof ApiError) sessionDiag ??= describeEbSession(conn.payload.sessionId)
+        const diag = sessionDiag ? await sessionDiag : null
+        connErrors.push(`[${context}] ${base}${diag ? ` (${diag})` : ''}`)
+      }
+    }
+
+    // Les lignes deja inserees comptent meme si un autre compte a echoue : la
+    // liaison carte differee et le compteur renvoye en dependent.
+    importedTotal += importedForConn
+    if (connErrors.length > 0) {
+      errors.push(...connErrors)
+      await logSyncSafe(userId, {
+        connectionId: conn.id,
+        status: 'error',
+        importedCount: importedForConn,
+        error: connErrors.join(' ; ').slice(0, 2000),
+      })
+    } else if (polledAccounts > 0) {
       await logSyncSafe(userId, {
         connectionId: conn.id,
         status: 'ok',
         importedCount: importedForConn,
       })
-    } catch (err) {
-      // Echec d'une connexion : on journalise et on passe a la suivante, sans
-      // interrompre les autres connexions/utilisateurs. Le message est prefixe
-      // par la banque, le compte et la borne date_from : sans ce contexte, deux
-      // connexions produisent des erreurs indistinguables dans le journal.
-      const base = err instanceof ApiError ? err.message : 'synchronisation echouee'
-      const context = [
-        conn.payload.institution,
-        currentAccountLabel,
-        `depuis ${dateFromByConn.get(conn.id) ?? '?'}`,
-      ]
-        .filter(Boolean)
-        .join(', ')
-      // Diagnostic supplementaire sur un refus EB/ASPSP : l'etat reel de la
-      // session cote Enable Banking (AUTHORIZED, REVOKED, EXPIRED...) permet de
-      // distinguer un consentement mort d'un incident banque. Metadonnee d'API
-      // uniquement, aucune donnee de compte. Best-effort.
-      const diag = err instanceof ApiError ? await describeEbSession(conn.payload.sessionId) : null
-      const message = `[${context}] ${base}${diag ? ` (${diag})` : ''}`
-      errors.push(message)
-      await logSyncSafe(userId, {
-        connectionId: conn.id,
-        status: 'error',
-        importedCount: importedForConn,
-        error: message,
-      })
     }
   }
+
 
   // Liaison des prelevements de carte a debit differe : uniquement si du neuf a
   // ete importe. Best-effort : un echec de liaison ne doit pas masquer un
@@ -1634,6 +1767,79 @@ async function actionStartAuth(userId: string, params: Params) {
   return { url: res.url }
 }
 
+type EbAccountRef = BankConnectionPayload['accounts'][number]
+
+// Correspondance ancien uid -> nouvel uid entre deux sessions de la meme banque.
+// Un compte est reconnu par son uid s'il est reste le meme, sinon par son
+// identification_hash, sinon par son IBAN (affine par produit et nom, car une
+// carte a debit differe peut partager l'IBAN du compte courant). Une cle
+// ambigue (portee par plusieurs comptes d'un cote ou de l'autre) n'apparie rien.
+function mapAccountUids(previous: EbAccountRef[], next: EbAccountRef[]): Map<string, string> {
+  const mapping = new Map<string, string>()
+  const taken = new Set<string>()
+  const nextUids = new Set(next.map((a) => a.uid))
+  for (const a of previous) {
+    if (nextUids.has(a.uid)) {
+      mapping.set(a.uid, a.uid)
+      taken.add(a.uid)
+    }
+  }
+  const iban = (a: EbAccountRef) => (a.iban ? a.iban.replace(/\s+/g, '').toUpperCase() : null)
+  const keyFns: ((a: EbAccountRef) => string | null)[] = [
+    (a) => (a.hash ? `h:${a.hash}` : null),
+    (a) => (iban(a) ? `i:${iban(a)}|${a.product ?? ''}|${a.name ?? ''}` : null),
+    (a) => (iban(a) ? `i:${iban(a)}` : null),
+  ]
+  for (const keyOf of keyFns) {
+    const group = (list: EbAccountRef[]) => {
+      const byKey = new Map<string, EbAccountRef[]>()
+      for (const a of list) {
+        const key = keyOf(a)
+        if (!key) continue
+        const bucket = byKey.get(key)
+        if (bucket) bucket.push(a)
+        else byKey.set(key, [a])
+      }
+      return byKey
+    }
+    const before = group(previous.filter((a) => !mapping.has(a.uid)))
+    const after = group(next.filter((a) => !taken.has(a.uid)))
+    for (const [key, olds] of before) {
+      const news = after.get(key)
+      if (olds.length === 1 && news?.length === 1) {
+        mapping.set(olds[0].uid, news[0].uid)
+        taken.add(news[0].uid)
+      }
+    }
+  }
+  return mapping
+}
+
+// Re-consentement : reporte sur les comptes locaux les uid de la nouvelle
+// session. Renvoie le nombre de comptes re-associes.
+async function relinkAccountsAfterReconsent(
+  userId: string,
+  connection: WithId<BankConnectionPayload>,
+  nextAccounts: EbAccountRef[],
+): Promise<number> {
+  const mapping = mapAccountUids(connection.accounts, nextAccounts)
+  let relinked = 0
+  for (const account of await loadAll<AccountPayload>('accounts', userId)) {
+    const current = account.providerAccountUid
+    if (!current) continue
+    const target = mapping.get(current)
+    if (!target || target === current) continue
+    const { id, ...rest } = account
+    await updateEncrypted('accounts', userId, id, {
+      ...rest,
+      providerAccountUid: target,
+      connectionId: connection.id,
+    })
+    relinked += 1
+  }
+  return relinked
+}
+
 // finalizeAuth : echange le code de retour contre une session EB persistee.
 async function actionFinalizeAuth(userId: string, params: Params) {
   const code = typeof params.code === 'string' ? params.code.trim() : ''
@@ -1650,6 +1856,7 @@ async function actionFinalizeAuth(userId: string, params: Params) {
           uid?: string
           name?: string
           product?: string
+          identification_hash?: string
           account_id?: { iban?: string; name?: string; other?: { identification?: string } }
         }
     >
@@ -1658,7 +1865,7 @@ async function actionFinalizeAuth(userId: string, params: Params) {
   }
   if (!session.session_id) throw new ApiError(502, 'Enable Banking : session_id absent')
 
-  const accounts: { uid: string; name?: string; iban?: string; product?: string }[] = []
+  const accounts: BankConnectionPayload['accounts'] = []
   for (const entry of session.accounts ?? []) {
     if (typeof entry === 'string') {
       accounts.push({ uid: entry })
@@ -1670,6 +1877,9 @@ async function actionFinalizeAuth(userId: string, params: Params) {
         ...(name ? { name } : {}),
         ...(iban ? { iban } : {}),
         ...(entry.product ? { product: entry.product } : {}),
+        ...(typeof entry.identification_hash === 'string' && entry.identification_hash
+          ? { hash: entry.identification_hash }
+          : {}),
       })
     }
   }
@@ -1696,8 +1906,12 @@ async function actionFinalizeAuth(userId: string, params: Params) {
       c.accounts.some((a) => newUids.has(a.uid)),
   )
   if (match) {
+    // Les uid de comptes EB sont propres a la session : sans report, les comptes
+    // locaux gardaient l'ancien uid, plus aucun n'etait interroge et la synchro
+    // n'importait plus rien, en silence, jusqu'a une re-association manuelle.
+    const relinked = await relinkAccountsAfterReconsent(userId, match, accounts)
     await updateEncrypted('bank_connections', userId, match.id, payload)
-    return { ok: true, connectionId: match.id }
+    return { ok: true, connectionId: match.id, relinked }
   }
 
   const connectionId = await insertEncrypted('bank_connections', userId, payload)
@@ -2087,6 +2301,16 @@ Deno.serve(async (req) => {
             const message = err instanceof ApiError ? err.message : 'reconciliation echouee'
             result = { ...syncResult, errors: [...syncResult.errors, message] }
           }
+        } else if (isCron) {
+          // Mode cron : la reponse est conservee en clair par pg_net
+          // (net._http_response). On n'y met donc aucun message d'erreur (ils
+          // nomment la banque et le compte) : le detail est dans sync_logs,
+          // chiffre.
+          result = {
+            imported: syncResult.imported,
+            transfersLinked: syncResult.transfersLinked,
+            errorCount: syncResult.errors.length,
+          }
         } else {
           result = syncResult
         }
@@ -2103,7 +2327,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify(result), { status: 200, headers })
   } catch (err) {
     if (err instanceof ApiError) {
-      console.error(`sync-bank action=${action} status=${err.status} message=${err.message}`)
+      console.error(`sync-bank action=${action} status=${err.status} message=${logSafe(err.message)}`)
       return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers })
     }
     console.error(`sync-bank action=${action} status=500 erreur inattendue`)

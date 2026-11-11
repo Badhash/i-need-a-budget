@@ -232,7 +232,15 @@ export function assignMonthIdx(keys: CryptoKeys, userId: string, month: string):
   return blindIndex(keys, ['assign-month', userId, month])
 }
 
-/** Dedup des imports bancaires : HMAC(compte + date + montant + libelle normalise). */
+/**
+ * Dedup des imports bancaires : HMAC(compte + date + montant + libelle normalise).
+ *
+ * `occurrence` (1 par defaut) est le rang de l'operation parmi celles,
+ * strictement identiques, d'une meme reponse bancaire. La premiere garde le
+ * hash historique (compatible avec les lignes deja en base) ; a partir de la
+ * deuxieme, le rang entre dans le hash : deux operations legitimes identiques
+ * le meme jour restent deux lignes au lieu de se dedupliquer.
+ */
 export function txHashIdx(
   keys: CryptoKeys,
   userId: string,
@@ -240,15 +248,18 @@ export function txHashIdx(
   bookingDate: string,
   amountCents: number,
   label: string,
+  occurrence = 1,
 ): Promise<string> {
-  return blindIndex(keys, [
+  const parts = [
     'tx',
     userId,
     accountId,
     bookingDate,
     String(amountCents),
     normalizeLabel(label),
-  ])
+  ]
+  if (occurrence > 1) parts.push(String(occurrence))
+  return blindIndex(keys, parts)
 }
 
 export function assignIdx(
