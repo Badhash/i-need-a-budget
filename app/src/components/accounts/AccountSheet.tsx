@@ -539,7 +539,10 @@ function AdjustView({
       return
     }
     haptic(10)
-    adjust.mutate({ ...vars, closeAfter })
+    // La cloture exige un solde nul : si le champ pre-rempli a 0 a ete modifie,
+    // on ajuste sans clore (le serveur refuserait, apres un toast « clôturé »).
+    const closing = closeAfter && target === 0
+    adjust.mutate({ ...vars, closeAfter: closing })
     const amount = fmtEUR(Math.abs(vars.delta))
     const effect = !account.onBudget
       ? 'écart enregistré hors budget (compte de suivi).'
@@ -549,7 +552,7 @@ function AdjustView({
           ? `${amount} ajoutés au Prêt à assigner.`
           : `${amount} retirés du Prêt à assigner.`
     toast(
-      closeAfter
+      closing
         ? {
             id: closedToastId(account.id),
             message: `${quoted(account.name)} clôturé`,

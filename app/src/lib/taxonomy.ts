@@ -22,6 +22,7 @@ import {
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import type { Category, CategoryGroup, GroupIcon, Transaction } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
+import { pauseReads } from '@/lib/pauseReads'
 
 const BUDGET_PREFIX = ['budget'] as const
 const TARGETS_KEY = ['targets'] as const
@@ -408,7 +409,7 @@ export function useDeleteCategoryMutation() {
         deps: [categoryId],
       }),
     onMutate: async ({ categoryId }): Promise<DeleteContext> => {
-      await queryClient.cancelQueries({ queryKey: TRANSACTIONS_KEY })
+      await pauseReads(queryClient, TRANSACTIONS_KEY)
       // Le serveur decategorise les transactions de la categorie : meme effet
       // en optimiste sur la liste et sur le badge « À catégoriser » (compteur
       // du bootstrap), au lieu d'un refetch complet de ['transactions'].

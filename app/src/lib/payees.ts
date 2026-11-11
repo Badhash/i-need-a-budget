@@ -11,6 +11,7 @@ import { useTransactions } from '@/lib/queries'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { payeeKeyOf } from '@/lib/ruleInsights'
 import { payeeKey } from '../../../packages/crypto/src/payee'
+import { pauseReads } from '@/lib/pauseReads'
 
 /**
  * Libelle a envoyer a setPayeeCategory pour viser la cle `key` : le serveur
@@ -76,7 +77,7 @@ export function usePayeeDefault(): UseMutationResult<{ ok: true; key: string }, 
         deps: categoryId === null ? [] : [categoryId],
       }),
     onMutate: async ({ key, categoryId }) => {
-      await queryClient.cancelQueries({ queryKey: BOOTSTRAP_KEY })
+      await pauseReads(queryClient, BOOTSTRAP_KEY)
       const previous =
         queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)?.payees.find((p) => p.key === key)?.categoryId ?? null
       patchPayee(queryClient, key, categoryId)

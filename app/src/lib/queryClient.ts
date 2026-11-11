@@ -64,6 +64,11 @@ export function createAppQueryClient(): QueryClient {
     defaultOptions: {
       queries: {
         staleTime: Infinity,
+        // Une query sans observateur n'est jamais purgee : avec le defaut de
+        // 5 min, les caches precharges au lancement (liste des transactions,
+        // mois voisins, regles, connexions) etaient jetes puis retelecharges a
+        // la premiere visite de leur page. Vide a la deconnexion (clear()).
+        gcTime: Infinity,
         networkMode: 'online',
         retry: shouldRetryNetwork,
         retryDelay: networkRetryDelay,

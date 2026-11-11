@@ -436,6 +436,11 @@ function parseRegister(text: string): { rows: RegisterRow[]; ignored: number } {
   if (iAccount === -1 || iDate === -1) {
     throw new Error('Register.csv : colonnes Compte / Date introuvables.')
   }
+  // Sans aucune colonne de montant, toutes les transactions valaient 0 EUR et
+  // le remplacement destructif pouvait partir sans la moindre alerte.
+  if (iOutflow === -1 && iInflow === -1) {
+    throw new Error('Register.csv : colonnes Outflow / Inflow (montants) introuvables.')
+  }
 
   const at = (r: string[], i: number) => (i >= 0 && i < r.length ? r[i] : '')
   const rows: RegisterRow[] = []
@@ -510,8 +515,10 @@ function parseBudget(
     // retirer de l'argent d'une enveloppe = "Assigned" negatif sur le mois.
     // Les ignorer gonfle la somme des assignes et effondre le Ready to Assign
     // (constate sur donnees reelles : -57 000 EUR d'ecart).
-    if (amount === 0) continue
+    // La categorie est creee meme sans montant : une enveloppe YNAB vide et
+    // sans transaction disparaissait sinon de l'import.
     const catKey = ensureCategory(acc, group, category)
+    if (amount === 0) continue
     byKey.set(`${month}||${catKey}`, { categoryKey: catKey, month, amount })
   }
   return { assignments: [...byKey.values()], ignored }
@@ -1270,6 +1277,11 @@ async function execute(run: ImportRun, report: (p: ImportProgress) => void): Pro
           run.cursor++
           report(progressOf(run))
         }
+        // Les agregats ont ete invalides par l'import et rien ne les
+        // reconstruisait avant le prochain lancement de l'app : chaque lecture
+        // relisait tout l'historique importe. Une seule reconstruction ici,
+        // best-effort (le calcul complet sert en cas d'echec).
+        await apiCall('recomputeAggregates').catch(() => {})
         run.step = 'targets'
         run.cursor = 0
         break

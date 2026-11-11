@@ -22,6 +22,7 @@ import { useTransactions } from '@/lib/queries'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { followTxId } from '@/lib/txIds'
 import { payeeKey } from '../../../packages/crypto/src/payee'
+import { pauseReads } from '@/lib/pauseReads'
 
 export { payeeKey }
 
@@ -242,7 +243,10 @@ export function useCategorize() {
       })
     },
     onMutate: async (vars) => {
-      await queryClient.cancelQueries({ queryKey: ['transactions'] })
+      await Promise.all([
+        pauseReads(queryClient, ['transactions']),
+        pauseReads(queryClient, BOOTSTRAP_KEY),
+      ])
       return applyCategorizeOptimistic(queryClient, { ...vars, txId: followTxId(vars.txId) })
     },
     onError: (_err, _vars, ctx) => {

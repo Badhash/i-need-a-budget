@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { Transaction } from '@/types/domain'
-import { useAccountsMap, useIsCrossBudgetTransfer, useTransactions } from '@/lib/data'
+import { isCrossBudgetTransfer, TRANSACTIONS_KEY, useAccountsMap } from '@/lib/data'
 import { useUpdateTransaction } from '@/lib/transactions'
 import { useUiStore } from '@/stores/ui'
 import {
@@ -15,9 +16,8 @@ import { keepSheetOnFieldEscape, SheetForm, txFormFrom, type TxFormResult } from
 export function EditTransactionDialog() {
   const editTx = useUiStore((s) => s.editTx)
   const setEditTx = useUiStore((s) => s.setEditTx)
-  const isCross = useIsCrossBudgetTransfer()
+  const queryClient = useQueryClient()
   const accountById = useAccountsMap()
-  const { data: txs } = useTransactions()
   const [failure, setFailure] = useState<string | null>(null)
   // Rollback discret du cache puis REOUVERTURE du dialogue sur les valeurs
   // d'origine avec un message : une edition perdue en silence semblait
@@ -40,10 +40,16 @@ export function EditTransactionDialog() {
 
   // Moitie cote budget d'un virement vers un compte de suivi (serveur recent) :
   // categorie, libelle et note seulement, le reste suit le virement.
-  const cross = shownTx ? isCross(shownTx) : false
+  // Lectures PONCTUELLES du cache, sans observateur : ce dialogue est monte en
+  // permanence par AppShell. Avec useTransactions(), la liste complete restait
+  // « active » sur toutes les pages et chaque reconciliation Realtime
+  // retelechargeait tout l'historique, meme depuis Budget ou Reglages.
+  const cross = shownTx ? isCrossBudgetTransfer(queryClient, shownTx) : false
   const peer =
     cross && shownTx
-      ? txs?.find((t) => t.transferGroupId === shownTx.transferGroupId && t.id !== shownTx.id)
+      ? queryClient
+          .getQueryData<Transaction[]>(TRANSACTIONS_KEY)
+          ?.find((t) => t.transferGroupId === shownTx.transferGroupId && t.id !== shownTx.id)
       : undefined
   const peerName = peer ? accountById.get(peer.accountId)?.name : undefined
   const lockedReason = cross

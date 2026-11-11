@@ -104,16 +104,27 @@ export function Combobox({
             setQuery('')
           }}
           onChange={(e) => {
-            setQuery(e.target.value)
+            // Liste fermee (apres Echap) : le champ affiche le libelle choisi et
+            // la frappe s'y ajoutait (« Loyerr », aucun resultat). On ne garde
+            // que ce qui vient d'etre tape.
+            const typed = e.target.value
+            setQuery(!open && typed.startsWith(selectedLabel) ? typed.slice(selectedLabel.length) : typed)
             setOpen(true)
           }}
           onBlur={() => {
             blurTimer.current = setTimeout(() => setOpen(false), 120)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && filtered[0]) {
-              e.preventDefault()
-              commit(filtered[0].value)
+            if (e.key === 'Enter') {
+              // Sans recherche saisie, Entree ne choisit rien et laisse le
+              // formulaire se valider : elle prenait la premiere option, donc
+              // « À catégoriser » ou le premier compte a la place du choix fait.
+              if (open && query.trim() && filtered[0]) {
+                e.preventDefault()
+                commit(filtered[0].value)
+              } else {
+                setOpen(false)
+              }
             } else if (e.key === 'Escape') {
               setOpen(false)
             }

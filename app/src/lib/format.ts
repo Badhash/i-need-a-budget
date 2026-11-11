@@ -1,10 +1,21 @@
 // Formatage fr-FR : montants en centimes -> "1 234,56 €", dates, mois.
 
 // Dates dynamiques (fuseau local) : l'app doit rester juste au fil des jours.
-function isoLocal(d: Date): string {
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${m}-${day}`
+// Date du jour au fuseau Europe/Paris, comme le serveur (todayParis dans
+// /api). Avec l'heure de l'appareil, un telephone dans un autre fuseau
+// divergeait du serveur autour de minuit : mois courant, badge « À
+// catégoriser », date de saisie refusee comme future.
+const parisDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Paris',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+function isoParis(d: Date): string {
+  const parts = parisDate.formatToParts(d)
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')}`
 }
 
 // FONCTIONS et non constantes de module : une PWA iOS reste residente des
@@ -13,7 +24,7 @@ function isoLocal(d: Date): string {
 // (date de saisie « hier », aujourd'hui refuse comme futur, mois non remis a
 // jour au 1er). Chaque appel relit l'horloge.
 export function today(): string {
-  return isoLocal(new Date())
+  return isoParis(new Date())
 }
 export function currentMonth(): string {
   return today().slice(0, 7)
@@ -21,8 +32,7 @@ export function currentMonth(): string {
 export const MIN_MONTH = '2026-02'
 // Assignation sur les mois futurs autorisee : horizon glissant de 6 mois.
 export function maxMonth(): string {
-  const now = new Date()
-  return isoLocal(new Date(now.getFullYear(), now.getMonth() + 6, 1)).slice(0, 7)
+  return addMonths(currentMonth(), 6)
 }
 
 const eur = new Intl.NumberFormat('fr-FR', {
@@ -37,11 +47,15 @@ const eurSigned = new Intl.NumberFormat('fr-FR', {
 })
 
 export function fmtEUR(cents: number): string {
+  if (!Number.isFinite(cents)) return '—'
   // -0 (ex. -activity d'un mois sans mouvement) s'afficherait « -0,00 € ».
   return eur.format((cents === 0 ? 0 : cents) / 100)
 }
 
 export function fmtEURSigned(cents: number): string {
+  if (!Number.isFinite(cents)) return '—'
+  // Zero n'a pas de signe : « +0,00 € » (ou « -0,00 € » pour -0) n'a aucun sens.
+  if (cents === 0) return eur.format(0)
   return eurSigned.format(cents / 100)
 }
 
@@ -61,9 +75,14 @@ export function fmtPercent(ratio: number, digits = 0): string {
  * seuls chiffres et operateurs sont acceptes.
  */
 export function evalAmountExpr(raw: string): number | null {
-  const s = raw.replace(/\s/g, '').replace(/,/g, '.')
-  if (s === '' || s === '-') return 0
-  if (!/^[0-9.+\-*/()]+$/.test(s)) return null
+  // Tolere ce que l'app affiche elle-meme et ce qu'un collage apporte : espaces
+  // (insecables compris), symbole euro, signe moins typographique (U+2212).
+  const s = raw.replace(/[\s€]/g, '').replace(/\u2212/g, '-')
+  if (s === '') return 0
+  // Un « - » seul est une saisie en cours, pas zero : le valider remettait le
+  // montant a 0 (assignation, ajustement de solde).
+  if (s === '-') return null
+  if (!/^[0-9.,+\-*/()]+$/.test(s)) return null
 
   let pos = 0
   const peek = () => s[pos]
@@ -103,16 +122,9 @@ export function evalAmountExpr(raw: string): number | null {
       return v
     }
     const start = pos
-    while (pos < s.length && /[0-9.]/.test(s[pos])) pos++
+    while (pos < s.length && /[0-9.,]/.test(s[pos])) pos++
     if (pos === start) throw new Error('nombre attendu')
-    const token = s.slice(start, pos)
-    // Un seul separateur decimal autorise : "1.234.56" (saisie "1.234,56" avec
-    // point de milliers) doit etre REJETE, pas silencieusement tronque a 1.234
-    // par parseFloat (montant faux persiste sinon).
-    if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(token)) throw new Error('nombre invalide')
-    const num = Number.parseFloat(token)
-    if (Number.isNaN(num)) throw new Error('nombre invalide')
-    return num
+    return parseNumberToken(s.slice(start, pos))
   }
 
   try {
@@ -125,12 +137,40 @@ export function evalAmountExpr(raw: string): number | null {
 }
 
 /**
+ * Lit un nombre saisi a la francaise. Leve si la saisie est invalide ou AMBIGUE :
+ * mieux vaut refuser un montant que d'en enregistrer un faux.
+ *   "12,5" / "12.5" / "5," -> decimal ; "1.234,56" -> 1234,56 (points de milliers)
+ *   "1.000" / "12.345"     -> refuse : mille euros ou un euro ? (le point etait
+ *                             lu comme decimale, soit 1,00 EUR pour un loyer)
+ */
+function parseNumberToken(token: string): number {
+  let normalized: string
+  if (token.includes(',')) {
+    // Virgule = decimale. Les points eventuels doivent etre des milliers.
+    const [whole, frac, ...rest] = token.split(',')
+    if (rest.length > 0) throw new Error('nombre invalide')
+    if (whole.includes('.') && !/^\d{1,3}(?:\.\d{3})+$/.test(whole)) throw new Error('nombre invalide')
+    if (frac.includes('.')) throw new Error('nombre invalide')
+    normalized = `${whole.replace(/\./g, '')}.${frac}`
+  } else {
+    if (/^\d{1,3}(?:\.\d{3})+$/.test(token)) throw new Error('nombre ambigu')
+    normalized = token
+  }
+  // Un seul separateur decimal ; un separateur final (« 5, ») est tolere.
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized)) throw new Error('nombre invalide')
+  const num = Number.parseFloat(normalized)
+  if (Number.isNaN(num)) throw new Error('nombre invalide')
+  return num
+}
+
+/**
  * Comme evalAmountExpr mais renvoie des CENTIMES entiers (arrondi au centime).
  * Renvoie null si l'expression est invalide.
  */
 export function evalAmountCents(raw: string): number | null {
   const euros = evalAmountExpr(raw)
-  return euros === null ? null : Math.round(euros * 100)
+  // « + 0 » : ramene -0 (ex. « -0,001 ») a 0.
+  return euros === null ? null : Math.round(euros * 100) + 0
 }
 
 function capitalize(s: string): string {

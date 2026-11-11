@@ -136,6 +136,10 @@ export function TransactionForm({
   // bancaire profond) : sa propre date elargit la borne basse, sinon toute
   // sauvegarde serait impossible ("date invalide" sans issue).
   const minDate = initial.date && initial.date < MIN_DATE ? initial.date : MIN_DATE
+  // Meme principe pour la borne haute : une transaction deja datee dans le
+  // futur (operation a venir importee, appareil dans un fuseau en retard sur
+  // Paris) doit rester modifiable sans falsifier sa date.
+  const maxDate = initial.date && initial.date > today() ? initial.date : today()
 
   const [kind, setKind] = useState<TxKind>(initial.kind)
   const [amount, setAmount] = useState(initial.amount)
@@ -179,7 +183,7 @@ export function TransactionForm({
       setError('Choisis un compte.')
       return
     }
-    if (!date || date < minDate || date > today()) {
+    if (!date || date < minDate || date > maxDate) {
       setError("La date doit être antérieure ou égale à aujourd'hui.")
       return
     }
@@ -381,7 +385,7 @@ export function TransactionForm({
         type="date"
         value={date}
         min={minDate}
-        max={today()}
+        max={maxDate}
         disabled={locked}
         onChange={(e) => setDate(e.target.value)}
       />

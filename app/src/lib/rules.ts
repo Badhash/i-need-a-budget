@@ -33,6 +33,7 @@ import {
 import { scheduleBudgetRefetch } from '@/lib/categorize'
 import { enqueue, isTempId, newTempId, registerRealId, resolveId } from '@/lib/mutationQueue'
 import { payeeKey } from '../../../packages/crypto/src/payee'
+import { pauseReads } from '@/lib/pauseReads'
 
 /**
  * Copie CONFORME de normalizeLabel (packages/crypto/src/index.ts), utilisee par
@@ -376,7 +377,7 @@ export function useCreateRule(): UseMutationResult<string, Error, { rule: Rule }
         { deps: [rule.categoryId] },
       ),
     onMutate: async ({ rule }) => {
-      await queryClient.cancelQueries({ queryKey: RULES_KEY })
+      await pauseReads(queryClient, RULES_KEY)
       setRules(queryClient, (old) => [...old.filter((r) => r.id !== rule.id), rule])
     },
     onSuccess: (id, { rule }) => {
@@ -405,7 +406,7 @@ export function useUpdateRule(): UseMutationResult<void, Error, { rule: Rule; pr
         { deps: [rule.id, rule.categoryId] },
       ),
     onMutate: async ({ rule }) => {
-      await queryClient.cancelQueries({ queryKey: RULES_KEY })
+      await pauseReads(queryClient, RULES_KEY)
       setRules(queryClient, (old) => old.map((r) => (r.id === rule.id ? rule : r)))
     },
     onError: (_err, { rule, previous }) => {
@@ -421,7 +422,7 @@ export function useDeleteRule(): UseMutationResult<void, Error, { rule: Rule }> 
     mutationFn: ({ rule }: { rule: Rule }) =>
       enqueue(() => apiDeleteRule(resolveId(rule.id)), { deps: [rule.id] }),
     onMutate: async ({ rule }) => {
-      await queryClient.cancelQueries({ queryKey: RULES_KEY })
+      await pauseReads(queryClient, RULES_KEY)
       setRules(queryClient, (old) => old.filter((r) => r.id !== rule.id))
     },
     onError: (_err, { rule }) => {
@@ -483,7 +484,7 @@ export function useReorderRules(): UseMutationResult<void, Error, { changes: Pri
         { deps: changes.map((c) => c.rule.id) },
       ),
     onMutate: async ({ changes }) => {
-      await queryClient.cancelQueries({ queryKey: RULES_KEY })
+      await pauseReads(queryClient, RULES_KEY)
       const previous = queryClient.getQueryData<Rule[]>(RULES_KEY)
       const next = new Map(changes.map((c) => [c.rule.id, c.priority]))
       setRules(queryClient, (old) =>
@@ -527,7 +528,10 @@ export function useApplyRules(): UseMutationResult<number, Error, void, ApplyRul
     meta: { errorToast: false },
     mutationFn: () => enqueue(() => apiApplyRules()),
     onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: TRANSACTIONS_KEY })
+      await Promise.all([
+        pauseReads(queryClient, TRANSACTIONS_KEY),
+        pauseReads(queryClient, BOOTSTRAP_KEY),
+      ])
       const transactions = queryClient.getQueryData<Transaction[]>(TRANSACTIONS_KEY)
       const rules = queryClient.getQueryData<Rule[]>(RULES_KEY)
       const boot = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)

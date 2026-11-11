@@ -25,6 +25,11 @@ import { addMonths, fmtEUR, fmtMonthLong, monthOf, monthRange } from '@/lib/form
 import { parseBankLabel } from '@/lib/bankLabel'
 import { payeeKey } from '../../../packages/crypto/src/payee'
 
+// Libelle de la transaction de solde d'ouverture (contrat partage avec /api
+// createAccount et lib/accounts OPENING_LABEL ; duplique ici pour garder ce
+// module pur, sans dependance aux mutations).
+const OPENING_LABEL = "Solde d'ouverture"
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -376,6 +381,11 @@ export function computeAnalytics(
     const day = Number(t.date.slice(8, 10))
 
     if (t.categoryId !== null && taxo.incomeCats.has(t.categoryId)) {
+      // Solde d'ouverture d'un compte : de l'argent deja la, range dans une
+      // categorie de revenus pour alimenter le Pret a assigner, mais pas un
+      // revenu du mois. Compte comme tel, il gonflait revenus, epargne et taux
+      // d'epargne du mois d'ouverture et de toutes les moyennes.
+      if (t.label === OPENING_LABEL) continue
       bump(incomeByMonth, m, t.amount)
       if (inPeriod) nested(dailyIncome, m, newDays)[day]! += t.amount
       continue
