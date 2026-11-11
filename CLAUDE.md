@@ -10,7 +10,7 @@ Application de budget par enveloppes (zero-based) pour usage personnel, inspiré
 * State serveur : TanStack Query. State UI : Zustand. Tables : TanStack Table.
 * Styles : Tailwind CSS + shadcn/ui. Widgets analytiques : Tremor. Graphes custom : Recharts.
 * Backend : Supabase free tier (Postgres + RLS, Auth email/password + MFA TOTP, Edge Functions Deno, pg_cron + pg_net, Realtime)
-* Bancaire : Enable Banking (restricted production app, JWT RS256, sessions 180 jours)
+* Bancaire : Enable Banking (restricted production app, JWT RS256, sessions de 90 jours : c'est la durée demandée par `startAuth`, plafond PSD2 usuel)
 * Tests : Vitest, uniquement sur le moteur d'enveloppes et la crypto
 
 ## Structure du repo
