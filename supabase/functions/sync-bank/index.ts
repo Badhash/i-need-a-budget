@@ -101,7 +101,9 @@ interface RulePayload {
 interface BankConnectionPayload {
   institution: string
   sessionId: string
-  accounts: { uid: string; name?: string; iban?: string; product?: string }[]
+  // `hash` = identification_hash EB : identifiant du compte STABLE d'une session
+  // a l'autre (l'uid, lui, est propre a la session).
+  accounts: { uid: string; name?: string; iban?: string; product?: string; hash?: string }[]
   validUntil: string | null // ISO 8601
   sessionState: 'active' | 'expired'
 }
@@ -1653,6 +1655,79 @@ async function actionStartAuth(userId: string, params: Params) {
   return { url: res.url }
 }
 
+type EbAccountRef = BankConnectionPayload['accounts'][number]
+
+// Correspondance ancien uid -> nouvel uid entre deux sessions de la meme banque.
+// Un compte est reconnu par son uid s'il est reste le meme, sinon par son
+// identification_hash, sinon par son IBAN (affine par produit et nom, car une
+// carte a debit differe peut partager l'IBAN du compte courant). Une cle
+// ambigue (portee par plusieurs comptes d'un cote ou de l'autre) n'apparie rien.
+function mapAccountUids(previous: EbAccountRef[], next: EbAccountRef[]): Map<string, string> {
+  const mapping = new Map<string, string>()
+  const taken = new Set<string>()
+  const nextUids = new Set(next.map((a) => a.uid))
+  for (const a of previous) {
+    if (nextUids.has(a.uid)) {
+      mapping.set(a.uid, a.uid)
+      taken.add(a.uid)
+    }
+  }
+  const iban = (a: EbAccountRef) => (a.iban ? a.iban.replace(/\s+/g, '').toUpperCase() : null)
+  const keyFns: ((a: EbAccountRef) => string | null)[] = [
+    (a) => (a.hash ? `h:${a.hash}` : null),
+    (a) => (iban(a) ? `i:${iban(a)}|${a.product ?? ''}|${a.name ?? ''}` : null),
+    (a) => (iban(a) ? `i:${iban(a)}` : null),
+  ]
+  for (const keyOf of keyFns) {
+    const group = (list: EbAccountRef[]) => {
+      const byKey = new Map<string, EbAccountRef[]>()
+      for (const a of list) {
+        const key = keyOf(a)
+        if (!key) continue
+        const bucket = byKey.get(key)
+        if (bucket) bucket.push(a)
+        else byKey.set(key, [a])
+      }
+      return byKey
+    }
+    const before = group(previous.filter((a) => !mapping.has(a.uid)))
+    const after = group(next.filter((a) => !taken.has(a.uid)))
+    for (const [key, olds] of before) {
+      const news = after.get(key)
+      if (olds.length === 1 && news?.length === 1) {
+        mapping.set(olds[0].uid, news[0].uid)
+        taken.add(news[0].uid)
+      }
+    }
+  }
+  return mapping
+}
+
+// Re-consentement : reporte sur les comptes locaux les uid de la nouvelle
+// session. Renvoie le nombre de comptes re-associes.
+async function relinkAccountsAfterReconsent(
+  userId: string,
+  connection: WithId<BankConnectionPayload>,
+  nextAccounts: EbAccountRef[],
+): Promise<number> {
+  const mapping = mapAccountUids(connection.accounts, nextAccounts)
+  let relinked = 0
+  for (const account of await loadAll<AccountPayload>('accounts', userId)) {
+    const current = account.providerAccountUid
+    if (!current) continue
+    const target = mapping.get(current)
+    if (!target || target === current) continue
+    const { id, ...rest } = account
+    await updateEncrypted('accounts', userId, id, {
+      ...rest,
+      providerAccountUid: target,
+      connectionId: connection.id,
+    })
+    relinked += 1
+  }
+  return relinked
+}
+
 // finalizeAuth : echange le code de retour contre une session EB persistee.
 async function actionFinalizeAuth(userId: string, params: Params) {
   const code = typeof params.code === 'string' ? params.code.trim() : ''
@@ -1669,6 +1744,7 @@ async function actionFinalizeAuth(userId: string, params: Params) {
           uid?: string
           name?: string
           product?: string
+          identification_hash?: string
           account_id?: { iban?: string; name?: string; other?: { identification?: string } }
         }
     >
@@ -1677,7 +1753,7 @@ async function actionFinalizeAuth(userId: string, params: Params) {
   }
   if (!session.session_id) throw new ApiError(502, 'Enable Banking : session_id absent')
 
-  const accounts: { uid: string; name?: string; iban?: string; product?: string }[] = []
+  const accounts: BankConnectionPayload['accounts'] = []
   for (const entry of session.accounts ?? []) {
     if (typeof entry === 'string') {
       accounts.push({ uid: entry })
@@ -1689,6 +1765,9 @@ async function actionFinalizeAuth(userId: string, params: Params) {
         ...(name ? { name } : {}),
         ...(iban ? { iban } : {}),
         ...(entry.product ? { product: entry.product } : {}),
+        ...(typeof entry.identification_hash === 'string' && entry.identification_hash
+          ? { hash: entry.identification_hash }
+          : {}),
       })
     }
   }
@@ -1715,8 +1794,12 @@ async function actionFinalizeAuth(userId: string, params: Params) {
       c.accounts.some((a) => newUids.has(a.uid)),
   )
   if (match) {
+    // Les uid de comptes EB sont propres a la session : sans report, les comptes
+    // locaux gardaient l'ancien uid, plus aucun n'etait interroge et la synchro
+    // n'importait plus rien, en silence, jusqu'a une re-association manuelle.
+    const relinked = await relinkAccountsAfterReconsent(userId, match, accounts)
     await updateEncrypted('bank_connections', userId, match.id, payload)
-    return { ok: true, connectionId: match.id }
+    return { ok: true, connectionId: match.id, relinked }
   }
 
   const connectionId = await insertEncrypted('bank_connections', userId, payload)
