@@ -127,7 +127,10 @@ export function ZakatWidget({ className }: { className?: string }) {
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className="text-soft">Ta méthode (3 %)</span>
-          <Amount cents={Math.round((base > 0 ? base : 0) * USER_RATE)} className="font-medium text-ink" />
+          {/* Meme assiette que les deux autres lignes : rien sous le nisab
+              (elle calculait sur la valeur nette brute, 120 EUR pour 4 000
+              EUR d'actifs sous un nisab de 6 000). */}
+          <Amount cents={Math.round(zakatBase * USER_RATE)} className="font-medium text-ink" />
         </div>
       </div>
 
