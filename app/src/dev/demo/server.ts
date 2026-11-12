@@ -286,7 +286,14 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
     return { transactions: listTx(db).filter((t) => t.bookingMonth === month) }
   },
 
-  listTransactions: (db) => ({ transactions: listTx(db) }),
+  listTransactions: (db, p) => {
+    if (p.months == null) return { transactions: listTx(db) }
+    if (!Array.isArray(p.months) || p.months.length === 0 || p.months.length > 24) {
+      throw new ApiError(400, "months : 1 a 24 mois attendus")
+    }
+    const months = [...new Set(p.months.map((m) => requireMonth(m)))].sort()
+    return { transactions: listTx(db).filter((t) => months.includes(t.bookingMonth)), months }
+  },
 
   getReports: (db, p) => computeReports(db, requireMonth(p.month), reportsOptions()),
 

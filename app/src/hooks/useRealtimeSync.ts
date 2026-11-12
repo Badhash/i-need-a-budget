@@ -7,6 +7,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { msSinceLocalWrite } from '@/lib/realtimeGate'
+import { installTxReconcile, isTransactionsList, reconcileTransactions } from '@/lib/txReconcile'
 
 // Fenetre de silence : un signal Realtime qui tombe dans les QUIET_WINDOW_MS
 // apres une ecriture LOCALE est considere comme l'echo de cette ecriture. Le
@@ -38,7 +39,11 @@ const RESUME_DEDUP_MS = 15 * 1000
 // Banking (['aspsps'], appel tiers authentifie, valable une heure) qu'une
 // invalidation globale rechargerait a chaque signal tant que les reglages
 // sont ouverts.
-const isReconcilable = (query: { queryKey: readonly unknown[] }) => query.queryKey[0] !== 'aspsps'
+// La liste complete des transactions est reconciliee a part, mois recents et
+// mois modifies seulement (lib/txReconcile) : la relire en entier a chaque
+// signal etait le poste d'egress dominant de la page Transactions.
+const isReconcilable = (query: { queryKey: readonly unknown[] }) =>
+  query.queryKey[0] !== 'aspsps' && !isTransactionsList(query)
 
 export function useRealtimeSync() {
   const queryClient = useQueryClient()
@@ -46,6 +51,11 @@ export function useRealtimeSync() {
   useEffect(() => {
     // Mode demonstration : aucun canal Realtime (pas de Supabase), rien a reconcilier.
     if (import.meta.env.VITE_DEMO === '1') return
+    installTxReconcile(queryClient)
+    const reconcile = () => {
+      void queryClient.invalidateQueries({ predicate: isReconcilable })
+      void reconcileTransactions(queryClient)
+    }
 
     let channel: RealtimeChannel | null = null
     let active = true
@@ -70,7 +80,7 @@ export function useRealtimeSync() {
           return
         }
         timer = null
-        void queryClient.invalidateQueries({ predicate: isReconcilable })
+        reconcile()
       }, delay)
     }
 
@@ -118,7 +128,7 @@ export function useRealtimeSync() {
         resumedAt = Date.now()
         if (timer) clearTimeout(timer)
         timer = null
-        void queryClient.invalidateQueries({ predicate: isReconcilable })
+        reconcile()
       }
     }
     document.addEventListener('visibilitychange', onVisibility)

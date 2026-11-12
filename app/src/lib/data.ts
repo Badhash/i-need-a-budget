@@ -115,7 +115,7 @@ interface FlatBudgetMonth {
 }
 
 // Transaction telle que servie par /api (avant mapping vers le type UI).
-interface ApiTransaction {
+export interface ApiTransaction {
   id: string
   accountId: string
   categoryId: string | null
@@ -310,7 +310,7 @@ export function useBudgetMonth(month: string): UseQueryResult<BudgetMonth> {
   })
 }
 
-function toTransaction(t: ApiTransaction): Transaction {
+export function toTransaction(t: ApiTransaction): Transaction {
   return {
     id: t.id,
     accountId: t.accountId,

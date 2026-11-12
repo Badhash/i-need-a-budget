@@ -123,6 +123,11 @@ export interface PendingRemoval {
 
 const pendingAdds = new Map<string, PendingAdd>()
 const pendingDeletes = new Map<string, PendingRemoval>()
+
+/** Vrai tant qu'un ajout ou une suppression de transaction attend le serveur. */
+export function hasPendingTxOps(): boolean {
+  return pendingAdds.size > 0 || pendingDeletes.size > 0
+}
 // Ajouts de la session (cle stable -> horodatage) : mise en lumiere discrete.
 const addedAt = new Map<string, number>()
 

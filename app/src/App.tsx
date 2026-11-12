@@ -25,6 +25,7 @@ import { TARGETS_KEY, fetchTargets } from '@/lib/targets'
 import { maxMonth, MIN_MONTH, addMonths } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { toast } from '@/lib/toast'
+import { noteServerTransactions } from '@/lib/txReconcile'
 import { AppLoader } from '@/components/shared/AppLoader'
 
 /**
@@ -61,6 +62,7 @@ async function preloadCritical(
     queryClient.setQueryData(BOOTSTRAP_KEY, full.bootstrap)
     queryClient.setQueryData(budgetKey(month), full.budget)
     queryClient.setQueryData(TRANSACTIONS_KEY, full.transactions)
+    noteServerTransactions(queryClient)
     // Donnees fraiches du serveur (et non une mise a jour optimiste) :
     // l'indicateur de fraicheur part de cet instant.
     markServerSync([BOOTSTRAP_KEY, budgetKey(month), TRANSACTIONS_KEY])
