@@ -10,8 +10,9 @@ import type { CatColor } from '@/styles/themes'
 import type { BankConnection } from '@/lib/bank'
 import { fmtMonthLong } from '@/lib/format'
 import {
-  DATE_RE,
   MONTH_RE,
+  isImportableDate,
+  isImportableMonth,
   isRestorableStartMonth,
   newUuid,
   optionalText,
@@ -185,7 +186,9 @@ export function parseBackup(text: string): ParsedBackup {
     const accountId = str(o.accountId)
     const date = typeof o.bookingDate === 'string' ? o.bookingDate : typeof o.date === 'string' ? o.date : ''
     const amount = int(o.amount)
-    if (!accountId || !DATE_RE.test(date) || amount === null) return null
+    // Date impossible (2025-02-31) ou hors des bornes du serveur : ignoree
+    // (comptee) plutot qu'une restauration bloquee a la validation.
+    if (!accountId || !isImportableDate(date) || amount === null) return null
     if (!minDate || date < minDate) minDate = date
     if (!maxDate || date > maxDate) maxDate = date
     return {
@@ -203,7 +206,7 @@ export function parseBackup(text: string): ParsedBackup {
     const categoryId = str(o.categoryId)
     const month = typeof o.month === 'string' ? o.month : ''
     const amount = int(o.amount)
-    if (!categoryId || !MONTH_RE.test(month) || amount === null) return null
+    if (!categoryId || !isImportableMonth(month) || amount === null) return null
     return { categoryId, month, amount }
   })
   const targets = keep(list(root, 'targets', false), (o): BTarget | null => {

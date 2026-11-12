@@ -73,6 +73,8 @@ interface ParsedAssignment {
 }
 
 type DateConvention = 'DMY' | 'MDY' | 'ISO'
+/** Ordre jour/mois impose par l'utilisateur quand le registre est ambigu. */
+export type DateOrder = 'DMY' | 'MDY'
 
 export interface ParsedImport {
   accounts: ParsedAccount[]
@@ -82,6 +84,11 @@ export interface ParsedImport {
   assignments: ParsedAssignment[]
   summary: {
     dateConvention: DateConvention
+    /**
+     * Aucune date du registre ne distingue le jour du mois (tous les champs
+     * <= 12) : la convention retenue est un choix par defaut, a confirmer.
+     */
+    dateAmbiguous: boolean
     ignoredCount: number
     dateRange: { min: string; max: string } | null
     hasBudget: boolean
@@ -248,11 +255,11 @@ function parseAmountToCents(raw: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Dates -> YYYY-MM-DD (MM/DD/YYYY, DD/MM/YYYY, YYYY-MM-DD)
+// Dates -> YYYY-MM-DD (MM/DD/YYYY, DD/MM/YYYY, YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD)
 // ---------------------------------------------------------------------------
 
 interface RawDateParts {
-  iso: string | null // rempli directement si deja ISO
+  iso: string | null // rempli directement si l'annee vient en tete
   a: number // premier champ numerique
   b: number // deuxieme champ
   y: number // annee
@@ -260,41 +267,38 @@ interface RawDateParts {
 
 function splitDate(raw: string): RawDateParts | null {
   const s = raw.trim()
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (iso) return { iso: `${iso[1]}-${iso[2]}-${iso[3]}`, a: 0, b: 0, y: Number(iso[1]) }
+  // Annee en tete : YYYY-MM-DD, et YYYY/MM/DD ou YYYY.MM.DD (formats proposes
+  // par YNAB). Aucune ambiguite possible.
+  const ymd = s.match(/^(\d{4})[/.\-](\d{2})[/.\-](\d{2})$/)
+  if (ymd) return { iso: `${ymd[1]}-${ymd[2]}-${ymd[3]}`, a: 0, b: 0, y: Number(ymd[1]) }
   const m = s.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/)
   if (m) return { iso: null, a: Number(m[1]), b: Number(m[2]), y: Number(m[3]) }
   return null
 }
 
 // Detecte la convention en cherchant une date qui leve l'ambiguite :
-// premier champ > 12 => DMY ; deuxieme champ > 12 => MDY. Defaut FR : DMY.
-function detectDateConvention(parts: RawDateParts[]): DateConvention {
+// premier champ > 12 => DMY ; deuxieme champ > 12 => MDY. Defaut FR : DMY,
+// signale comme ambigu (l'apercu propose de basculer).
+function detectDateConvention(parts: RawDateParts[]): { conv: DateConvention; ambiguous: boolean } {
   let sawNonIso = false
   for (const p of parts) {
     if (p.iso) continue
     sawNonIso = true
-    if (p.a > 12) return 'DMY'
-    if (p.b > 12) return 'MDY'
+    if (p.a > 12) return { conv: 'DMY', ambiguous: false }
+    if (p.b > 12) return { conv: 'MDY', ambiguous: false }
   }
-  return sawNonIso ? 'DMY' : 'ISO'
+  return sawNonIso ? { conv: 'DMY', ambiguous: true } : { conv: 'ISO', ambiguous: false }
 }
 
 function partsToIso(p: RawDateParts, conv: DateConvention): string | null {
-  if (p.iso) return p.iso
-  let day: number
-  let month: number
-  if (conv === 'MDY') {
-    month = p.a
-    day = p.b
-  } else {
-    day = p.a
-    month = p.b
+  let iso = p.iso
+  if (!iso) {
+    const [day, month] = conv === 'MDY' ? [p.b, p.a] : [p.a, p.b]
+    iso = `${p.y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
   }
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null
-  const mm = String(month).padStart(2, '0')
-  const dd = String(day).padStart(2, '0')
-  return `${p.y}-${mm}-${dd}`
+  // Date impossible (2024-13-45, 31/02) ou hors des bornes du serveur : ligne
+  // ignoree (comptee) plutot qu'un import bloque a la validation.
+  return isImportableDate(iso) ? iso : null
 }
 
 // ---------------------------------------------------------------------------
@@ -506,7 +510,7 @@ function parseBudget(
     const month = parseMonth(at(r, iMonth))
     const category = at(r, iCategory).trim()
     const group = at(r, iGroup).trim()
-    if (!month || !category) {
+    if (!month || !isImportableMonth(month) || !category) {
       ignored++
       continue
     }
@@ -530,12 +534,17 @@ function parseBudget(
 // Point d'entree du parsing
 // ---------------------------------------------------------------------------
 
-export function parseYnabExport(registerText: string, budgetText?: string): ParsedImport {
+/**
+ * `dateOrder` : ordre jour/mois impose quand le registre est ambigu (choix de
+ * l'utilisateur dans l'apercu) ; sans effet si une date leve l'ambiguite.
+ */
+export function parseYnabExport(registerText: string, budgetText?: string, dateOrder?: DateOrder): ParsedImport {
   const acc: Accumulator = { groups: new Map(), categories: new Map(), incomeEnsured: false }
   const { rows, ignored: regIgnored } = parseRegister(registerText)
 
   // Detection de la convention de date sur l'ensemble du registre.
-  const conv = detectDateConvention(rows.map((r) => r.parts))
+  const detected = detectDateConvention(rows.map((r) => r.parts))
+  const conv: DateConvention = detected.ambiguous && dateOrder ? dateOrder : detected.conv
 
   const accounts = new Map<string, ParsedAccount>()
   // Comptes ayant au moins une ligne categorisee (revenus compris) : budget.
@@ -604,6 +613,7 @@ export function parseYnabExport(registerText: string, budgetText?: string): Pars
     assignments,
     summary: {
       dateConvention: conv,
+      dateAmbiguous: detected.ambiguous,
       ignoredCount: ignored,
       dateRange: minDate && maxDate ? { min: minDate, max: maxDate } : null,
       hasBudget,
@@ -619,6 +629,24 @@ export function parseYnabExport(registerText: string, budgetText?: string): Pars
 export const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
 export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+// Bornes du serveur (requireMonth / requireDate) : 1990-01 a dix ans apres le
+// mois courant. Une ligne hors bornes serait refusee APRES l'effacement.
+const MIN_IMPORT_MONTH = '1990-01'
+const MAX_MONTHS_AHEAD = 120
+
+/** Mois YYYY-MM accepte par le serveur. */
+export function isImportableMonth(month: string): boolean {
+  return MONTH_RE.test(month) && month >= MIN_IMPORT_MONTH && month <= addMonths(currentMonth(), MAX_MONTHS_AHEAD)
+}
+
+/** Date YYYY-MM-DD qui existe au calendrier et que le serveur accepte. */
+export function isImportableDate(date: string): boolean {
+  if (!DATE_RE.test(date) || !isImportableMonth(date.slice(0, 7))) return false
+  const [y, m, d] = date.split('-').map(Number)
+  const t = new Date(Date.UTC(y, m - 1, d))
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d
+}
 
 /** Tronque une chaine sans couper un caractere hors BMP (paire de substituts). */
 export function clip(s: string, max: number): string {
@@ -794,7 +822,7 @@ export function validatePlan(plan: ImportPlan): string | null {
   }
   for (const t of plan.transactions) {
     if (!accountKeys.has(t.accountKey)) return 'transaction sans compte'
-    if (!DATE_RE.test(t.date)) return `date invalide (${t.date})`
+    if (!isImportableDate(t.date)) return `date invalide (${t.date})`
     if (!Number.isSafeInteger(t.amount)) return `montant invalide (${t.amount})`
     if (!isText(t.label, 200)) return 'libellé de transaction invalide'
     if (t.counterparty !== null && !isText(t.counterparty, 200)) return 'contrepartie invalide'
@@ -803,7 +831,7 @@ export function validatePlan(plan: ImportPlan): string | null {
     if (t.transferGroupId !== null && !UUID_RE.test(t.transferGroupId)) return 'identifiant de virement invalide'
   }
   for (const a of plan.assignments) {
-    if (!MONTH_RE.test(a.month)) return `mois d’assignation invalide (${a.month})`
+    if (!isImportableMonth(a.month)) return `mois d’assignation invalide (${a.month})`
     // Negatif autorise (retrait d'enveloppe YNAB), seul un non-entier est refuse.
     if (!Number.isSafeInteger(a.amount)) return 'montant assigné invalide'
     if (!categoryKeys.has(a.categoryKey) || incomeKeys.has(a.categoryKey)) return 'catégorie d’assignation invalide'

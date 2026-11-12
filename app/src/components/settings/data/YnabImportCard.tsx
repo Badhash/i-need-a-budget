@@ -5,7 +5,16 @@
 
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftRight, CalendarRange, Check, FileSpreadsheet, Import, Info, Sparkles } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  CalendarRange,
+  CalendarSearch,
+  Check,
+  FileSpreadsheet,
+  Import,
+  Info,
+  Sparkles,
+} from 'lucide-react'
 import {
   buildYnabPlan,
   decodeYnabCsv,
@@ -14,6 +23,7 @@ import {
   startImport,
   useImportStore,
   validatePlan,
+  type DateOrder,
   type ParsedImport,
   type YnabAccountChoice,
 } from '@/lib/ynabImport'
@@ -95,7 +105,8 @@ export function YnabImportCard() {
     setError(null)
   }
 
-  async function analyze() {
+  /** `dateOrder` : nouvelle analyse avec l'ordre jour/mois choisi (comptes retenus conserves). */
+  async function analyze(dateOrder?: DateOrder) {
     if (!registerFile) return
     setError(null)
     setAnalyzing(true)
@@ -104,15 +115,19 @@ export function YnabImportCard() {
       // exports YNAB, sinon des categories se dedoublent silencieusement.
       const registerText = decodeYnabCsv(await registerFile.arrayBuffer())
       const budgetText = budgetFile ? decodeYnabCsv(await budgetFile.arrayBuffer()) : undefined
-      const p = parseYnabExport(registerText, budgetText)
+      const p = parseYnabExport(registerText, budgetText, dateOrder)
       if (p.transactions.length === 0) {
         setError('Aucune transaction lisible dans Register.csv. Vérifie le fichier.')
         setParsed(null)
         return
       }
       setParsed(p)
-      // Tous les comptes retenus par defaut, nature deduite du registre.
-      setChoices(new Map(p.accounts.map((a) => [a.key, { selected: true, onBudget: a.onBudget }])))
+      // Tous les comptes retenus par defaut, nature deduite du registre ; une
+      // nouvelle analyse (ordre des dates) garde les choix deja faits.
+      setChoices((prev) => {
+        const keep = (key: string) => (dateOrder ? prev.get(key) : undefined)
+        return new Map(p.accounts.map((a) => [a.key, keep(a.key) ?? { selected: true, onBudget: a.onBudget }]))
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Impossible d’analyser les fichiers.')
       setParsed(null)
@@ -249,6 +264,29 @@ export function YnabImportCard() {
             )}
           </div>
 
+          {parsed.summary.dateAmbiguous && parsed.summary.dateConvention !== 'ISO' && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl bg-warning/10 px-4 py-3">
+              <CalendarSearch className="h-4 w-4 shrink-0 text-warning" />
+              <p className="min-w-0 flex-1 basis-52 text-[12.5px] leading-relaxed text-ink">
+                Aucune date ne distingue le jour du mois (03/04 : 3 avril ou 4 mars ?). Vérifie l’ordre avant
+                d’importer.
+              </p>
+              <SegmentedControl
+                size="sm"
+                aria-label="Ordre du jour et du mois dans les dates"
+                value={parsed.summary.dateConvention as DateOrder}
+                onChange={(v: DateOrder) => {
+                  if (!analyzing && v !== parsed.summary.dateConvention) void analyze(v)
+                }}
+                options={[
+                  { value: 'DMY', label: 'JJ/MM' },
+                  { value: 'MDY', label: 'MM/JJ' },
+                ]}
+                className="ml-auto"
+              />
+            </div>
+          )}
+
           <ul className="space-y-1.5 text-[12.5px] leading-relaxed text-soft">
             {range && (
               <li className="flex items-start gap-2">
@@ -265,7 +303,7 @@ export function YnabImportCard() {
               </li>
             )}
             {!parsed.summary.hasBudget && <li>Sans Budget.csv, les montants assignés ne seront pas importés.</li>}
-            {plan.ignored > 0 && <li>{n(plan.ignored)} ligne(s) illisible(s) seront ignorées.</li>}
+            {plan.ignored > 0 && <li>{n(plan.ignored)} ligne(s) illisible(s) ou à date invalide seront ignorées.</li>}
           </ul>
 
           {plan.notes.length > 0 && (
