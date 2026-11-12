@@ -1,5 +1,5 @@
 // Restauration d'une sauvegarde : lecture du JSON produit par l'export
-// (action exportData : exportedAt, budgetStartMonth, accounts, groups,
+// (action exportData : format, version, exportedAt, budgetStartMonth, accounts, groups,
 // categories, transactions, assignments, targets, rules, payees, chaque
 // element avec son id) et traduction en plan de remplacement, execute par le
 // meme orchestrateur que l'import YNAB (lib/ynabImport.ts). Rien n'est
@@ -31,6 +31,10 @@ const ACCOUNT_KINDS: AccountKind[] = ['checking', 'savings', 'investment', 'card
 const COLORS: CatColor[] = ['blue', 'green', 'amber', 'pink', 'purple', 'teal']
 const ICONS: GroupIcon[] = ['home', 'car', 'sparkles', 'repeat', 'piggy', 'banknote']
 const RULE_OPS = ['contains', 'equals', 'startsWith'] as const
+// Format annonce par exportData. Les sauvegardes anterieures n'en portent pas
+// et restent acceptees ; une version plus recente que celle-ci est refusee.
+const BACKUP_FORMAT = 'inab-backup'
+const BACKUP_VERSION = 1
 const TARGET_TYPES = ['monthly', 'byDate', 'refill'] as const
 
 type Obj = Record<string, unknown>
@@ -128,6 +132,20 @@ export function parseBackup(text: string): ParsedBackup {
     throw new Error('Ce fichier n’est pas un JSON lisible. Choisis une sauvegarde exportée depuis l’app.')
   }
   if (!isObj(root)) throw new Error('Ce fichier ne ressemble pas à une sauvegarde de l’app.')
+  if (root.format !== undefined && root.format !== BACKUP_FORMAT) {
+    throw new Error('Ce fichier n’est pas une sauvegarde de l’app (format inconnu).')
+  }
+  if (root.version !== undefined) {
+    const version = root.version
+    if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+      throw new Error('Version de sauvegarde illisible. Choisis une sauvegarde exportée depuis l’app.')
+    }
+    if (version > BACKUP_VERSION) {
+      throw new Error(
+        `Cette sauvegarde vient d’une version plus récente de l’app (format ${version}) : recharge l’app pour la mettre à jour, puis réessaie.`,
+      )
+    }
+  }
   let invalid = 0
   const keep = <T>(raw: unknown[], read: (o: Obj) => T | null): T[] => {
     const out: T[] = []
