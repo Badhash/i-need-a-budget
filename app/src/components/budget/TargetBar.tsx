@@ -11,6 +11,8 @@ interface TargetBarProps {
   assigned: number
   /** Disponible cumule de la categorie (rollover + assigne + activite). */
   available: number
+  /** Activite du mois (depenses negatives) : exclue du niveau d'un objectif recharge. */
+  activity: number
   /** Couleur pastel du groupe (cle des tokens --cat-<color>-fg). */
   color: string
   /** Mois affiche (defaut : celui du selecteur de mois). */
@@ -24,7 +26,8 @@ function progressLabel(target: Target, funded: number, reached: boolean): string
     case 'monthly':
       return reached ? `Financé · ${fmtEUR(target.amount)}/mois` : `${fmtEUR(safe)} sur ${fmtEUR(target.amount)}/mois`
     case 'refill':
-      return reached ? `Enveloppe pleine · ${fmtEUR(target.amount)}` : `Recharge : ${fmtEUR(safe)} sur ${fmtEUR(target.amount)}`
+      // Niveau = report + assigne du mois : une depense ne « vide » pas la recharge.
+      return reached ? `Rechargée · ${fmtEUR(target.amount)}` : `Recharge : ${fmtEUR(safe)} sur ${fmtEUR(target.amount)}`
     default:
       if (reached) return `Objectif atteint · ${fmtEUR(target.amount)}`
       return `${fmtEUR(safe)} sur ${fmtEUR(target.amount)}${target.dueMonth ? ` d'ici ${fmtMonthLong(target.dueMonth)}` : ''}`
@@ -34,15 +37,15 @@ function progressLabel(target: Target, funded: number, reached: boolean): string
 /**
  * Jauge d'objectif affichee sous une enveloppe (liste mobile et grille
  * desktop). Progression : assigne du mois (mensuel), disponible cumule
- * (echeance, recharge). Ton : vert quand le mois est finance, ambre tant
+ * (echeance), report + assigne du mois (recharge). Ton : vert quand le mois est finance, ambre tant
  * qu'il manque de l'argent ce mois-ci (montant rappele a droite), rouge si
  * l'enveloppe est dans le rouge.
  */
-export function TargetBar({ target, assigned, available, month }: TargetBarProps) {
+export function TargetBar({ target, assigned, available, activity, month }: TargetBarProps) {
   const uiMonth = useUiStore((s) => s.month)
   const m = month ?? uiMonth
-  const { funded, ratio, reached } = targetProgress(target, assigned, available)
-  const needed = neededThisMonth(target, m, assigned, available)
+  const { funded, ratio, reached } = targetProgress(target, assigned, available, activity)
+  const needed = neededThisMonth(target, m, assigned, available, activity)
   const tone: ProgressTone = available < 0 ? 'danger' : needed > 0 ? 'warning' : 'success'
 
   return (

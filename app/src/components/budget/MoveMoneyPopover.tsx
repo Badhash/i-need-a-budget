@@ -72,7 +72,7 @@ function toDraft(cents: number): string {
 function defaultAmount(mode: MoveMode, row: BudgetRow, target: Target | undefined, month: string): number {
   if (mode === 'move') return Math.max(row.available, 0)
   if (row.available < 0) return -row.available
-  return target ? neededThisMonth(target, month, row.assigned, row.available) : 0
+  return target ? neededThisMonth(target, month, row.assigned, row.available, row.activity) : 0
 }
 
 /**
@@ -83,7 +83,7 @@ function defaultAmount(mode: MoveMode, row: BudgetRow, target: Target | undefine
 function relevance(mode: MoveMode, row: BudgetRow, target: Target | undefined, month: string): number {
   if (mode === 'cover') return row.available > 0 ? 0 : row.available === 0 ? 1 : 2
   if (row.available < 0) return 0
-  if (target && neededThisMonth(target, month, row.assigned, row.available) > 0) return 1
+  if (target && neededThisMonth(target, month, row.assigned, row.available, row.activity) > 0) return 1
   return 2
 }
 

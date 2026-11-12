@@ -255,7 +255,14 @@ function AssignSheetContent({
 
           {target && (
             <div className="rounded-2xl px-1">
-              <TargetBar target={target} assigned={next} available={availableAfter} color="" month={month} />
+              <TargetBar
+                target={target}
+                assigned={next}
+                available={availableAfter}
+                activity={row.activity}
+                color=""
+                month={month}
+              />
             </div>
           )}
 

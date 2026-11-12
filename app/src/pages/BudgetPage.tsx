@@ -145,7 +145,7 @@ export function BudgetPage() {
         const target = targetMap.get(row.category.id)
         if (!target) continue
         count += 1
-        const add = neededThisMonth(target, month, row.assigned, row.available)
+        const add = neededThisMonth(target, month, row.assigned, row.available, row.activity)
         if (add <= 0) continue
         items.push({
           categoryId: row.category.id,

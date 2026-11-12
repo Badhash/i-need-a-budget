@@ -4,6 +4,7 @@ import { useSheetKeyboardInset } from '@/hooks/useKeyboardInset'
 import type { Category } from '@/types/domain'
 import type { BudgetRow } from '@/lib/budget'
 import {
+  neededThisMonth,
   useDeleteTargetMutation,
   useSetTargetMutation,
   type Target,
@@ -80,8 +81,13 @@ function explain(type: TargetType, cents: number, dueMonth: string, row: BudgetR
     return `${fmtEUR(cents)} à assigner chaque mois : «\u00a0Financer les objectifs\u00a0» complète l'enveloppe jusqu'à ce montant.`
   }
   if (type === 'refill') {
-    const now = row ? ` Ce mois-ci : ${fmtEUR(Math.max(0, cents - row.available))} à ajouter.` : ''
-    return `Chaque mois, l'enveloppe est remise à ${fmtEUR(cents)} : seul le manque est à assigner, le report compte.${now}`
+    // Meme calcul que la jauge et « Financer les objectifs » : report + assigne
+    // du mois, depenses du mois exclues.
+    const refill: Target = { id: '', categoryId: row?.category.id ?? '', type, amount: cents, dueMonth: null }
+    const now = row
+      ? ` Ce mois-ci : ${fmtEUR(neededThisMonth(refill, month, row.assigned, row.available, row.activity))} à ajouter.`
+      : ''
+    return `Chaque mois, l'enveloppe est rechargée jusqu'à ${fmtEUR(cents)} : seul le manque est à assigner, le report compte. Une dépense est rechargée le mois suivant.${now}`
   }
   const saved = row ? Math.max(row.available, 0) : 0
   const remaining = Math.max(0, cents - saved)

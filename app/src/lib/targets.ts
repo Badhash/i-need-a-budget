@@ -47,15 +47,18 @@ export function useTargets(): UseQueryResult<Map<string, Target>> {
  * categorie est alors ignoree par l'assignation guidee (INAB-6).
  *
  * Definition du "besoin" par type d'objectif (aligne sur la notion de progression
- * de TargetBar : monthly -> compare l'assigne du mois, byDate et refill ->
- * comparent le disponible cumule) :
+ * de TargetBar : monthly -> compare l'assigne du mois, byDate -> le disponible
+ * cumule, refill -> le report plus l'assigne du mois) :
  *
  * - monthly : besoin = max(0, montant cible - assigne(M)). C'est exactement la
  *   regle du ticket : on complete l'assignation du mois jusqu'a la cible.
  *
- * - refill : besoin = max(0, montant cible - disponible(M)). Le disponible
- *   inclut le report du mois precedent et l'assigne du mois : une fois le
- *   manque assigne, le disponible atteint la cible et le besoin retombe a 0.
+ * - refill (semantique YNAB « Refill up to ») : besoin = max(0, montant cible
+ *   - (disponible(M) - activite(M))), soit la cible moins ce qui etait la au
+ *   debut du mois (report) et ce qui a deja ete assigne ce mois. L'activite du
+ *   mois est exclue : une depense ne rouvre pas le besoin (avant, chaque
+ *   depense etait reproposee par « Financer les objectifs »). Une fois le
+ *   manque assigne, le besoin retombe a 0 et y reste jusqu'au mois suivant.
  *
  * - byDate : l'objectif est d'accumuler `montant` de disponible d'ici l'echeance.
  *   On repartit le reste a accumuler sur le nombre de mois restants (mois courant
@@ -76,13 +79,14 @@ export function neededThisMonth(
   month: string,
   assigned: number,
   available: number,
+  activity: number,
 ): number {
   if (target.amount <= 0) return 0
   if (target.type === 'monthly') {
     return Math.max(0, target.amount - assigned)
   }
   if (target.type === 'refill') {
-    return Math.max(0, target.amount - available)
+    return Math.max(0, target.amount - refillLevel(available, activity))
   }
   // Position de depart du mois : disponible hors assignation de ce mois-ci.
   const availableBeforeAssign = available - assigned
@@ -96,16 +100,32 @@ export function neededThisMonth(
 }
 
 /**
+ * Niveau de recharge d'une enveloppe pour le mois : report du mois precedent +
+ * assigne du mois (= disponible - activite). Les depenses du mois n'y entrent
+ * pas : c'est ce qui a ete mis dans l'enveloppe, pas ce qu'il en reste.
+ */
+function refillLevel(available: number, activity: number): number {
+  return available - activity
+}
+
+/**
  * Progression affichee d'un objectif et montant « finance » compare a la
- * cible : l'assigne du mois pour monthly, le disponible cumule sinon (byDate :
- * epargne accumulee ; refill : niveau de l'enveloppe, report compris).
+ * cible : l'assigne du mois pour monthly, le disponible cumule pour byDate
+ * (epargne accumulee), le niveau de recharge pour refill (report + assigne du
+ * mois, depenses du mois exclues : meme base que neededThisMonth).
  */
 export function targetProgress(
   target: Target,
   assigned: number,
   available: number,
+  activity: number,
 ): { funded: number; ratio: number; reached: boolean } {
-  const funded = target.type === 'monthly' ? assigned : available
+  const funded =
+    target.type === 'monthly'
+      ? assigned
+      : target.type === 'refill'
+        ? refillLevel(available, activity)
+        : available
   const ratio = target.amount > 0 ? Math.min(Math.max(funded, 0) / target.amount, 1) : 0
   return { funded, ratio, reached: target.amount > 0 && funded >= target.amount }
 }

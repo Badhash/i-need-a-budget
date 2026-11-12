@@ -74,7 +74,7 @@ function MobileCategoryRow({
   onLongPress: () => void
 }) {
   const { handlers, firedRecently } = useLongPress(onLongPress)
-  const underfunded = target ? neededThisMonth(target, month, row.assigned, row.available) > 0 : false
+  const underfunded = target ? neededThisMonth(target, month, row.assigned, row.available, row.activity) > 0 : false
   const spent = target ? null : consumption(row.available, row.activity)
 
   return (
@@ -96,6 +96,7 @@ function MobileCategoryRow({
           target={target}
           assigned={row.assigned}
           available={row.available}
+          activity={row.activity}
           color={block.group.color}
           month={month}
         />

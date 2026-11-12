@@ -66,7 +66,7 @@ export function useAssignSuggestions(row: BudgetRow | null, month: string): Assi
       const goal =
         target.type === 'monthly'
           ? target.amount
-          : row.assigned + neededThisMonth(target, month, row.assigned, row.available)
+          : row.assigned + neededThisMonth(target, month, row.assigned, row.available, row.activity)
       push('target', 'Objectif', goal)
     }
 

@@ -754,7 +754,7 @@ function EnvelopeRow({
   const { category } = row
   const empty = isEmptyRow(row)
   const underfunded = (assigned: number, available: number) =>
-    target !== undefined && neededThisMonth(target, month, assigned, available) > 0
+    target !== undefined && neededThisMonth(target, month, assigned, available, row.activity) > 0
   const assigned = hold?.assigned ?? row.assigned
   const baseAvailable = hold?.available ?? row.available
   const previewAvailable =
@@ -813,7 +813,13 @@ function EnvelopeRow({
             <RowMenuButton model={menu} className="ml-auto" />
           </div>
           {target ? (
-            <TargetBar target={target} assigned={assigned} available={baseAvailable} color={block.group.color} />
+            <TargetBar
+              target={target}
+              assigned={assigned}
+              available={baseAvailable}
+              activity={row.activity}
+              color={block.group.color}
+            />
           ) : (
             <SpentBar available={baseAvailable} activity={row.activity} color={block.group.color} />
           )}
