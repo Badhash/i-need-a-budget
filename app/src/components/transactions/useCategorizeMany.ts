@@ -47,6 +47,7 @@ export function useCategorizeMany() {
       await Promise.all([
         pauseReads(queryClient, ['transactions']),
         pauseReads(queryClient, BOOTSTRAP_KEY),
+        pauseReads(queryClient, ['budget']),
       ])
       return applyCategorizeManyOptimistic(queryClient, txIds.map(followTxId), categoryId)
     },

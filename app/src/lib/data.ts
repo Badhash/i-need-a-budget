@@ -16,7 +16,7 @@ import type {
 } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
 import type { BudgetMonth, BudgetGroupBlock, BudgetRow } from '@/lib/budget'
-import { monthOf, today } from '@/lib/format'
+import { addMonths, monthOf, today } from '@/lib/format'
 import type { ServerFeature } from '@/lib/features'
 
 // ---------------------------------------------------------------------------
@@ -617,4 +617,152 @@ export function patchUncategorizedCount(queryClient: QueryClient, delta: number)
   queryClient.setQueryData<Bootstrap>(BOOTSTRAP_KEY, (old) =>
     old ? { ...old, uncategorizedCount: Math.max(0, old.uncategorizedCount + delta) } : old,
   )
+}
+
+/** Effet d'une transaction sur le budget de son mois (regles du moteur), ou null. */
+function budgetEffect(
+  queryClient: QueryClient,
+  t: Transaction,
+): { month: string; categoryId: string; amount: number; income: boolean } | null {
+  if (!t.categoryId || t.amount === 0) return null
+  const boot = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)
+  if (!boot) return null
+  // Comptes de suivi, historique gele avant le mois de depart, virements
+  // neutres et categories inconnues ne comptent pas.
+  const account = boot.accounts.find((a) => a.id === t.accountId)
+  if (!account?.onBudget) return null
+  const month = monthOf(t.date)
+  if (boot.budgetStartMonth && month < boot.budgetStartMonth) return null
+  if (t.transferGroupId && !isCrossBudgetTransfer(queryClient, t)) return null
+  const category = boot.categories.find((c) => c.id === t.categoryId)
+  if (!category) return null
+  return { month, categoryId: category.id, amount: t.amount, income: category.isIncome }
+}
+
+/**
+ * Patch OPTIMISTE et EXACT du budget en cache pour des transactions changees
+ * (FRONT-LIB-03) : sans lui, l'enveloppe et le Pret a assigner ne bougeaient
+ * qu'a la relecture (~1 s plus tard, valeur qui saute). Chaque changement
+ * retire l'effet de `before` et ajoute celui de `after`, selon les regles du
+ * moteur :
+ *   - enveloppe : activite et disponible de sa ligne au mois de la
+ *     transaction, puis report sur les mois suivants en cache, consecutifs
+ *     (rollover = max(disponible du mois precedent, 0)) ; un depassement qui
+ *     apparait ou disparait corrige le Pret a assigner des mois posterieurs ;
+ *   - revenus : Pret a assigner du mois de la transaction et des suivants.
+ * Au-dela d'un mois absent du cache, la relecture differee
+ * (scheduleBudgetRefetch) fait foi. A appeler apres pauseReads(['budget']).
+ */
+export function patchBudgetForTransactions(
+  queryClient: QueryClient,
+  changes: { before: Transaction | null | undefined; after: Transaction | null | undefined }[],
+): void {
+  const direct = new Map<string, Map<string, number>>() // categorie -> mois -> delta
+  const income = new Map<string, number>() // mois -> delta d'entrees
+  const add = (t: Transaction | null | undefined, sign: 1 | -1) => {
+    const effect = t ? budgetEffect(queryClient, t) : null
+    if (!effect) return
+    const delta = sign * effect.amount
+    if (effect.income) {
+      income.set(effect.month, (income.get(effect.month) ?? 0) + delta)
+      return
+    }
+    const byMonth = direct.get(effect.categoryId) ?? new Map<string, number>()
+    byMonth.set(effect.month, (byMonth.get(effect.month) ?? 0) + delta)
+    direct.set(effect.categoryId, byMonth)
+  }
+  for (const { before, after } of changes) {
+    add(before, -1)
+    add(after, 1)
+  }
+  if (direct.size === 0 && income.size === 0) return
+
+  const cached = new Map<string, { key: readonly unknown[]; budget: BudgetMonth }>()
+  for (const [key, budget] of queryClient.getQueriesData<BudgetMonth>({ queryKey: ['budget'] })) {
+    if (budget) cached.set(budget.month, { key, budget })
+  }
+  const rowDelta = new Map<string, Map<string, { activity: number; available: number }>>() // mois -> categorie
+  const rtaDelta = new Map<string, number>()
+  const shiftRta = (fromMonth: string, inclusive: boolean, delta: number) => {
+    if (delta === 0) return
+    for (const month of cached.keys()) {
+      if (month > fromMonth || (inclusive && month === fromMonth)) rtaDelta.set(month, (rtaDelta.get(month) ?? 0) + delta)
+    }
+  }
+  for (const [month, delta] of income) shiftRta(month, true, delta)
+
+  for (const [categoryId, byMonth] of direct) {
+    const months = [...byMonth.keys()].sort()
+    let month: string | undefined = months[0]
+    let carry = 0
+    while (month) {
+      const row = cached.get(month)?.budget.groups.flatMap((g) => g.rows).find((r) => r.category.id === categoryId)
+      if (!row) break
+      const own = byMonth.get(month) ?? 0
+      const delta = own + carry
+      if (delta !== 0 || own !== 0) {
+        const perMonth = rowDelta.get(month) ?? new Map()
+        perMonth.set(categoryId, { activity: own, available: delta })
+        rowDelta.set(month, perMonth)
+      }
+      const before = row.available
+      const after = before + delta
+      // Depassement (disponible negatif) : remis a zero au mois suivant et
+      // deduit du Pret a assigner des mois posterieurs.
+      shiftRta(month, false, -(Math.max(-after, 0) - Math.max(-before, 0)))
+      carry = Math.max(after, 0) - Math.max(before, 0)
+      const current: string = month
+      const nextDirect = months.find((m) => m > current)
+      // Report non nul : le mois suivant change aussi ; sinon, prochain mois
+      // ou la categorie a elle-meme change.
+      month = carry !== 0 ? addMonths(current, 1) : nextDirect
+    }
+  }
+
+  for (const [month, { key, budget }] of cached) {
+    const perMonth = rowDelta.get(month)
+    const rta = rtaDelta.get(month) ?? 0
+    if (!perMonth && rta === 0) continue
+    let activityTotal = 0
+    let availableTotal = 0
+    const groups = perMonth
+      ? budget.groups.map((group) => {
+          let activity = 0
+          let available = 0
+          let touched = false
+          const rows = group.rows.map((row) => {
+            const d = perMonth.get(row.category.id)
+            if (!d) return row
+            touched = true
+            activity += d.activity
+            available += d.available
+            return { ...row, activity: row.activity + d.activity, available: row.available + d.available }
+          })
+          // Deux lignes du meme groupe peuvent se compenser (delta net nul) :
+          // les lignes changent quand meme.
+          if (!touched) return group
+          activityTotal += activity
+          availableTotal += available
+          return {
+            ...group,
+            rows,
+            totals: {
+              ...group.totals,
+              activity: group.totals.activity + activity,
+              available: group.totals.available + available,
+            },
+          }
+        })
+      : budget.groups
+    queryClient.setQueryData<BudgetMonth>(key, {
+      ...budget,
+      groups,
+      rta: budget.rta + rta,
+      totals: {
+        ...budget.totals,
+        activity: budget.totals.activity + activityTotal,
+        available: budget.totals.available + availableTotal,
+      },
+    })
+  }
 }

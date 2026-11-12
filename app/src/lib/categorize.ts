@@ -11,6 +11,7 @@ import {
   apiSetPayeeCategory,
   BOOTSTRAP_KEY,
   countsAsUncategorized,
+  patchBudgetForTransactions,
   patchUncategorizedCount,
   useBootstrap,
   useCategoriesList,
@@ -179,6 +180,15 @@ export function applyCategorizeManyOptimistic(
     contexts.push({ txId, previous: prev.categoryId, next: categoryId, countDelta, payeeKeyAdded })
   }
   const targets = new Set(txIds)
+  // Budget du mois (enveloppes, Pret a assigner) : patch exact, sans attendre
+  // la relecture (FRONT-LIB-03).
+  patchBudgetForTransactions(
+    queryClient,
+    [...targets].flatMap((id) => {
+      const prev = byId.get(id)
+      return prev && prev.categoryId !== categoryId ? [{ before: prev, after: { ...prev, categoryId } }] : []
+    }),
+  )
   queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
     old?.map((t) => (targets.has(t.id) && t.categoryId !== categoryId ? { ...t, categoryId } : t)),
   )
@@ -216,6 +226,13 @@ export function revertCategorizeOptimistic(queryClient: QueryClient, contexts: C
     if (ctx.payeeKeyAdded) forgetPayeeOptimistic(queryClient, ctx.payeeKeyAdded)
   }
   if (revert.size > 0) {
+    patchBudgetForTransactions(
+      queryClient,
+      [...revert].flatMap(([id, previous]) => {
+        const current = present.get(id)
+        return current ? [{ before: current, after: { ...current, categoryId: previous } }] : []
+      }),
+    )
     queryClient.setQueryData<Transaction[]>(['transactions'], (old) =>
       old?.map((t) => (revert.has(t.id) ? { ...t, categoryId: revert.get(t.id) ?? null } : t)),
     )
@@ -243,6 +260,7 @@ export function useCategorize() {
       await Promise.all([
         pauseReads(queryClient, ['transactions']),
         pauseReads(queryClient, BOOTSTRAP_KEY),
+        pauseReads(queryClient, ['budget']),
       ])
       return applyCategorizeOptimistic(queryClient, { ...vars, txId: followTxId(vars.txId) })
     },

@@ -32,6 +32,7 @@ import {
   countsAsUncategorized,
   hasServerFeature,
   patchAccountBalances,
+  patchBudgetForTransactions,
   patchUncategorizedCount,
   TRANSACTIONS_KEY,
   type Bootstrap,
@@ -239,6 +240,7 @@ export interface AddTransactionVars extends AddTransactionInput {
 
 interface AddContext {
   tempId: string
+  tx: Transaction
   balances: BalanceDelta[]
   count: number
 }
@@ -289,6 +291,7 @@ export function useAddTransaction(onFailure: (vars: AddTransactionVars, error: u
       await Promise.all([
         pauseReads(queryClient, TRANSACTIONS_KEY),
         pauseReads(queryClient, BOOTSTRAP_KEY),
+        pauseReads(queryClient, ['budget']),
       ])
       const tx: Transaction = {
         id: vars.tempId,
@@ -308,7 +311,8 @@ export function useAddTransaction(onFailure: (vars: AddTransactionVars, error: u
       const balances = [{ accountId: vars.accountId, delta: vars.amount }]
       const count = countsAsUncategorized(queryClient, tx) ? 1 : 0
       applyDeltas(queryClient, balances, count)
-      return { tempId: vars.tempId, balances, count }
+      patchBudgetForTransactions(queryClient, [{ before: null, after: tx }])
+      return { tempId: vars.tempId, tx, balances, count }
     },
     onSuccess: (res, vars) => {
       confirmAdd(queryClient, vars.tempId, res.id)
@@ -319,7 +323,10 @@ export function useAddTransaction(onFailure: (vars: AddTransactionVars, error: u
       pendingAdds.delete(vars.tempId)
       addedAt.delete(vars.tempId)
       writeTxs(queryClient, (old) => old.filter((t) => t.id !== vars.tempId))
-      if (ctx) reverseDeltas(queryClient, ctx.balances, ctx.count)
+      if (ctx) {
+        reverseDeltas(queryClient, ctx.balances, ctx.count)
+        patchBudgetForTransactions(queryClient, [{ before: ctx.tx, after: null }])
+      }
       onFailure(vars, error)
     },
   })
@@ -379,6 +386,7 @@ export function useUpdateTransaction(onFailure: (previous: Transaction) => void)
       await Promise.all([
         pauseReads(queryClient, TRANSACTIONS_KEY),
         pauseReads(queryClient, BOOTSTRAP_KEY),
+        pauseReads(queryClient, ['budget']),
       ])
       const before = findTx(queryClient, followTxId(input.transactionId))
       if (!before) return undefined
@@ -402,6 +410,7 @@ export function useUpdateTransaction(onFailure: (previous: Transaction) => void)
       writeTxs(queryClient, (old) => old.map((t) => (t.id === before.id ? after : t)))
       const count = (countsAsUncategorized(queryClient, after) ? 1 : 0) - (wasUncat ? 1 : 0)
       applyDeltas(queryClient, balances, count)
+      patchBudgetForTransactions(queryClient, [{ before, after }])
       // Le serveur apprend le tiers quand la categorie est posee ou changee.
       const payeeKeyAdded =
         after.categoryId && after.categoryId !== before.categoryId
@@ -416,6 +425,7 @@ export function useUpdateTransaction(onFailure: (previous: Transaction) => void)
       if (!current || sameEditable(current, ctx.after)) {
         if (current) writeTxs(queryClient, (old) => old.map((t) => (t.id === ctx.before.id ? ctx.before : t)))
         reverseDeltas(queryClient, ctx.balances, ctx.count)
+        patchBudgetForTransactions(queryClient, [{ before: ctx.after, after: ctx.before }])
       }
       if (ctx.payeeKeyAdded) forgetPayeeOptimistic(queryClient, ctx.payeeKeyAdded)
       onFailure(ctx.before)
@@ -447,12 +457,14 @@ function removalOf(queryClient: QueryClient, tx: Transaction): PendingRemoval {
 function removeRow(queryClient: QueryClient, removal: PendingRemoval): void {
   writeTxs(queryClient, (old) => old.filter((t) => t.id !== removal.tx.id))
   applyDeltas(queryClient, removal.balances, removal.count)
+  patchBudgetForTransactions(queryClient, [{ before: removal.tx, after: null }])
 }
 
 function restoreRow(queryClient: QueryClient, removal: PendingRemoval): void {
   const present = findTx(queryClient, removal.tx.id) !== undefined
   if (!present) writeTxs(queryClient, (old) => insertTx(old, removal.tx, removal.beforeId))
   reverseDeltas(queryClient, removal.balances, removal.count)
+  patchBudgetForTransactions(queryClient, [{ before: null, after: removal.tx }])
 }
 
 /**
