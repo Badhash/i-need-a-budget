@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   Coins,
   EyeOff,
+  HandCoins,
   Pencil,
   ReceiptText,
   Target as TargetIcon,
@@ -35,6 +36,9 @@ export interface MoveTarget {
   row: BudgetRow
   group: CategoryGroup
 }
+
+/** Partenaire d'un transfert : une autre enveloppe ou le Prêt à assigner. */
+type Partner = { kind: 'rta' } | ({ kind: 'envelope' } & MoveTarget)
 
 /** Paramètres d'un déplacement d'argent entre deux enveloppes. */
 export interface MovePayload {
@@ -67,6 +71,10 @@ interface CategoryActionSheetProps {
   onViewActivity?: (categoryId: string) => void
   /** Masque l'enveloppe (elle rejoint « Categories masquees »). */
   onHide?: () => void
+  /** Pret a assigner du mois : partenaire de transfert propose en tete (comme le popover desktop). */
+  rta?: number | null
+  /** Echange avec le Pret a assigner : nouvelle valeur assignee de l'enveloppe. */
+  onMoveRta?: (categoryId: string, amount: number) => void
 }
 
 /** Parse un montant en euros (fr-FR) vers des centimes positifs, ou null. */
@@ -179,11 +187,13 @@ export function CategoryActionSheet({
   onAssign,
   onViewActivity,
   onHide,
+  rta = null,
+  onMoveRta,
 }: CategoryActionSheetProps) {
   const [mode, setMode] = useState<Mode>('menu')
   const [draft, setDraft] = useState('')
-  // Transferts : enveloppe partenaire choisie + brouillon de montant.
-  const [picked, setPicked] = useState<MoveTarget | null>(null)
+  // Transferts : partenaire choisi (enveloppe ou Pret a assigner) + brouillon de montant.
+  const [picked, setPicked] = useState<Partner | null>(null)
   const [amountDraft, setAmountDraft] = useState('')
   const rename = useUpdateCategoryMutation()
   const remove = useDeleteCategoryMutation()
@@ -206,8 +216,11 @@ export function CategoryActionSheet({
   if (!category || !currentRow) return null
 
   const available = currentRow.available
-  const canCover = available < 0 && moveTargets.length > 0
-  const canMoveOut = available > 0 && moveTargets.length > 0
+  // Pret a assigner : partenaire possible des que le budget du mois est connu.
+  const rtaPartner = rta !== null && onMoveRta !== undefined
+  const hasPartner = moveTargets.length > 0 || rtaPartner
+  const canCover = available < 0 && hasPartner
+  const canMoveOut = available > 0 && hasPartner
 
   const commitRename = () => {
     const name = draft.trim()
@@ -228,17 +241,23 @@ export function CategoryActionSheet({
   // Montant par defaut a la selection d'une enveloppe partenaire. Couvrir :
   // tout le depassement, plafonne au disponible de la source s'il est plus
   // petit. Deplacer : tout l'excedent, ou juste de quoi remettre a 0 une
-  // destination en depassement.
-  const selectPartner = (partner: MoveTarget) => {
-    const other = partner.row.available
-    const defaultCents =
-      mode === 'cover'
-        ? other > 0
-          ? Math.min(-available, other)
-          : -available
-        : other < 0
-          ? Math.min(available, -other)
-          : available
+  // destination en depassement. Pret a assigner (comme le popover desktop) :
+  // tout le depassement, ou tout le disponible.
+  const selectPartner = (partner: Partner) => {
+    let defaultCents: number
+    if (partner.kind === 'rta') {
+      defaultCents = mode === 'cover' ? -available : available
+    } else {
+      const other = partner.row.available
+      defaultCents =
+        mode === 'cover'
+          ? other > 0
+            ? Math.min(-available, other)
+            : -available
+          : other < 0
+            ? Math.min(available, -other)
+            : available
+    }
     setPicked(partner)
     setAmountDraft(toDraft(defaultCents))
   }
@@ -252,6 +271,12 @@ export function CategoryActionSheet({
 
   const commitMove = () => {
     if (!picked || !amountValid) return
+    if (picked.kind === 'rta') {
+      // Couvrir depuis le Pret a assigner = assigner plus ; y deplacer = assigner moins.
+      onMoveRta?.(category.id, mode === 'cover' ? currentRow.assigned + cents! : currentRow.assigned - cents!)
+      onClose()
+      return
+    }
     // cover : l'enveloppe partenaire est la SOURCE, la courante reçoit.
     // move  : l'enveloppe courante est la SOURCE, la partenaire reçoit.
     const from = mode === 'cover' ? picked.row : currentRow
@@ -267,10 +292,14 @@ export function CategoryActionSheet({
   }
 
   // Aperçu du disponible résultant des deux côtés (réassurance, pas de blocage).
-  const source = picked ? (mode === 'cover' ? picked.row : currentRow) : null
-  const dest = picked ? (mode === 'cover' ? currentRow : picked.row) : null
-  const sourceAfter = source ? source.available - (amountValid ? cents! : 0) : 0
-  const destAfter = dest ? dest.available + (amountValid ? cents! : 0) : 0
+  const signed = amountValid ? cents! : 0
+  const partnerName = picked ? (picked.kind === 'rta' ? 'Prêt à assigner' : picked.row.category.name) : ''
+  const partnerBefore = picked ? (picked.kind === 'rta' ? (rta ?? 0) : picked.row.available) : 0
+  const self = { name: category.name, after: mode === 'cover' ? available + signed : available - signed }
+  const partner = { name: partnerName, after: mode === 'cover' ? partnerBefore - signed : partnerBefore + signed }
+  // cover : le partenaire est la SOURCE ; move : l'enveloppe courante.
+  const source = mode === 'cover' ? partner : self
+  const dest = mode === 'cover' ? self : partner
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -415,11 +444,29 @@ export function CategoryActionSheet({
                 : 'Déplacer vers quelle enveloppe ?'}
             </button>
             <div className="space-y-0.5">
+              {rtaPartner && (
+                <button
+                  type="button"
+                  onClick={() => selectPartner({ kind: 'rta' })}
+                  className="flex min-h-[52px] w-full items-center gap-3 rounded-xl px-2 text-left transition-colors active:bg-surface2 [@media(hover:hover)]:hover:bg-surface2/60"
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand text-accentfg shadow-highlight">
+                    <HandCoins className="h-3.5 w-3.5" strokeWidth={2.2} aria-hidden />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] font-medium text-ink">Prêt à assigner</span>
+                    <span className="block truncate text-[12px] text-soft">
+                      {mode === 'cover' ? 'Assigner plus à cette enveloppe' : "Rendre l'argent au budget"}
+                    </span>
+                  </span>
+                  <AvailableChip cents={rta ?? 0} size="sm" />
+                </button>
+              )}
               {sortedTargets.map(({ row, group: partnerGroup }) => (
                 <button
                   key={row.category.id}
                   type="button"
-                  onClick={() => selectPartner({ row, group: partnerGroup })}
+                  onClick={() => selectPartner({ kind: 'envelope', row, group: partnerGroup })}
                   className="flex min-h-[52px] w-full items-center gap-3 rounded-xl px-2 text-left transition-colors active:bg-surface2 [@media(hover:hover)]:hover:bg-surface2/60"
                 >
                   <GroupPill group={partnerGroup} size="sm" />
@@ -442,7 +489,7 @@ export function CategoryActionSheet({
               className="-ml-1 flex min-h-[44px] items-center gap-1 rounded-lg px-1 text-[13px] font-medium text-soft active:text-ink"
             >
               <ChevronLeft className="h-4 w-4" />
-              {mode === 'cover' ? `Depuis ${picked.row.category.name}` : `Vers ${picked.row.category.name}`}
+              {mode === 'cover' ? `Depuis ${partnerName}` : `Vers ${partnerName}`}
             </button>
             <div className="relative">
               <input
@@ -470,18 +517,18 @@ export function CategoryActionSheet({
             {/* Apercu des deux enveloppes apres le transfert. */}
             <div className="flex items-stretch gap-2">
               <div className="min-w-0 flex-1 rounded-2xl bg-surface2/60 px-3.5 py-2.5 ring-1 ring-inset ring-edge">
-                <p className="truncate text-[12px] font-medium text-soft">{source!.category.name}</p>
-                <p className={cn('text-[15px] font-semibold tnum', sourceAfter < 0 ? 'text-danger' : 'text-ink')}>
-                  {fmtEUR(sourceAfter)}
+                <p className="truncate text-[12px] font-medium text-soft">{source.name}</p>
+                <p className={cn('text-[15px] font-semibold tnum', source.after < 0 ? 'text-danger' : 'text-ink')}>
+                  {fmtEUR(source.after)}
                 </p>
               </div>
               <span className="flex items-center text-soft" aria-hidden>
                 <ArrowRight className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1 rounded-2xl bg-surface2/60 px-3.5 py-2.5 ring-1 ring-inset ring-edge">
-                <p className="truncate text-[12px] font-medium text-soft">{dest!.category.name}</p>
-                <p className={cn('text-[15px] font-semibold tnum', destAfter < 0 ? 'text-danger' : 'text-ink')}>
-                  {fmtEUR(destAfter)}
+                <p className="truncate text-[12px] font-medium text-soft">{dest.name}</p>
+                <p className={cn('text-[15px] font-semibold tnum', dest.after < 0 ? 'text-danger' : 'text-ink')}>
+                  {fmtEUR(dest.after)}
                 </p>
               </div>
             </div>

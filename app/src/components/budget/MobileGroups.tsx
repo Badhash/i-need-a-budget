@@ -298,6 +298,8 @@ export function MobileGroups({ groups, month, targets, onOpenTarget, onViewActiv
           if (actionAt) moveCategory(actionAt.block, actionAt.index, direction)
         }}
         onMoveMoney={(payload) => move.mutate(payload)}
+        rta={rta ?? null}
+        onMoveRta={(categoryId, amount) => assign.mutate({ categoryId, amount })}
         onOpenTarget={onOpenTarget}
         onAssign={() => {
           if (actionCtx) setAssignCtx(actionCtx)

@@ -3,6 +3,7 @@ import { ChevronRight } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { GroupPill } from '@/components/shared/GroupPill'
+import { SignedAmountInput } from '@/components/shared/SignedAmountInput'
 import { TargetBar } from '@/components/budget/TargetBar'
 import { useAssignSuggestions } from '@/components/budget/useAssignSuggestions'
 import { useSheetKeyboardInset } from '@/hooks/useKeyboardInset'
@@ -66,7 +67,10 @@ function AssignSheetContent({
   onClose,
 }: AssignSheetProps & { row: BudgetRow }) {
   const [draft, setDraft] = useState(() => toDraft(row.assigned))
-  const inputRef = useRef<HTMLInputElement>(null)
+  // Champ signe (le clavier decimal d'iOS n'a pas de touche « moins ») : le
+  // composant partage n'expose pas son <input>, on le retrouve dans son conteneur.
+  const fieldRef = useRef<HTMLDivElement>(null)
+  const getInput = () => fieldRef.current?.querySelector('input') ?? null
   // iOS : le clavier recouvre les feuilles fixed bottom-0. On remonte la
   // feuille de la hauteur du clavier mesuree via visualViewport.
   const keyboardInset = useSheetKeyboardInset()
@@ -82,7 +86,7 @@ function AssignSheetContent({
     setDraft(toDraft(row.assigned))
     // Focus differe : le dialog doit etre monte avant que le clavier s'ouvre.
     const frame = requestAnimationFrame(() => {
-      const input = inputRef.current
+      const input = getInput()
       input?.focus()
       try {
         input?.setSelectionRange(0, input.value.length)
@@ -103,7 +107,14 @@ function AssignSheetContent({
   const setCents = (value: number) => {
     // Pas de clamp a 0 : un assigne negatif est un retrait vers le RTA.
     setDraft(toDraft(value))
-    inputRef.current?.focus()
+    getInput()?.focus()
+  }
+  // Saisie ou bascule du signe : le focus reste (ou revient) dans le champ,
+  // le clavier ne se referme pas apres un appui sur « +/- ».
+  const changeDraft = (value: string) => {
+    setDraft(value)
+    const input = getInput()
+    if (input && document.activeElement !== input) input.focus()
   }
   const addCents = (delta: number) => setCents((parseEuros(draft) ?? row.assigned) + delta)
   // Vider l'enveloppe : ramener le disponible a 0 en rendant tout le disponible
@@ -151,28 +162,24 @@ function AssignSheetContent({
         </DialogHeader>
 
         <div className="min-h-0 space-y-4 overflow-y-auto px-5 pb-5 pt-1.5">
-          <div className="relative">
-            <input
-              ref={inputRef}
+          {/* Bouton +/- : un assigne negatif rend de l'argent au Pret a assigner.
+              Appui sans voler le focus du champ (clavier garde ouvert). */}
+          <div
+            ref={fieldRef}
+            onMouseDown={(e) => {
+              if ((e.target as HTMLElement).closest('button')) e.preventDefault()
+            }}
+          >
+            <SignedAmountInput
+              size="lg"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commit()
-              }}
-              inputMode="decimal"
-              enterKeyHint="done"
-              autoComplete="off"
+              onChange={changeDraft}
+              onEnter={commit}
               placeholder="0,00"
+              invalid={!valid}
               aria-label="Montant assigné ce mois"
-              aria-invalid={!valid}
-              className={cn(
-                'h-16 w-full rounded-2xl border-2 bg-surface2/40 px-12 text-center text-[32px] font-semibold tracking-tight tnum outline-none transition-[border-color,background-color,box-shadow] duration-150 ease-spring placeholder:text-soft/40 focus:bg-surface focus:ring-4',
-                valid ? 'border-accent/40 focus:border-accent focus:ring-accent/15' : 'border-danger/60 focus:ring-danger/15',
-              )}
+              inputClassName="rounded-2xl border-2 bg-surface2/40 pl-9 text-center text-[30px] focus:bg-surface lg:text-[30px]"
             />
-            <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[20px] font-medium text-soft">
-              €
-            </span>
           </div>
 
           {suggestions.length > 0 && (
