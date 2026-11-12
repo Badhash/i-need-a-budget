@@ -13,7 +13,9 @@ const VISIBLE = 6
 
 /**
  * Ce qui part chaque mois sans y penser : prelevements detectes sur 12 mois
- * (un passage par mois, montant stable, toujours actifs), regroupes par tiers.
+ * (un passage par mois au plus, montant stable, toujours actifs), regroupes
+ * par tiers. Montants en equivalent mensuel (une facture bimestrielle compte
+ * pour moitie), periodicite rappelee sous le nom quand elle n'est pas mensuelle.
  */
 export function RecurringWidget({ a, className }: { a: Analytics; className?: string }) {
   const [expanded, setExpanded] = useState(false)
@@ -46,7 +48,14 @@ export function RecurringWidget({ a, className }: { a: Analytics; className?: st
                 <MerchantAvatar initial={r.initial} group={r.group} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] font-medium text-ink">{r.label}</p>
-                  <p className="text-[12px] text-soft tnum">{fmtEUR(r.monthly * 12)} par an</p>
+                  <p className="truncate text-[12px] text-soft tnum">
+                    {r.every > 1 && r.regular && (
+                      <>
+                        {fmtEUR(r.amount)} tous les {r.every} mois ·{' '}
+                      </>
+                    )}
+                    {fmtEUR(r.monthly * 12)} par an
+                  </p>
                 </div>
                 <Amount cents={r.monthly} className="shrink-0 text-[14px] font-semibold text-ink" />
               </li>

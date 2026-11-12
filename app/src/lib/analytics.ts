@@ -102,7 +102,10 @@ export interface RecurringCharge {
   label: string
   initial: string
   group: CategoryGroup | null
-  monthly: number // montant actuel (mediane des 3 derniers prelevements)
+  amount: number // montant actuel d'un passage (mediane des 3 derniers prelevements)
+  every: number // periodicite observee, arrondie en mois (1 = mensuel, 2 = tous les 2 mois)
+  regular: boolean // periodicite franche (`every` exact) : affichable telle quelle
+  monthly: number // equivalent mensuel : montant d'un passage x frequence observee
   months: number // nombre de mois ou il apparait sur 12 mois
 }
 
@@ -763,9 +766,19 @@ export function computeAnalytics(
 // des mois actifs (3 au minimum), UNE fois par mois, pour le meme montant
 // (a 5 % pres) le meme jour du mois (a 3 jours pres) — a chaque fois pour au
 // moins 3 passages sur 4, ce qui tolere un changement de tarif ou un
-// prelevement decale —, et s'il est toujours actif (vu le mois de reference ou
-// le precedent : sinon il a ete resilie). Des achats au hasard (un restaurant
-// une fois par mois) ne passent ni le filtre du montant ni celui du jour.
+// prelevement decale —, et s'il est toujours actif (vu dans sa derniere
+// periode : le mois de reference ou le precedent pour un mensuel, les deux
+// precedents pour un bimestriel ; sinon il a ete resilie). Des achats au
+// hasard (un restaurant une fois par mois) ne passent ni le filtre du montant
+// ni celui du jour.
+//
+// Montant mensuel PRORATISE selon la frequence observee : intervalles entre
+// passages rapportes a l'etendue du premier au dernier passage (un
+// prelevement vu 6 fois de decembre a octobre : 5 intervalles sur 10 mois,
+// soit 0,5 par mois). Une facture d'eau de 60 EUR tous les deux mois coute
+// 30 EUR par mois, 360 EUR par an : elle etait affichee 60 EUR par mois et
+// 720 EUR par an. Frequence plafonnee a 1 (un prelevement decale d'un mois
+// sur l'autre ne compte pas double).
 
 interface Charge {
   spent: number
@@ -789,6 +802,8 @@ const sameDay = (a: number, b: number) => {
   return Math.min(d, 31 - d) <= DAY_TOLERANCE
 }
 
+const monthIndex = (month: string) => Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1
+
 function detectRecurring(
   charges: Map<string, Map<string, Charge[]>>,
   ctx: {
@@ -803,23 +818,32 @@ function detectRecurring(
   const detectMonths = monthRange(addMonths(ctx.reference, -(DETECTION_MONTHS - 1)), ctx.reference)
   const activeMonths = detectMonths.filter((m) => m !== ctx.reference && m >= ctx.firstMonth && ctx.active(m)).length
   const minMonths = Math.max(3, Math.ceil(activeMonths / 2))
-  const lastAllowed = addMonths(ctx.reference, -1)
 
   const recurring: RecurringCharge[] = []
   for (const [key, byMonth] of charges) {
     const seen = [...byMonth.keys()].sort()
-    if (seen.length < minMonths || seen[seen.length - 1]! < lastAllowed) continue
+    if (seen.length < minMonths) continue
     const single = seen.filter((m) => byMonth.get(m)!.length === 1).length
     if (single / seen.length < MIN_AGREEMENT) continue
     const all = seen.flatMap((m) => byMonth.get(m)!)
     if (bestAgreement(all.map((c) => c.spent), sameAmount) < MIN_AGREEMENT) continue
     if (bestAgreement(all.map((c) => c.day), sameDay) < MIN_AGREEMENT) continue
+    const first = seen[0]!
+    const last = seen[seen.length - 1]!
+    const span = monthIndex(last) - monthIndex(first) // > 0 : au moins 3 mois vus
+    const frequency = Math.min(1, (all.length - 1) / span)
+    const every = Math.max(1, Math.round(1 / frequency))
+    if (last < addMonths(ctx.reference, -every)) continue
+    const amount = median(seen.slice(-3).flatMap((m) => byMonth.get(m)!.map((c) => c.spent)))
     recurring.push({
       key,
       label: ctx.displayName(key),
       initial: ctx.initialOf(key),
       group: ctx.dominantGroup(key),
-      monthly: median(seen.slice(-3).flatMap((m) => byMonth.get(m)!.map((c) => c.spent))),
+      amount,
+      every,
+      regular: Math.abs(frequency * every - 1) <= 0.1,
+      monthly: Math.round(amount * frequency),
       months: seen.length,
     })
   }
