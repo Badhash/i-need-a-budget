@@ -174,7 +174,7 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
         <span className="font-medium text-ink tnum">{fmtEUR(avg.spending)}</span>
       </>
     ) : (
-      'Premier mois suivi\u00a0: la moyenne viendra avec l’historique.'
+      'Pas encore de mois complet à comparer\u00a0: la moyenne viendra avec l’historique.'
     )
 
   return (

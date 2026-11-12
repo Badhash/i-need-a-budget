@@ -196,6 +196,8 @@ const MIN_AGREEMENT = 0.75 // part des passages qui doivent concorder
 const SMALL_SUBSCRIPTION = 6_000
 // Donut : au-dela, les plus petits groupes sont regroupes en « Autres ».
 const MAX_SLICES = 6
+// Sans historique, pas de projection de fin de mois avant une semaine de donnees.
+const MIN_PROJECTION_DAYS = 7
 
 // ---------------------------------------------------------------------------
 // Aides
@@ -353,6 +355,7 @@ export function computeAnalytics(
   const windowMonths = monthRange(periodStart, reference)
 
   let firstDate: string | null = null
+  let firstBudgetDate: string | null = null // premiere operation d'un compte budget
   const incomeByMonth = new Map<string, number>()
   // Depense nette (sorties moins remboursements) avant plancher : mois ->
   // categorie -> montant, et son detail par jour (index 1..31) pour les mois
@@ -378,6 +381,7 @@ export function computeAnalytics(
   for (const t of txs) {
     const m = monthOf(t.date)
     if (firstDate === null || t.date < firstDate) firstDate = t.date
+    if (onBudget(t.accountId) && (firstBudgetDate === null || t.date < firstBudgetDate)) firstBudgetDate = t.date
 
     // Patrimoine : TOUTES les transactions (tous comptes, virements compris :
     // ils s'annulent entre comptes), jusqu'a la fin du mois de reference.
@@ -490,6 +494,12 @@ export function computeAnalytics(
   }
 
   const firstMonth = firstDate ? monthOf(firstDate) : reference
+  // Premier mois du budget PARTIEL (activation en cours de mois : premiere
+  // operation apres le 1er) : il entrait dans les moyennes comme un mois
+  // complet (depense moyenne de 1 833 EUR au lieu de 2 000 avec un debut le 20
+  // fevrier) et servait de mois precedent de comparaison. Il reste affiche
+  // dans les graphes.
+  const partialMonth = firstBudgetDate && !firstBudgetDate.endsWith('-01') ? monthOf(firstBudgetDate) : null
   const spendOf = (m: string) => spendByMonth.get(m) ?? 0
   const incomeOf = (m: string) => incomeByMonth.get(m) ?? 0
   const active = (m: string) => spendOf(m) > 0 || incomeOf(m) !== 0
@@ -501,7 +511,7 @@ export function computeAnalytics(
   // pas les moyennes avec des mois anterieurs au premier import), CLOS (le mois
   // en cours, partiel, n'entre dans aucune moyenne, meme d'un mois futur).
   const averageMonths = windowMonths.filter(
-    (m) => m !== reference && m < currentMonth && m >= firstMonth && active(m),
+    (m) => m !== reference && m < currentMonth && m !== partialMonth && m >= firstMonth && active(m),
   )
 
   // --- Identite des marchands ------------------------------------------------
@@ -587,16 +597,27 @@ export function computeAnalytics(
           : null,
     }
     // Projection : le reste du mois « comme d'habitude » (fin de mois moyenne
-    // moins cumul moyen a date). Sans historique : extrapolation lineaire.
+    // moins cumul moyen a date). Sans historique : extrapolation lineaire du
+    // rythme des jours couverts par les donnees, et seulement apres une
+    // semaine (le 2 du premier mois, un loyer de 1 200 EUR donnait « ~18 000 EUR
+    // d'ici la fin du mois »).
+    const startDay = partialMonth === reference ? Number(firstBudgetDate!.slice(8, 10)) : 1
+    const dataDays = refLastDay - startDay + 1
     projectedSpending =
       average && avgSpentToDate !== null
         ? spending + Math.max(0, average.spending - avgSpentToDate)
-        : Math.round((spending / Math.max(1, refLastDay)) * refDays)
+        : dataDays >= MIN_PROJECTION_DAYS
+          ? spending + Math.round((spending / dataDays) * (refDays - refLastDay))
+          : null
   }
 
   const previous = addMonths(reference, -1)
   const previousSpending =
-    previous < firstMonth ? null : isCurrentMonth ? cumulative(dailySpend, previous, refLastDay) : spendOf(previous)
+    previous < firstMonth || previous === partialMonth
+      ? null
+      : isCurrentMonth
+        ? cumulative(dailySpend, previous, refLastDay)
+        : spendOf(previous)
 
   // --- Repartition par groupe (donut) ----------------------------------------
   const monthGroups = new Map<string, number>()
