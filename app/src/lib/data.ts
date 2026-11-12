@@ -4,7 +4,7 @@
 // selecteurs ci-dessous. Tous les montants sont en centimes.
 
 import { useMemo } from 'react'
-import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type QueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { apiCall, creationRef } from '@/lib/api'
 import type {
   Account,
@@ -302,11 +302,18 @@ export async function fetchBudgetMonth(month: string, taxo: Bootstrap): Promise<
 }
 
 export function useBudgetMonth(month: string): UseQueryResult<BudgetMonth> {
+  const queryClient = useQueryClient()
   const boot = useBootstrap()
   return useQuery({
     queryKey: budgetKey(month),
     enabled: boot.data !== undefined,
-    queryFn: () => fetchBudgetMonth(month, boot.data!),
+    // Taxonomie lue dans le cache A L'ARRIVEE de la reponse, pas celle du
+    // dernier rendu (FRONT-INF-03) : un mois relu juste apres un changement de
+    // categories (import, creation) etait habille avec l'ancienne taxonomie.
+    queryFn: async () => {
+      const flat = await apiCall<FlatBudgetMonth>('getBudgetMonth', { month })
+      return adaptBudget(flat, queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY) ?? boot.data!)
+    },
   })
 }
 
