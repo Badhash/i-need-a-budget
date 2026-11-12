@@ -1,8 +1,9 @@
 # Audit du code — novembre 2026
 
 Revue complète du dépôt (front, Edge Functions, moteur, crypto, SQL, CI) : failles,
-bugs et optimisations. Ce document liste **tous** les constats, ce qui a été corrigé
-sur la branche `claude/fervent-euler-5e07sf`, et ce qui reste à faire.
+bugs et optimisations. Ce document liste **tous** les constats, ce qui est corrigé
+sur `main` et ce qui reste à faire. Une correction = un commit : chacune s'annule
+seule avec `git revert <commit>`.
 
 ## 1. Synthèse
 
@@ -10,106 +11,116 @@ sur la branche `claude/fervent-euler-5e07sf`, et ce qui reste à faire.
   ne compte qu'une fois). Aucune faille critique : pas de contournement
   d'authentification, pas d'accès aux données d'un autre utilisateur, pas de fuite de
   données déchiffrées, primitives de chiffrement saines.
-- 58 corrigés, 7 corrigés en partie, 2 couverts par un script SQL fourni à appliquer,
-  55 ouverts : 4 de sévérité haute, 22 moyenne, 29 basse.
-- Les trois problèmes les plus lourds étaient fonctionnels, pas des failles :
+- **89 corrigés, 6 corrigés en partie, 2 couverts par un script SQL à appliquer,
+  25 ouverts** : aucun de sévérité haute, 8 moyenne, 17 basse.
+- Les problèmes les plus lourds étaient fonctionnels, pas des failles :
   1. **Synchro bancaire** : après un re-consentement, plus rien n'était importé, en
      silence ; deux opérations identiques le même jour n'en donnaient qu'une.
-  2. **Egress** : un dialogue monté en permanence faisait retélécharger tout
-     l'historique des transactions à chaque réconciliation, depuis n'importe quelle page.
-  3. **Agrégats** : plusieurs chemins d'échec pouvaient laisser le marqueur « ready »
-     sur des chiffres faux.
+  2. **Egress** : l'historique complet des transactions, texte compris, était
+     retéléchargé à chaque réconciliation.
+  3. **Agrégats** : plusieurs chemins (échec, worker tué, reconstruction concurrente)
+     pouvaient laisser le marqueur « ready » sur des chiffres faux.
+  4. **Doublons** : une réponse réseau perdue rejouait une création (transaction ou
+     compte en double).
 
 ### Vérifications faites
 
 | Vérification | Résultat |
 |---|---|
-| Tests du moteur (`packages/engine`) | 42 sur 42 |
-| Tests de la crypto (`packages/crypto`) | 38 sur 38 (un test ajouté) |
-| Typecheck `packages/crypto` | passait en échec sous TypeScript 5.9, corrigé |
+| Tests du moteur (`packages/engine`) | 48 sur 48 (6 ajoutés : virement à cheval sur le mois de départ) |
+| Tests de la crypto (`packages/crypto`) | 44 sur 44 (clé de tiers, garde « libellé complété ») |
 | `deno check` des deux Edge Functions | 3 erreurs avant, 0 après |
-| Typecheck et build du front | OK |
-| `npm audit --omit=dev` (front) | 1 critique avant (`seroval`), 0 après |
-| Workflow `ci.yml` sur GitHub | vert sur cette branche |
-| App en mode démo dans un navigateur | 8 pages chargées (desktop et mobile), 0 erreur console ; assignation testée |
+| Typecheck et build du front | OK, vérifiés sur chaque commit |
+| Workflows GitHub (`ci.yml`, déploiements Pages et Edge Functions) | verts sur `main` |
+| Agrégats : simulateur PostgREST (scénarios d'écriture, de concurrence, de panne) | conformes, équivalence agrégats / calcul complet sur 8 cas |
+| App en mode démo dans un navigateur (desktop et mobile, clair et sombre) | sélecteur de catégories dans une feuille, réaffectation de catégorie, budget optimiste, écrans Budget, Rapports, Réglages |
 
 ### Ce qui n'a pas pu être vérifié
 
-- **La base de production.** Le schéma n'est pas versionné : RLS des 9 tables d'origine,
-  droits, index, triggers Realtime et contenu de `cron.job` n'ont pas pu être contrôlés.
-  Les requêtes de contrôle sont à la fin de `supabase/migrations-manual/O-revoke-rpc-execute.sql`.
+- **La base de production.** Le schéma n'est pas versionné : RLS, droits, index,
+  triggers Realtime et contenu de `cron.job` n'ont pas pu être contrôlés. Les requêtes
+  de contrôle sont à la fin de `supabase/migrations-manual/O-revoke-rpc-execute.sql`.
 - **Enable Banking en réel.** Les correctifs de la synchro sont typés et testés sur leur
-  logique isolée, pas contre l'API de la banque. Le code d'origine marque lui-même ses
-  hypothèses « HYP EB ».
-- **Les Edge Functions déployées.** Rien n'a été déployé : les correctifs serveur
-  prennent effet au prochain déploiement (fusion sur `main`).
+  logique isolée, pas contre l'API de la banque (hypothèses marquées « HYP EB »).
+- **Le parcours réel** (vraie session, vraie banque, iPhone) : tout a été vérifié en
+  mode démo, avec un faux serveur.
 
 ## 2. Statut de la mise en production
 
-Tout ce qui ne demande aucun accès à Supabase est sur `main`, **un commit par
-correction** : chacune s'annule seule avec `git revert <commit>`. Les workflows
-déploient au push : Pages pour le front, Edge Functions pour `/api` et `sync-bank`
-(après les tests, voir `ci.yml`).
+Tout ce qui ne demande aucun accès à Supabase est sur `main` et déployé
+automatiquement : Pages pour le front, Edge Functions pour `/api` et `sync-bank`
+(après les tests de `ci.yml`). Le front et le serveur restent compatibles entre eux
+pendant le déploiement (nouveaux paramètres optionnels, fonctionnalités annoncées
+par `features`).
 
-**Reste à faire dès que tu auras accès à Supabase** (rien n'est bloquant pour l'app) :
+**Reste à faire de ton côté, quand tu auras accès à Supabase** (rien n'est bloquant) :
 
 1. **Appliquer deux scripts dans le SQL Editor** (voir `RUNBOOK.md`) :
    `O-revoke-rpc-execute.sql` (droits des RPC), puis `P-cron-secret-vault.sql` (le
    secret d'appel de la synchro est aujourd'hui en clair dans `cron.job`). Faire
-   tourner ce secret ensuite. Les deux fichiers sont dans le dépôt mais **ne sont pas
-   appliqués**.
+   tourner ce secret ensuite.
 2. **Lancer les 5 requêtes de contrôle** de la fin du script O et comparer aux valeurs
    attendues indiquées en commentaire.
 3. **Vérifier dans le dashboard Supabase** : inscription fermée (« Allow new users to
-   sign up » désactivé), second facteur TOTP bien enrôlé sur ton compte,
-   `ALLOWED_ORIGINS` renseigné (le correctif CORS suppose qu'il l'est, ce que
-   l'app en production implique déjà).
-4. **Après le premier run de synchro** : contrôler dans Réglages > Banque que les
+   sign up » désactivé), second facteur TOTP enrôlé sur ton compte, `ALLOWED_ORIGINS`
+   renseigné.
+4. **Facultatif** : poser le secret `REQUIRE_MFA=1` sur les Edge Functions pour exiger
+   le second facteur côté serveur (seulement une fois le TOTP enrôlé, sinon l'accès
+   est refusé).
+5. **Au prochain re-consentement bancaire** : il passe désormais par un `state` signé.
+   Un consentement lancé avant le déploiement et terminé après sera refusé une fois
+   (« relance la connexion »).
+6. **Après le premier run de synchro** : contrôler dans Réglages > Banque que les
    comptes sont toujours associés et qu'un import arrive.
 
 ## 3. Corrections livrées
 
-Une correction = un commit. `git log --oneline` les liste, regroupées par portée :
+`git log --oneline` liste chaque correction. Par zone :
 
-| Portée | Contenu |
+| Zone | Contenu |
 |---|---|
-| `fix(crypto)`, `fix(sync-bank)`, `refactor(sync-bank)` | Rang d'occurrence du hash, isolation par compte, délai de 25 s, report des associations au re-consentement, journaux et réponse cron sans données |
-| `fix(api)`, `feat(api)` | Agrégats (statut après la fence, invalidation jamais avalée, reconstruction planifiée, filet sur les 5xx), « Nouveau budget », seed, validations, CORS, clé anon, pagination, linkBankAccount, syncFrom |
-| `fix(front)`, `perf(front)` | Lectures annulées relancées, egress de l'historique, saisie des montants, import YNAB, tri, banque, rapports, bundle, écran Budget (lots d'assignations, rollback, objectifs, feuilles mobiles) |
-| `chore(ci)`, `chore(sql)` | CI de tests avant déploiement, scripts SQL de durcissement |
-| `docs` | Ce document, `CLAUDE.md` |
+| Synchro bancaire | Rang d'occurrence du hash, isolation par compte, délai de 25 s, report des associations au re-consentement, `syncFrom`, journaux sans données, appariement optimal des saisies manuelles, opérations déjà présentes non comptées, agrégats invalidés après chaque écriture, `state` du consentement signé |
+| Agrégats et moteur | Statut `dirty` pendant les écritures, invalidation jamais avalée, reconstruction planifiée, virement à cheval sur le mois de départ, requêtes de maintenance sans effet supprimées, marqueur horodaté |
+| API | Idempotence des créations, « Annuler le virement » sur la bonne moitié, lectures scopées (virements, règles, suppressions), `listTransactions` par mois, rapports retirés du démarrage, réaffectation complète d'une catégorie, export versionné, second facteur obligatoire en option, supabase-js épinglé |
+| Crypto | Clé de tiers (sigles, ligatures, clés génériques), garde « libellé complété » |
+| Front | Réconciliation par mois, budget optimiste exact après une action sur une transaction, délai maximal des appels, taxonomie à jour, sélecteur de catégories dans les feuilles, libellés bancaires, saisie des montants, relectures derrière la file d'écritures, tri allégé |
+| Écrans | Budget (objectifs « Recharger jusqu'à », lots d'assignations, rollback ciblé, feuilles mobiles), Rapports (remboursements, épargne, taux à date, périodicité, premier mois), Zakat (nisab), kit UI (combobox, sélecteur de mois), Réglages (import YNAB, reprise, restauration, banque) |
+| CI et SQL | Tests avant déploiement, scripts SQL de durcissement O et P (non appliqués) |
 
 ## 4. Reste à faire, par priorité
 
-### Priorité 1 — bugs qui faussent des données
+Aucun constat de sévérité haute n'est ouvert.
+
+### Priorité 1 — fiabilité
 
 | ID | Constat | Piste |
 |---|---|---|
-| API-LOG-05, UI-TX-01, FRONT-LIB-05 | « Annuler le virement » depuis le miroir supprime la saisie d'origine (saisie manuelle, paire importée de YNAB) et laisse le miroir en transaction fantôme. Le serveur prend `tx_hash` NULL pour « miroir synthétique » | Marquer le miroir à sa création (`synthetic` dans `enc_core`), supprimer la moitié marquée quel que soit le côté cliqué, délier sans supprimer quand il n'y a pas de marqueur. Exposer ce champ au front et ajouter « Annuler » au toast |
-| API-SEC-02, FRONT-INF-01 | Aucune idempotence sur les créations : une réponse perdue (iPhone verrouillé juste après la validation) est rejouée 3 fois, d'où une transaction ou un compte en double | Envoyer l'UUID du `tempId` comme id de ligne, `on conflict (id) do nothing` dans `enc_insert`. Demande un script SQL et un drapeau `features` |
-| CORE-03 | Un virement entre deux comptes budget à cheval sur le mois de départ fausse le Prêt à assigner de son montant, définitivement (prouvé : 280 000 ou 320 000 au lieu de 300 000) | Dans `computeBudget`, compter en inflow la moitié postérieure d'un groupe dont une moitié budget est antérieure au départ ; répliquer dans `aggRecompute` |
-| CORE-02 | La maintenance des agrégats a lieu après l'écriture métier : un recompute concurrent (synchro pendant une catégorisation) peut compter un lot deux fois | Poser la fence avant la première écriture, ou passer le marqueur à `dirty` pendant l'écriture |
 | SYNC-08 | Une ligne importée puis supprimée, renommée ou déplacée d'un mois peut être réimportée (la dédup lit l'état courant) | Conserver un `bankLabel` immuable, ajouter le hash des variantes aux tombstones |
+| FRONT-LIB-02, UI-TX-02, UI-TX-09 | Une relecture en vol peut écraser soldes et badge optimistes pendant les 5 s d'une suppression annulable | Protéger `bootstrap` pendant la suppression différée (`pauseReads`), comme la liste |
+| UI-TRI-02 | La carte courante du tri peut changer sous le doigt après un échec | Épingler l'id de la carte, `mutateAsync().catch` |
+| FRONT-INF-05, FRONT-INF-15 | Realtime : pas de reconnexion après fermeture du canal, signal de reconnexion ignoré juste après une reprise | À valider en conditions réelles (iPhone, mise en veille) |
+| SYNC-06 | Synchro manuelle sans limite de fréquence | Délai minimal entre deux synchros manuelles |
+| CORE-10 | Une transaction dont la catégorie n'existe plus n'est comptée nulle part | La traiter comme non catégorisée (moteur, agrégats, badge ; `AGG_VERSION` à monter) |
 
-### Priorité 2 — egress (la contrainte d'exploitation)
+### Priorité 2 — egress et performance
 
 | ID | Constat | Piste |
 |---|---|---|
-| API-LOG-02 | `listTransactions` renvoie tout l'historique, texte compris. Le correctif front empêche qu'il soit relu depuis toutes les pages, mais chaque réconciliation sur la page Transactions le relit en entier | Paramètre `months[]`, fusion dans le cache |
-| API-LOG-03, EGR-01 | `bootstrapFull` calcule et transmet les rapports, que plus aucun composant ne lit ; `getReports` relit tout l'historique pour un mois | Retirer le champ côté serveur et le code mort (`lib/reports.ts`) |
-| API-LOG-04, 14, SET-CAT-01, FRONT-LIB-07 | Annuler ou supprimer un virement, supprimer une catégorie, appliquer les règles : historique complet relu avec le texte | Lire `enc_core` d'abord, `enc_text` pour les seules lignes touchées |
-| EGRESS-01 | Chaque run de synchro avec import relit tout l'historique ; un import d'historique le relit trois fois | Maintenance incrémentale pour les insertions simples |
-| API-LOG-10, CORE-04 | 14 requêtes séquentielles par catégorisation, dont 4 sans effet (`replaceTx` retire puis rajoute le même solde) | Accumuler les deltas par cellule, `Promise.all` |
-| UI-TRI-03 | Le tri déclenche `bootstrap` et `getBudgetMonth` à chaque carte (debounce de 1,2 s plus court que le rythme réel) | Debounce de 4 à 5 s, pas de `bootstrap` après une catégorisation pure |
+| EGRESS-01 | Chaque run de synchro avec import relit tout l'historique pour reconstruire les agrégats | Maintenance incrémentale pour les insertions simples |
 | API-LOG-11 | `bootstrap` relit taxonomie et mémoire de tiers pour rafraîchir un solde et un compteur | Paramètre `scope: 'counters'` |
+| API-LOG-10, CORE-04 | Maintenance des agrégats séquentielle (9 requêtes par catégorisation) | Accumuler les deltas par cellule, `Promise.all` |
+| EGRESS-02 | Un signal Realtime par ligne insérée | Coalescer côté trigger |
+| UI-TX-06, UI-TX-07, UI-BUD-05 | Listes et grille re-rendues en entier, liste mobile sans fenêtre | `React.memo`, virtualisation, `useDeferredValue` sur la recherche |
 
-### Priorité 3 — décisions produit à prendre
+### Priorité 3 — finitions et décisions
 
-| ID | Question |
+| ID | Question ou constat |
 |---|---|
-| ZAK-01 | Widget Zakat : assiette (tous les comptes, suivi et dettes compris), taux, nisab saisi à la main, date au 1er janvier. Hypothèses codées en dur, à exposer en réglages |
-| API-SEC-03 | Le second facteur n'est exigé que s'il est enrôlé. Un secret `REQUIRE_MFA=1` le rendrait obligatoire côté serveur |
-| SET-CAT-03 | Supprimer une catégorie avec réaffectation déplace les transactions, pas les assignations ni les règles |
+| ZAK-01 | Widget Zakat : assiette, taux, nisab et date sont des hypothèses codées en dur, à exposer en réglages (décision) |
+| FRONT-INF-10 | Pas de CSP sur l'app budget (faite sur freelance-dashboard) |
+| API-SEC-04 | `enc_update` ne signale pas une mise à jour de 0 ligne (demande un changement SQL) |
+| CI-01, API-SEC-10 | Épingler les actions GitHub et la CLI Supabase |
+| Divers B | Service worker et URL de retour bancaire, messages d'erreur de connexion, `signOut()` global, identifiants temporaires en cache, règle créée en priorité 0, jour de semaine des rapports, `MIN_MONTH` en dur |
 
 ## 5. Liste complète des constats
 
@@ -121,35 +132,35 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | ID | Sév. | Constat | Statut |
 |---|---|---|---|
 | API-SEC-01 | M | `seedDefaults` purgeait toute la taxonomie d'un budget utilisé ayant moins de 6 groupes ou 21 catégories | corrigé |
-| API-SEC-02 | M | Créations sans idempotence, rejouées par la file réseau | ouvert |
-| API-SEC-03 | B | Second facteur non exigé sans facteur enrôlé | ouvert (décision) |
+| API-SEC-02 | M | Créations sans idempotence, rejouées par la file réseau | corrigé (référence client `clientRef` et rejeu signalé : transactions, comptes, catégories, groupes, règles ; sans SQL) |
+| API-SEC-03 | B | Second facteur non exigé sans facteur enrôlé | corrigé (secret `REQUIRE_MFA=1` à poser dans Supabase pour exiger le second facteur) |
 | API-SEC-04, API-LOG-15 | B | `enc_update` ne signale pas une mise à jour de 0 ligne (écriture sur une ligne supprimée) | ouvert (SQL) |
 | API-SEC-05 | B | La clé anon passait la vérification de la plateforme et coûtait un appel au service Auth | corrigé |
 | API-SEC-06, SQL-02 | B | `revoke ... from public` ne retire pas les droits de `anon` et `authenticated` | script O |
 | API-SEC-07 | B | Mois, dates et montants non bornés (« 9999-12 » : 96 000 mois déroulés ; « 2025-02-31 » accepté) | corrigé |
 | API-SEC-08 | B | `linkBankAccount` ne vérifiait ni la connexion ni le compte bancaire | corrigé |
 | API-SEC-09 | B | Origine de repli CORS « null », qui est celle des iframes sandbox | corrigé (localhost reste autorisé) |
-| API-SEC-10 | B | `npm:@supabase/supabase-js@2` et CLI en version flottante | ouvert |
+| API-SEC-10 | B | `npm:@supabase/supabase-js@2` et CLI en version flottante | partiel (supabase-js épinglé en 2.119.0 dans les deux fonctions ; CLI du workflow à épingler) |
 | — | B | Liste d'emails autorisés sans contrôle de `email_confirmed_at` | ouvert |
 
 ### API — logique et egress
 
 | ID | Sév. | Constat | Statut |
 |---|---|---|---|
-| API-LOG-01 | H | Invariant « ready » cassé si le worker est tué en plein lot ou si l'invalidation échoue | partiel : invalidation jamais avalée, filet sur les 5xx, lots de plus de 25 lignes invalidés autour de leurs écritures |
-| API-LOG-02 | H | `listTransactions` relit tout à chaque réconciliation | partiel (côté front) |
-| API-LOG-03 | H | `getReports` relit tout l'historique pour un mois | ouvert |
-| API-LOG-04 | M | Recherche d'un miroir de virement sur l'historique complet | ouvert |
-| API-LOG-05 | M | « Annuler le virement » supprime la mauvaise moitié | ouvert |
+| API-LOG-01 | H | Invariant « ready » cassé si le worker est tué en plein lot ou si l'invalidation échoue | corrigé (statut `dirty` posé avant toute écriture, retour à `ready` par CAS seulement si les ajustements ont réussi : un worker tué laisse un état non prêt) |
+| API-LOG-02 | H | `listTransactions` relit tout à chaque réconciliation | corrigé (`months[]` côté serveur ; la réconciliation ne relit que les 3 derniers mois et les mois modifiés localement) |
+| API-LOG-03 | H | `getReports` relit tout l'historique pour un mois | corrigé (rapports retirés de `bootstrapFull` et code mort supprimé ; `getReports` n'a plus d'appelant) |
+| API-LOG-04 | M | Recherche d'un miroir de virement sur l'historique complet | corrigé (moitié et miroir lus par id et par mois, `enc_core` seul) |
+| API-LOG-05 | M | « Annuler le virement » supprime la mauvaise moitié | corrigé (miroir marqué `synthetic` à sa création ; c'est lui qui est supprimé, de quelque côté qu'on annule) |
 | API-LOG-06, SET-NEW-01, CORE-09, SET-AGG-02 | M | « Nouveau budget » effaçait les assignations avant de poser le mois de départ ; pas de ré-invalidation après les imports | corrigé |
 | API-LOG-07 | M | « Appliquer les règles » pouvait catégoriser le prélèvement de carte différée (compté deux fois) | corrigé |
 | API-LOG-08, CORE-05 | M | Agrégats invalidés reconstruits seulement au lancement suivant | corrigé (reste : double lecture de `bootstrapFull`, colonnes inutiles) |
 | API-LOG-09 | M | Mémoire de tiers tronquée au-delà de 1 000 lignes | corrigé |
-| API-LOG-10, CORE-04 | M | Maintenance séquentielle, requêtes sans effet | ouvert |
+| API-LOG-10, CORE-04 | M | Maintenance séquentielle, requêtes sans effet | partiel (requêtes sans effet supprimées : 9 au lieu de 14 par catégorisation ; pas de parallélisation) |
 | API-LOG-11 | M | `bootstrap` et `getBudgetMonth` renvoient plus que nécessaire | ouvert |
 | API-LOG-12, CORE-11 | B | Cache de 3 s purgé avant l'écriture seulement | corrigé |
 | API-LOG-13 | B | Suppression : tombstone en échec après l'écriture du miroir | corrigé |
-| API-LOG-14 | B | Autres lectures complètes avec texte | ouvert |
+| API-LOG-14 | B | Autres lectures complètes avec texte | corrigé (`enc_core` pour l'historique, texte des seules lignes touchées) |
 | API-LOG-16 | B | `getTransactions` non paginé | corrigé |
 | API-LOG-17 | B | `.in('id')` non découpé dans `deleteCategory`, pagination par offset, comparateurs de tri sans égalité, `getReports` ignore le mois de départ | ouvert |
 
@@ -158,13 +169,13 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | ID | Sév. | Constat | Statut |
 |---|---|---|---|
 | CORE-01 | H | `aggBegin` lisait le statut avant la fence : maintenance sautée sous un marqueur redevenu « ready » (prouvé par simulation) | corrigé |
-| CORE-02 | M | Maintenance après l'écriture métier : double comptage possible | ouvert |
-| CORE-03 | M | Virement à cheval sur le mois de départ | ouvert |
-| CORE-06 | B | `payeeKey` : clés trop génériques (« cheque », « echeance pret », « paris » pour C&A PARIS, vide pour H&M) | ouvert |
-| CORE-07 | B | Garde « libellé complété » : 12 caractères mesurés préfixe carte compris ; un import resservi à l'identique pouvait absorber une autre opération | partiel (second point corrigé) |
+| CORE-02 | M | Maintenance après l'écriture métier : double comptage possible | corrigé (voir API-LOG-01 : statut `dirty` pendant l'écriture) |
+| CORE-03 | M | Virement à cheval sur le mois de départ | corrigé (moteur et agrégats, `AGG_VERSION` 4 ; 6 tests) |
+| CORE-06 | B | `payeeKey` : clés trop génériques (« cheque », « echeance pret », « paris » pour C&A PARIS, vide pour H&M) | corrigé (sigles, ligatures ; une clé réduite à des mots génériques est vide) |
+| CORE-07 | B | Garde « libellé complété » : 12 caractères mesurés préfixe carte compris ; un import resservi à l'identique pouvait absorber une autre opération | corrigé (longueur mesurée hors préfixe carte) |
 | CORE-08, SYNC-02 | H | Deux opérations identiques le même jour : la seconde perdue | corrigé |
 | CORE-10 | B | Une transaction dont la catégorie n'existe plus n'est comptée nulle part | ouvert |
-| CORE-12 | B | Marqueur recréé à `rev` 0 : confusion possible avec une session ancienne | ouvert |
+| CORE-12 | B | Marqueur recréé à `rev` 0 : confusion possible avec une session ancienne | corrigé (`rev` initial horodaté) |
 
 ### Synchro bancaire, SQL, CI
 
@@ -177,9 +188,9 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | SYNC-06 | M | Synchros manuelles sans en-têtes de présence utilisateur ni limite de fréquence | ouvert |
 | SYNC-07 | M | Nom de la banque, du compte et corps d'erreur en clair dans la réponse cron et les journaux | corrigé |
 | SYNC-08 | M | Dédup sur l'état courant des lignes | ouvert |
-| SYNC-09 | B | Agrégats invalidés une seule fois par run | ouvert |
-| SYNC-10 | B | Appariement des jumeaux dépendant de l'ordre de la réponse | ouvert |
-| SYNC-11, SET-BNK-04, FRONT-INF-11 | B | Paramètre `state` généré mais jamais vérifié | ouvert |
+| SYNC-09 | B | Agrégats invalidés une seule fois par run | corrigé (marqueur invalidé aussi après chaque écriture) |
+| SYNC-10 | B | Appariement des jumeaux dépendant de l'ordre de la réponse | corrigé (appariement par date croissante, jumeau le plus ancien de la fenêtre) |
+| SYNC-11, SET-BNK-04, FRONT-INF-11 | B | Paramètre `state` généré mais jamais vérifié | corrigé (`state` signé HMAC, lié à l'utilisateur, 1 h) |
 | SQL-01 | B | Secret cron en clair dans `cron.job` | script P |
 | CI-01 | M | Jeton Supabase exposé à tout le job, pas de permissions ni de concurrence | partiel (reste : épingler actions et CLI) |
 | CI-02 | B | Aucun test avant déploiement | corrigé (`ci.yml`) |
@@ -192,12 +203,12 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 
 | ID | Sév. | Constat | Statut |
 |---|---|---|---|
-| FRONT-INF-01 | H | Rejeu réseau sans idempotence | ouvert (voir API-SEC-02) |
+| FRONT-INF-01 | H | Rejeu réseau sans idempotence | corrigé (voir API-SEC-02) |
 | FRONT-INF-02 | H | Dialogue d'édition : historique retéléchargé à chaque réconciliation | corrigé |
-| FRONT-INF-03 | M | Le budget est adapté avec la taxonomie du rendu précédent : une enveloppe tout juste créée peut refuser une assignation | ouvert |
+| FRONT-INF-03 | M | Le budget est adapté avec la taxonomie du rendu précédent : une enveloppe tout juste créée peut refuser une assignation | corrigé (taxonomie lue dans le cache à l'arrivée de la réponse) |
 | FRONT-INF-04 | M | Un lot d'assignations n'entre pas dans la file comme un bloc : une correction intercalée est écrasée | corrigé (lot et déplacement = une tâche de la file) |
 | FRONT-INF-05 | M | Realtime : jeton posé à la main, pas de reconnexion après fermeture du canal | ouvert (à valider en conditions réelles) |
-| FRONT-INF-06 | M | `fetch` sans délai : une requête pendue bloque la file sans indicateur | ouvert (dépend de l'idempotence) |
+| FRONT-INF-06 | M | `fetch` sans délai : une requête pendue bloque la file sans indicateur | corrigé (30 s en lecture, 60 s en écriture, 120 s pour les actions lourdes) |
 | FRONT-INF-07 | M | Recharts chargé au démarrage | corrigé (1 370 kB → 874 kB) |
 | FRONT-INF-08 | M | Caches préchargés jetés après 5 min | corrigé |
 | FRONT-INF-09 | B | Le rollback d'une assignation restaure tout le mois | corrigé (seules les valeurs de l'action échouée, relecture derrière la file) |
@@ -213,9 +224,9 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 |---|---|---|---|
 | FRONT-LIB-01, UI-BUD-01 | H | Lecture annulée par un patch optimiste jamais relancée | corrigé (`pauseReads`) |
 | FRONT-LIB-02, UI-TX-02 | M | Soldes et badge optimistes écrasés par une relecture en vol | partiel (reste : suppression différée de 5 s) |
-| FRONT-LIB-03 | M | Le budget ne se met pas à jour en optimiste après une action sur une transaction (saut après 2 s) | ouvert |
-| FRONT-LIB-04, SET-CAT-02 | M | Relecture de la taxonomie hors file : réordonnancements qui sautent | ouvert |
-| FRONT-LIB-06 | M | Libellés courts : « INTERETS DEBITEURS » rendu « Interets crediteurs », marchands PayPal confondus, « VERSEMENT PERIODIQUE » rendu « Versement especes » | ouvert |
+| FRONT-LIB-03 | M | Le budget ne se met pas à jour en optimiste après une action sur une transaction (saut après 2 s) | corrigé (patch exact : enveloppe, report sur les mois en cache, dépassement, revenus) |
+| FRONT-LIB-04, SET-CAT-02 | M | Relecture de la taxonomie hors file : réordonnancements qui sautent | corrigé (relecture derrière la file d'écritures) |
+| FRONT-LIB-06 | M | Libellés courts : « INTERETS DEBITEURS » rendu « Interets crediteurs », marchands PayPal confondus, « VERSEMENT PERIODIQUE » rendu « Versement especes » | corrigé (TotalEnergies et civilité inchangés) |
 | FRONT-LIB-08, UI-BUD-06 | M | « 1.000 » lu 1,00 €, « - » seul lu 0 | corrigé |
 | FRONT-LIB-09 | B | Caches qui gardent l'identifiant temporaire d'une catégorie | ouvert |
 | FRONT-LIB-10 | B | Prédicat « à catégoriser » recalculé par ligne | ouvert (le `select` instable de `useTargets`, signalé avec, est corrigé : voir UI-BUD-05) |
@@ -242,7 +253,7 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 |---|---|---|---|
 | UI-TRI-01 | M | « Annuler » laissait le choix annulé en mémoire de tiers | corrigé (tri ; les annulations en lot restent à faire) |
 | UI-TX-03 | M | Transaction datée dans le futur non modifiable | corrigé |
-| UI-TX-04, UIKIT-01 | H | Sélecteur de catégories ouvert depuis une feuille : recherche et défilement bloqués (prouvé en navigateur) | ouvert |
+| UI-TX-04, UIKIT-01 | H | Sélecteur de catégories ouvert depuis une feuille : recherche et défilement bloqués (prouvé en navigateur) | corrigé (focus et défilement libérés, Échap ferme le panneau seul ; vérifié en navigateur) |
 | UI-TX-05 | M | Lot tronqué à 200 en silence | corrigé |
 | UI-TX-06, UI-TX-07 | M | Lignes re-rendues en entier, liste mobile sans fenêtre, recherche sans différé | ouvert |
 | UI-TRI-02 | M | La carte courante du tri peut changer sous le doigt après un échec | ouvert |
@@ -266,7 +277,7 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | SET-IMP-06 | B | Enveloppes YNAB vides non importées | corrigé |
 | SET-IMP-07, SET-IMP-08 | B | Compte alimenté par virements proposé en suivi ; ancienne taxonomie affichée en fin d'import | corrigé (07 : compte signalé « À vérifier » dans l'aperçu, sans bascule automatique ; 08 : bootstrap relu d'abord, mois observés relus avec la nouvelle taxonomie, ce qui contourne FRONT-INF-03 pour l'import seulement) |
 | SET-BNK-03 | B | « Créer un compte pour ce compte bancaire » non atomique | corrigé (création et association séparées, compte relu si l'association échoue, liste bloquée pendant la création) |
-| SET-BAK-02, SET-BAK-03 | B | Sauvegarde sans version de format ; liens bancaires déclarés perdus si les connexions ne sont pas chargées | partiel (03 corrigé : restauration bloquée pendant la lecture des connexions, échec de lecture signalé comme tel ; 02 côté lecture seulement : format autre que `inab-backup` ou version > 1 refusés, fichiers sans ces champs acceptés, reste à les écrire dans `exportData`) |
+| SET-BAK-02, SET-BAK-03 | B | Sauvegarde sans version de format ; liens bancaires déclarés perdus si les connexions ne sont pas chargées | corrigé (format et version écrits par `exportData`, contrôlés à la restauration) |
 | SET-UI-01 | B | « Budget chiffré de bout en bout » : inexact, le serveur déchiffre | corrigé |
 
 ### Rapports et kit UI
