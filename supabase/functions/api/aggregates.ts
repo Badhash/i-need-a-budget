@@ -32,30 +32,33 @@
 // solde de depart) que /api retraduit en solde de depart pour le moteur.
 //
 // Un marqueur aggregate_state (1 ligne / user) porte l'etat : payload chiffre
-// { version, status: 'ready' | 'building' } + colonne rev en clair (compteur de
+// { version, status: 'ready' | 'building' | 'dirty' } + colonne rev en clair (compteur de
 // version CAS, pas une donnee metier). INVARIANT CENTRAL : status 'ready'
 // implique des agregats corrects. Tout chemin qui ne peut pas le garantir doit
 // invalider le marqueur (les lectures retombent alors sur le calcul complet,
 // toujours juste, et bootstrapFull reconstruit a l'ouverture suivante).
 //
 // Protocole de fence (issu de la revue adversariale) :
-//   * ECRITURE (aggMaintain) : bump rev AVANT les ajustements, ajustements,
-//     puis POST-CHECK : si rev a encore bouge (un recompute est passe), on
-//     invalide — les ajustements ont pu atterrir sur des tables reconstruites
-//     qui les integraient deja (double comptage), on prefere le fallback.
+//   * ECRITURE (aggOpen -> ecritures metier -> ajustements -> aggClose) :
+//     AVANT la premiere ecriture metier, une seule ecriture CAS sur rev pose
+//     'dirty' (agregats prets) ou bumpe seulement rev (non prets). Les lectures
+//     traitent 'dirty' comme non pret : pendant l'ecriture, et pour toujours si
+//     le worker meurt en route, elles retombent sur le calcul complet. Apres
+//     les ajustements, aggClose rebascule 'dirty' -> 'ready' par CAS sur le rev
+//     de la fence : si quiconque a touche le marqueur entre-temps (recompute,
+//     autre ecriture), la bascule echoue et on invalide.
 //   * RECOMPUTE (aggRecompute) : pose 'building' (bump rev, garde memorisee),
 //     PUIS charge la source (jamais l'inverse : une ecriture pendant le
 //     chargement bumpe rev et fait echouer la bascule finale), reconstruit,
 //     et ne bascule 'ready' QUE si rev n'a pas bouge (CAS). Un recompute
 //     perdant invalide le marqueur (il peut avoir insere des lignes parasites
 //     apres la bascule d'un recompute gagnant concurrent).
-//   * LIMITE CONNUE : la fence d'une action d'ecriture est posee APRES ses
-//     ecritures metier. Une action longue (lot) chevauchant un recompute peut
-//     donc avoir des lignes dans son snapshot et appliquer ses deltas apres sa
-//     bascule. Les reconstructions en arriere-plan de /api attendent pour cela
-//     l'accalmie et verifient avant la bascule (canCommit) qu'aucune action
-//     d'ecriture n'est en cours dans leur isolate. Les ecritures d'un autre
-//     processus (autre isolate, sync-bank) ne relevent que de la fence.
+//   * La fence etant posee AVANT les ecritures metier, un recompute qui
+//     chevauche une ecriture ne peut plus basculer 'ready' sans elle : soit il
+//     a pose 'building' avant (la fence de l'ecriture fait echouer sa bascule),
+//     soit apres (la cloture de l'ecriture echoue et invalide). Les
+//     reconstructions en arriere-plan de /api attendent en plus l'accalmie
+//     (canCommit) pour ne pas se faire invalider en boucle.
 //
 // Transport : lectures via computed columns base64 (REF D, enc_b64) ; ecritures
 // directes PostgREST en litteral hex bytea (les RPC enc_insert/enc_update ne
@@ -122,7 +125,8 @@ interface UncatPayload {
 }
 interface StatePayload {
   version: number
-  status: 'ready' | 'building'
+  /** 'dirty' : une ecriture est en cours (ou est morte en route) — non pret. */
+  status: 'ready' | 'building' | 'dirty'
 }
 
 const STATE_CTX = (userId: string) => ['aggregate_state', userId]
@@ -219,31 +223,6 @@ export async function aggIsReady(admin: Db, keys: CryptoKeys, userId: string): P
   } catch {
     return false // lecture impossible / marqueur corrompu : fallback silencieux
   }
-}
-
-// Incremente rev par CAS (fence). Retourne le rev POST-bump, ou null si le
-// marqueur a disparu entre-temps (agregats invalides : ne rien maintenir).
-// Contention persistante -> leve (l'appelant invalide).
-async function bumpStateRev(admin: Db, userId: string): Promise<number | null> {
-  for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
-    const { data, error } = await admin
-      .from('aggregate_state')
-      .select('rev')
-      .eq('user_id', userId)
-      .maybeSingle()
-    if (error) throw new Error('lecture aggregate_state impossible')
-    if (!data) return null
-    const rev = Number(data.rev)
-    const { data: upd, error: updErr } = await admin
-      .from('aggregate_state')
-      .update({ rev: rev + 1 })
-      .eq('user_id', userId)
-      .eq('rev', rev)
-      .select('user_id')
-    if (updErr) throw new Error('ecriture aggregate_state impossible')
-    if (upd && upd.length > 0) return rev + 1
-  }
-  throw new Error('aggregate_state : contention persistante (CAS)')
 }
 
 /**
@@ -548,81 +527,88 @@ export interface AggBatch {
 
 export interface AggSession {
   batch: AggBatch
-  /** rev du marqueur juste apres la fence : sert au post-check d'aggMaintain. */
+  /** rev du marqueur juste apres la fence : la cloture exige qu'il n'ait pas bouge. */
   fenceRev: number
 }
 
-/**
- * Ouvre une session de maintenance. Incremente TOUJOURS rev quand le marqueur
- * existe (fence : un recompute concurrent ne marquera pas 'ready' un etat qui
- * ignore cette ecriture), puis retourne la session seulement si les agregats
- * sont prets. null = inactifs / en reconstruction : l'appelant ne fait rien,
- * les lectures retombent sur le calcul complet.
- */
-export async function aggBegin(
-  admin: Db,
+async function statePayloadHex(
   keys: CryptoKeys,
   userId: string,
-): Promise<AggSession | null> {
-  // Fence AVANT les ajustements : voir l'en-tete du module.
-  const fenceRev = await bumpStateRev(admin, userId)
-  if (fenceRev === null) return null // marqueur absent : agregats invalides
-  // Le statut est lu APRES la fence. Lu avant, un recompute qui basculait
-  // 'ready' entre la lecture et la fence passait inapercu : la maintenance
-  // etait sautee (statut 'building' perime) sous un marqueur desormais 'ready',
-  // et l'ecriture manquait aux agregats sans que rien ne les invalide.
-  const state = await readState(admin, keys, userId)
-  if (state === null) return null
-  if (state.rev !== fenceRev) {
-    // Le marqueur a encore bouge juste apres notre fence : situation ambigue,
-    // on invalide (les lectures retombent sur le calcul complet, toujours juste).
-    await aggMarkStale(admin, userId)
-    return null
-  }
-  if (state.payload.version !== AGG_VERSION || state.payload.status !== 'ready') return null
-  const [onBudget, settings] = await Promise.all([
-    loadOnBudget(admin, keys, userId),
-    loadUserSettings(admin, keys, userId),
-  ])
-  const ctx: AggContext = { onBudget, startMonth: settings.budgetStartMonth }
-  return {
-    fenceRev,
-    batch: {
-      applyTx: (sign, tx) => applyContribution(admin, keys, userId, ctx, sign, tx),
-      replaceTx: async (oldTx, newTx) => {
-        await applyContribution(admin, keys, userId, ctx, -1, oldTx)
-        await applyContribution(admin, keys, userId, ctx, +1, newTx)
-      },
-      setAssigned: (categoryId, month) =>
-        adjustRollup(admin, keys, userId, categoryId, month, 0, () =>
-          readAssignedAmount(admin, keys, userId, categoryId, month),
-        ),
-      ensureAccount: (accountId) => adjustBalance(admin, keys, userId, accountId, 0),
-    },
-  }
+  status: StatePayload['status'],
+): Promise<string> {
+  return bytesToPgHex(
+    await encryptJson(keys, { version: AGG_VERSION, status } satisfies StatePayload, STATE_CTX(userId)),
+  )
 }
 
 /**
- * Post-check de fence : a appeler APRES les ajustements d'une session. Si rev
- * a bouge depuis la fence, un recompute (ou une autre ecriture) s'est
- * intercale : nos ajustements ont pu atterrir sur des tables reconstruites qui
- * les integraient deja (double comptage). On invalide — faux positif possible
- * avec une simple maintenance concurrente, mais la degradation (fallback +
- * reconstruction) est toujours sure. Renvoie true si les agregats viennent
- * d'etre invalides (l'appelant planifie alors leur reconstruction).
+ * Ouvre une maintenance, A APPELER AVANT LA PREMIERE ECRITURE METIER. Une
+ * seule ecriture CAS sur le rev lu : agregats prets -> rev+1 et 'dirty' ;
+ * non prets (ou version perimee) -> rev+1 seul (fence : un recompute en cours
+ * ne pourra pas basculer 'ready' sans cette ecriture). Statut et fence sont
+ * donc decides sur la meme version du marqueur. null = rien a maintenir.
  */
-export async function aggPostCheck(
+export async function aggOpen(admin: Db, keys: CryptoKeys, userId: string): Promise<AggSession | null> {
+  for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
+    const state = await readState(admin, keys, userId)
+    if (state === null) return null
+    const ready = state.payload.version === AGG_VERSION && state.payload.status === 'ready'
+    const patch: Record<string, unknown> = { rev: state.rev + 1 }
+    if (ready) patch.enc_payload = await statePayloadHex(keys, userId, 'dirty')
+    const { data: upd, error } = await admin
+      .from('aggregate_state')
+      .update(patch)
+      .eq('user_id', userId)
+      .eq('rev', state.rev)
+      .select('user_id')
+    if (error) throw new Error('ecriture aggregate_state impossible')
+    if (!upd || upd.length === 0) continue // le marqueur a bouge entre lecture et CAS
+    if (!ready) return null
+    const [onBudget, settings] = await Promise.all([
+      loadOnBudget(admin, keys, userId),
+      loadUserSettings(admin, keys, userId),
+    ])
+    const ctx: AggContext = { onBudget, startMonth: settings.budgetStartMonth }
+    return {
+      fenceRev: state.rev + 1,
+      batch: {
+        applyTx: (sign, tx) => applyContribution(admin, keys, userId, ctx, sign, tx),
+        replaceTx: async (oldTx, newTx) => {
+          await applyContribution(admin, keys, userId, ctx, -1, oldTx)
+          await applyContribution(admin, keys, userId, ctx, +1, newTx)
+        },
+        setAssigned: (categoryId, month) =>
+          adjustRollup(admin, keys, userId, categoryId, month, 0, () =>
+            readAssignedAmount(admin, keys, userId, categoryId, month),
+          ),
+        ensureAccount: (accountId) => adjustBalance(admin, keys, userId, accountId, 0),
+      },
+    }
+  }
+  throw new Error('aggregate_state : contention persistante (CAS)')
+}
+
+/**
+ * Clot une maintenance APRES les ajustements : 'dirty' -> 'ready' par CAS sur
+ * le rev de la fence. Si le marqueur a bouge (recompute, autre ecriture), nos
+ * ajustements ont pu etre comptes deux fois ou manquer a un snapshot : on
+ * invalide. Renvoie true si les agregats viennent d'etre invalides.
+ */
+export async function aggClose(
   admin: Db,
   keys: CryptoKeys,
   userId: string,
-  fenceRev: number,
+  session: AggSession,
 ): Promise<boolean> {
-  const state = await readState(admin, keys, userId)
-  if (state !== null && state.rev !== fenceRev) {
-    await aggMarkStale(admin, userId)
-    return true
-  }
-  return false
+  const { data, error } = await admin
+    .from('aggregate_state')
+    .update({ rev: session.fenceRev + 1, enc_payload: await statePayloadHex(keys, userId, 'ready') })
+    .eq('user_id', userId)
+    .eq('rev', session.fenceRev)
+    .select('user_id')
+  if (!error && data && data.length > 0) return false
+  await aggMarkStale(admin, userId)
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -736,13 +722,17 @@ async function setBuilding(admin: Db, keys: CryptoKeys, userId: string): Promise
     if (error) throw new Error('lecture aggregate_state impossible')
 
     if (!data) {
+      // rev initial = horloge (ms) et non 0 : un marqueur supprime puis recree
+      // ne retombe pas sur un rev deja vu par une session plus ancienne encore
+      // en cours (ABA), dont la cloture passerait a tort.
+      const initialRev = Date.now()
       const { error: insErr } = await admin.from('aggregate_state').insert({
         user_id: userId,
-        rev: 0,
+        rev: initialRev,
         enc_payload: payloadHex,
         built_at: new Date().toISOString(),
       })
-      if (!insErr) return 0
+      if (!insErr) return initialRev
       if ((insErr as { code?: string }).code === '23505') continue
       throw new Error('ecriture aggregate_state impossible')
     }

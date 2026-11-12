@@ -34,17 +34,18 @@ import {
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
 import {
-  aggBegin,
+  aggClose,
   aggClear,
   aggIsReady,
   aggMarkStale,
-  aggPostCheck,
+  aggOpen,
   aggReadBalances,
   aggReadRollups,
   aggReadUncatCount,
   aggRecompute,
   OPENING_CATEGORY,
   type AggBatch,
+  type AggSession,
   type AggSourceData,
   type AggTx,
 } from './aggregates.ts'
@@ -489,37 +490,55 @@ async function updateEncrypted(
 // Maintenance des agregats (REF I) — voir aggregates.ts
 // ---------------------------------------------------------------------------
 
-// Applique une maintenance incrementale des agregats si ceux-ci sont actifs :
-// fence (bump rev) -> ajustements -> post-check (si rev a encore bouge, un
-// recompute s'est intercale et nos deltas ont pu etre comptes deux fois : on
-// invalide). TOUTE erreur invalide les agregats (aggMarkStale) : les lectures
-// suivantes retombent sur le calcul complet jusqu'a la prochaine
-// reconstruction (relancee automatiquement par bootstrapFull). La maintenance
-// intervient APRES les ecritures metier reussies : si l'action echoue avant,
-// elle n'est jamais atteinte et les agregats restent coherents.
-async function aggMaintain(
+// Ecriture metier avec maintenance incrementale des agregats (REF I), dans cet
+// ordre : aggOpen (fence + marqueur 'dirty', AVANT toute ecriture), write(),
+// adjust() (ajustements CAS), aggClose ('dirty' -> 'ready' si personne n'a
+// touche le marqueur). Si le worker meurt ou si une etape echoue apres
+// l'ouverture, le marqueur reste 'dirty' ou est invalide : jamais 'ready' sur
+// des agregats faux, les lectures retombent sur le calcul complet (toujours
+// juste) et la reconstruction est planifiee. L'ancienne maintenance, posee
+// APRES les ecritures, laissait 'ready' faux a un crash entre les deux et
+// comptait deux fois un lot chevauchant un recompute.
+async function withAggMaintenance<T>(
   userId: string,
   keys: CryptoKeys,
-  fn: (batch: AggBatch) => Promise<void>,
-): Promise<void> {
-  let invalidated = false
+  write: () => Promise<T>,
+  adjust: (batch: AggBatch) => Promise<void>,
+): Promise<T> {
+  const session = await openAggSession(userId, keys)
+  const result = await write()
+  await closeAggSession(userId, keys, session, adjust)
+  return result
+}
+
+async function openAggSession(userId: string, keys: CryptoKeys): Promise<AggSession | null> {
   try {
-    const session = await aggBegin(admin, keys, userId)
-    if (!session) return
-    await fn(session.batch)
-    invalidated = await aggPostCheck(admin, keys, userId, session.fenceRev)
+    return await aggOpen(admin, keys, userId)
   } catch {
-    try {
-      await aggMarkStale(admin, userId)
-    } catch {
-      // Ni maintenance ni invalidation : repondre 200 laisserait un marqueur
-      // 'ready' sur des agregats faux. L'action echoue, le front le signale.
-      throw new ApiError(500, 'maintenance des agregats impossible, reessayez')
-    }
+    // Ouverture impossible : on invalide AVANT d'ecrire. Si meme cela echoue,
+    // l'action echoue sans avoir rien ecrit.
+    await markAggregatesStaleOrFail(userId)
+    return null
+  }
+}
+
+async function closeAggSession(
+  userId: string,
+  keys: CryptoKeys,
+  session: AggSession | null,
+  adjust: (batch: AggBatch) => Promise<void>,
+): Promise<void> {
+  if (!session) return
+  let invalidated: boolean
+  try {
+    await adjust(session.batch)
+    invalidated = await aggClose(admin, keys, userId, session)
+  } catch {
+    // Le marqueur est reste 'dirty' (non pret) : rien de faux n'est servi.
+    // Invalidation best-effort pour que la reconstruction reparte au propre.
+    await aggMarkStale(admin, userId).catch(() => {})
     invalidated = true
   }
-  // Agregats invalides : sans reconstruction planifiee, chaque lecture relirait
-  // tout l'historique jusqu'a la prochaine ouverture de l'app (bootstrapFull).
   if (invalidated) await scheduleAggRebuildSafe(userId, keys)
 }
 
@@ -1564,10 +1583,12 @@ async function actionAddTransaction(userId: string, params: Params) {
     transferGroupId: null,
   }
   // tx_hash reste NULL : saisie manuelle, pas de dedup (doublons legitimes)
-  const id = await insertTx(userId, payload, {
-    month_idx: await txMonthIdx(keys, userId, bookingMonth),
-  })
-  await aggMaintain(userId, keys, (b) => b.applyTx(1, payload))
+  const id = await withAggMaintenance(
+    userId,
+    keys,
+    async () => insertTx(userId, payload, { month_idx: await txMonthIdx(keys, userId, bookingMonth) }),
+    (b) => b.applyTx(1, payload),
+  )
   return { id }
 }
 
@@ -1610,8 +1631,12 @@ async function actionCategorizeTransaction(userId: string, params: Params) {
     }
     return { ok: true }
   }
-  await updateTx(userId, transactionId, { ...payload, categoryId })
-  await aggMaintain(userId, keys, (b) => b.replaceTx(payload, { ...payload, categoryId }))
+  await withAggMaintenance(
+    userId,
+    keys,
+    () => updateTx(userId, transactionId, { ...payload, categoryId }),
+    (b) => b.replaceTx(payload, { ...payload, categoryId }),
+  )
   // Memoire de tiers (REF N) : apprend le choix, best-effort.
   if (categoryId) {
     const accounts = await loadAll<AccountPayload>('accounts', userId)
@@ -1679,20 +1704,21 @@ async function actionCategorizeMany(userId: string, params: Params) {
     })
   } else {
     const aggOps: { old: AggTx; next: AggTx }[] = []
-    try {
-      for (const r of targets) {
-        const next = { ...r.payload, categoryId }
-        await updateTx(userId, r.id, next)
-        aggOps.push({ old: r.payload, next })
-      }
-    } catch (err) {
-      if (aggOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
-      throw err
-    }
-    if (aggOps.length > 0) {
-      await aggMaintain(userId, keys, async (b) => {
-        for (const op of aggOps) await b.replaceTx(op.old, op.next)
-      })
+    if (targets.length > 0) {
+      await withAggMaintenance(
+        userId,
+        keys,
+        async () => {
+          for (const r of targets) {
+            const next = { ...r.payload, categoryId }
+            await updateTx(userId, r.id, next)
+            aggOps.push({ old: r.payload, next })
+          }
+        },
+        async (b) => {
+          for (const op of aggOps) await b.replaceTx(op.old, op.next)
+        },
+      )
     }
   }
   // Memoire de tiers (REF N) : jamais depuis une moitie de transfert.
@@ -1778,10 +1804,15 @@ async function actionUpdateTransaction(userId: string, params: Params) {
   // month_idx recalcule (identique si le mois n'a pas change). tx_hash n'est
   // PAS repasse en extra : il reste fige, la dedup des imports ne bouge pas
   // meme si le montant ou la date changent.
-  await updateTx(userId, transactionId, payload, {
-    month_idx: await txMonthIdx(keys, userId, bookingMonth),
-  })
-  await aggMaintain(userId, keys, (b) => b.replaceTx(existing, payload))
+  await withAggMaintenance(
+    userId,
+    keys,
+    async () =>
+      updateTx(userId, transactionId, payload, {
+        month_idx: await txMonthIdx(keys, userId, bookingMonth),
+      }),
+    (b) => b.replaceTx(existing, payload),
+  )
   // Memoire de tiers (REF N) : apprend si la categorie est posee ou changee.
   if (categoryId && categoryId !== existing.categoryId) {
     await learnPayeeSafe(userId, keys, payload, categoryId, accounts, categories)
@@ -1928,10 +1959,8 @@ async function actionConvertToTransfer(userId: string, params: Params) {
     await withAggregatesStale(userId, writePair)
     return { ok: true, transferGroupId, mirrorId }
   }
-  await writePair()
-  // Ecritures reussies : origine devenue moitie de transfert (categorie
-  // retiree) + miroir ajoute. En cas d'echec plus haut, on ne passe jamais ici.
-  await aggMaintain(userId, keys, async (b) => {
+  // Origine devenue moitie de transfert (categorie retiree) + miroir ajoute.
+  await withAggMaintenance(userId, keys, writePair, async (b) => {
     await b.replaceTx(payload, origin)
     await b.applyTx(1, mirror)
   })
@@ -2092,8 +2121,7 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
     await withAggregatesStale(userId, writes)
     return result
   }
-  await writes()
-  await aggMaintain(userId, keys, async (b) => {
+  await withAggMaintenance(userId, keys, writes, async (b) => {
     if (removed) await b.applyTx(-1, removed.payload)
     for (const h of unlinked) {
       await b.replaceTx(h.payload, { ...h.payload, transferGroupId: null })
@@ -2204,8 +2232,7 @@ async function actionDeleteTransaction(userId: string, params: Params) {
     await withAggregatesStale(userId, writes)
     return result
   }
-  await writes()
-  await aggMaintain(userId, keys, async (b) => {
+  await withAggMaintenance(userId, keys, writes, async (b) => {
     await b.applyTx(-1, payload)
     if (mirrorAgg) await mirrorAgg(b)
   })
@@ -2229,23 +2256,28 @@ async function actionSetAssigned(userId: string, params: Params) {
 
   const keys = await getKeys()
   const payload: AssignmentPayload = { categoryId, month, amount }
-  const { error } = await admin.rpc('enc_insert', {
-    p_table: 'assignments',
-    p_rows: [
-      {
-        user_id: userId,
-        assign_idx: await assignIdx(keys, userId, categoryId, month),
-        month_idx: await assignMonthIdx(keys, userId, month),
-        enc_payload: bytesToBase64(await encryptJson(keys, payload, ['assignments', userId])),
-      },
-    ],
-    p_conflict: 'user_id,assign_idx',
-  })
-  if (error) throw new ApiError(500, 'ecriture assignments impossible')
+  const row = {
+    user_id: userId,
+    assign_idx: await assignIdx(keys, userId, categoryId, month),
+    month_idx: await assignMonthIdx(keys, userId, month),
+    enc_payload: bytesToBase64(await encryptJson(keys, payload, ['assignments', userId])),
+  }
   // La valeur d'assigned est RELUE depuis la table par la maintenance (jamais
   // passee en parametre) : deux assignations concurrentes de la meme cellule
   // convergent vers la derniere valeur commitee.
-  await aggMaintain(userId, keys, (b) => b.setAssigned(categoryId, month))
+  await withAggMaintenance(
+    userId,
+    keys,
+    async () => {
+      const { error } = await admin.rpc('enc_insert', {
+        p_table: 'assignments',
+        p_rows: [row],
+        p_conflict: 'user_id,assign_idx',
+      })
+      if (error) throw new ApiError(500, 'ecriture assignments impossible')
+    },
+    (b) => b.setAssigned(categoryId, month),
+  )
   return { ok: true }
 }
 
@@ -2285,8 +2317,11 @@ async function actionCreateAccount(userId: string, params: Params) {
   const accountId = await insertEncrypted('accounts', userId, payload)
 
   let openingTx: TxPayload | null = null
+  // Agregats : cree la ligne de solde (a 0) du nouveau compte + repercute
+  // l'eventuel solde d'ouverture.
+  const keys = await getKeys()
+  const session = await openAggSession(userId, keys)
   if (openingBalance !== 0) {
-    const keys = await getKeys()
     const bookingMonth = openingDate.slice(0, 7)
     const txPayload: TxPayload = {
       accountId,
@@ -2303,10 +2338,7 @@ async function actionCreateAccount(userId: string, params: Params) {
     openingTx = txPayload
   }
 
-  // Agregats : cree la ligne de solde (a 0) du nouveau compte + repercute
-  // l'eventuel solde d'ouverture.
-  const keys = await getKeys()
-  await aggMaintain(userId, keys, async (b) => {
+  await closeAggSession(userId, keys, session, async (b) => {
     await b.ensureAccount(accountId)
     if (openingTx) await b.applyTx(1, openingTx)
   })
@@ -2665,20 +2697,12 @@ async function actionDeleteCategory(userId: string, params: Params) {
   const offGroups = offBudgetTransferGroups(transactions, onBudget)
   if (touched.some((t) => isCrossBudgetHalf(t, onBudget, offGroups))) {
     await withAggregatesStale(userId, decategorize)
-  } else {
-    try {
-      await decategorize()
-    } catch (err) {
-      if (aggTxOps.length > 0) await aggMarkStale(admin, userId).catch(() => {})
-      throw err
-    }
+  } else if (touched.length > 0) {
     // Maintenance immediate du lot decategorise : les etapes suivantes peuvent
     // echouer sans laisser de derive (chaque etape est refletee des qu'elle reussit).
-    if (aggTxOps.length > 0) {
-      await aggMaintain(userId, keys, async (b) => {
-        for (const op of aggTxOps) await b.replaceTx(op.old, op.next)
-      })
-    }
+    await withAggMaintenance(userId, keys, decategorize, async (b) => {
+      for (const op of aggTxOps) await b.replaceTx(op.old, op.next)
+    })
   }
 
   // Purge les assignations et objectifs orphelins (reference dans le payload,
@@ -2686,17 +2710,25 @@ async function actionDeleteCategory(userId: string, params: Params) {
   const orphanAssignments = assignments.filter((a) => a.categoryId === categoryId)
   const assignmentIds = orphanAssignments.map((a) => a.id)
   if (assignmentIds.length > 0) {
-    const { error } = await admin
-      .from('assignments')
-      .delete()
-      .eq('user_id', userId)
-      .in('id', assignmentIds)
-    if (error) throw new ApiError(500, 'suppression assignments impossible')
     // Assignations purgees : la relecture (table videe) donne 0, les cellules
-    // vides disparaissent (sparse).
-    await aggMaintain(userId, keys, async (b) => {
-      for (const a of orphanAssignments) await b.setAssigned(categoryId, a.month)
-    })
+    // vides disparaissent (sparse). Suppression par paquets (limite d'URL).
+    await withAggMaintenance(
+      userId,
+      keys,
+      async () => {
+        for (let i = 0; i < assignmentIds.length; i += 100) {
+          const { error } = await admin
+            .from('assignments')
+            .delete()
+            .eq('user_id', userId)
+            .in('id', assignmentIds.slice(i, i + 100))
+          if (error) throw new ApiError(500, 'suppression assignments impossible')
+        }
+      },
+      async (b) => {
+        for (const a of orphanAssignments) await b.setAssigned(categoryId, a.month)
+      },
+    )
   }
   const targetIds = targets.filter((t) => t.categoryId === categoryId).map((t) => t.id)
   if (targetIds.length > 0) {
@@ -2977,20 +3009,16 @@ async function actionApplyRulesToUncategorized(userId: string) {
   }
 
   // 3. Petit lot : maintenance incrementale.
-  let written = 0
-  try {
-    for (const m of matches) {
-      await updateTx(userId, m.id, m.next)
-      written += 1
-    }
-  } catch (err) {
-    // Lot partiellement applique : agregats invalides (fallback calcul complet).
-    if (written > 0) await aggMarkStale(admin, userId).catch(() => {})
-    throw err
-  }
-  await aggMaintain(userId, keys, async (b) => {
-    for (const m of matches) await b.replaceTx(m.old, m.next)
-  })
+  await withAggMaintenance(
+    userId,
+    keys,
+    async () => {
+      for (const m of matches) await updateTx(userId, m.id, m.next)
+    },
+    async (b) => {
+      for (const m of matches) await b.replaceTx(m.old, m.next)
+    },
+  )
   return { categorized: matches.length }
 }
 
