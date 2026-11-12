@@ -1045,6 +1045,17 @@ export interface ImportRun {
    * les anciennes donnees sont perdues tant que l'import n'est pas termine.
    */
   wipeStarted: boolean
+  /**
+   * Categories disparues pendant l'import (supprimees ailleurs) : leurs
+   * transactions partent sans categorie, leurs assignations sont ecartees.
+   */
+  missingCategories: Set<string>
+  /** Categorisations retirees du lot courant, comptees a sa confirmation. */
+  pendingLost: number
+  /** Lot courant refuse par le serveur (4xx) : le renvoyer tel quel echouerait encore. */
+  refused: { rows: number } | null
+  /** Transactions de lots refuses que l'utilisateur a choisi d'ignorer. */
+  refusedTx: number
 }
 
 export interface ImportProgress {
@@ -1215,6 +1226,8 @@ async function batchAlreadyCommitted(run: ImportRun, batch: TxRow[]): Promise<bo
 
 function commitTxBatch(run: ImportRun, batch: TxRow[], inserted: number): void {
   run.insertedTx += inserted
+  run.lostCategorizations += run.pendingLost
+  run.pendingLost = 0
   for (const row of batch) {
     const sig = txSig(row.accountId, row.date, row.amount, row.label)
     run.committedSigs.set(sig, (run.committedSigs.get(sig) ?? 0) + 1)
@@ -1258,6 +1271,54 @@ function progressOf(run: ImportRun): ImportProgress {
     case 'done':
       return { step: 'done', pct: 100, done: 0, total: 0 }
   }
+}
+
+/** Ids des categories existantes (lecture bootstrap, chemin d'erreur seulement). */
+async function fetchCategoryIds(): Promise<Set<string>> {
+  const { categories } = await apiCall<{ categories: { id: string }[] }>('bootstrap')
+  return new Set(categories.map((c) => c.id))
+}
+
+/**
+ * Refus 404 d'un lot : une categorie a-t-elle disparu depuis begin
+ * (supprimee depuis un autre ecran ou appareil) ? Les ids absents rejoignent
+ * run.missingCategories ; vrai si le lot en contenait.
+ */
+async function detectMissingCategories(run: ImportRun, rows: { categoryId: string | null }[]): Promise<boolean> {
+  const existing = await fetchCategoryIds()
+  let found = false
+  for (const { categoryId: id } of rows) {
+    if (id !== null && !existing.has(id) && !run.missingCategories.has(id)) {
+      run.missingCategories.add(id)
+      found = true
+    }
+  }
+  return found
+}
+
+/** Lot courant de transactions sans les categories disparues (perte comptee a la confirmation). */
+function stripMissingFromTxBatch(run: ImportRun): void {
+  if (run.missingCategories.size === 0) return
+  const batch = run.txBatches[run.cursor]
+  let lost = 0
+  const cleaned = batch.map((row) => {
+    if (row.categoryId === null || !run.missingCategories.has(row.categoryId)) return row
+    lost++
+    return { ...row, categoryId: null }
+  })
+  if (lost === 0) return
+  run.txBatches[run.cursor] = cleaned
+  run.pendingLost += lost
+}
+
+/** Lot courant d'assignations sans les categories disparues (assignations perdues comptees). */
+function stripMissingFromAsgBatch(run: ImportRun): void {
+  if (run.missingCategories.size === 0) return
+  const batch = run.asgBatches[run.cursor]
+  const kept = batch.filter((row) => !run.missingCategories.has(row.categoryId))
+  if (kept.length === batch.length) return
+  run.lostAssignments += batch.length - kept.length
+  run.asgBatches[run.cursor] = kept
 }
 
 const RULE_SIG = (categoryId: string, op: string, value: string) =>
@@ -1305,8 +1366,8 @@ async function execute(run: ImportRun, report: (p: ImportProgress) => void): Pro
       }
       case 'transactions': {
         while (run.cursor < run.txBatches.length) {
-          const batch = run.txBatches[run.cursor]
           if (run.verify) {
+            const batch = run.txBatches[run.cursor]
             const committed = await batchAlreadyCommitted(run, batch)
             run.verify = false
             if (committed) {
@@ -1315,12 +1376,26 @@ async function execute(run: ImportRun, report: (p: ImportProgress) => void): Pro
               continue
             }
           }
-          try {
-            const res = await apiCall<{ inserted: number }>('importReplaceTransactions', { transactions: batch })
-            commitTxBatch(run, batch, res.inserted)
-          } catch (err) {
-            run.verify = isAmbiguous(err)
-            throw err
+          // Une relance au plus : apres un 404, sans les categories disparues.
+          for (let attempt = 0; ; attempt++) {
+            stripMissingFromTxBatch(run)
+            const batch = run.txBatches[run.cursor]
+            try {
+              const res = await apiCall<{ inserted: number }>('importReplaceTransactions', { transactions: batch })
+              commitTxBatch(run, batch, res.inserted)
+              break
+            } catch (err) {
+              run.verify = isAmbiguous(err)
+              if (!isRefusal(err)) throw err
+              // Refus : rien n'a ete ecrit. Categorie supprimee pendant l'import
+              // (404) : la ligne repart sans categorie, perte comptee.
+              const retry =
+                attempt === 0 && (err as ApiError).status === 404 && (await detectMissingCategories(run, batch))
+              if (!retry) {
+                run.refused = { rows: batch.length }
+                throw err
+              }
+            }
           }
           report(progressOf(run))
         }
@@ -1331,10 +1406,26 @@ async function execute(run: ImportRun, report: (p: ImportProgress) => void): Pro
       case 'assignments': {
         // Upsert (categorie, mois) : renvoyer un lot deja ecrit est sans effet.
         while (run.cursor < run.asgBatches.length) {
-          const res = await apiCall<{ upserted: number }>('importReplaceAssignments', {
-            assignments: run.asgBatches[run.cursor],
-          })
-          run.upsertedAsg += res.upserted
+          for (let attempt = 0; ; attempt++) {
+            stripMissingFromAsgBatch(run)
+            const batch = run.asgBatches[run.cursor]
+            try {
+              const res =
+                batch.length > 0
+                  ? await apiCall<{ upserted: number }>('importReplaceAssignments', { assignments: batch })
+                  : { upserted: 0 }
+              run.upsertedAsg += res.upserted
+              break
+            } catch (err) {
+              if (!isRefusal(err)) throw err
+              const retry =
+                attempt === 0 && (err as ApiError).status === 404 && (await detectMissingCategories(run, batch))
+              if (!retry) {
+                run.refused = { rows: batch.length }
+                throw err
+              }
+            }
+          }
           run.cursor++
           report(progressOf(run))
         }
@@ -1471,6 +1562,11 @@ function summarize(run: ImportRun): ImportResult {
     notes.push(`${plural(run.skippedTargets, 'objectif non restauré', 'objectifs non restaurés')}.`)
   }
   if (run.skippedRules > 0) notes.push(`${plural(run.skippedRules, 'règle non restaurée', 'règles non restaurées')}.`)
+  if (run.refusedTx > 0) {
+    notes.push(
+      `${plural(run.refusedTx, 'transaction non importée', 'transactions non importées')} : lot refusé par le serveur et ignoré.`,
+    )
+  }
   return {
     source: plan.source,
     accounts: Object.keys(run.begin?.accountMap ?? {}).length,
@@ -1609,6 +1705,7 @@ function invalidateReplaced(queryClient: QueryClient): Promise<unknown> {
 async function loop(queryClient: QueryClient): Promise<void> {
   const { run, phase } = useImportStore.getState()
   if (!run || phase === 'running') return
+  run.refused = null
   // Quitter la page pendant l'envoi perdrait la reprise : le navigateur demande
   // (garde posee par l'abonnement au store, cf. isWipeInProgress).
   useImportStore.setState({ phase: 'running', error: null })
@@ -1665,6 +1762,10 @@ export function startImport(queryClient: QueryClient, plan: ImportPlan, backup: 
     skipped: [],
     verify: false,
     wipeStarted: false,
+    missingCategories: new Set(),
+    pendingLost: 0,
+    refused: null,
+    refusedTx: 0,
   }
   useImportStore.setState({ ...IDLE, source: plan.source, backup, run, progress: progressOf(run) })
   return loop(queryClient)
@@ -1675,6 +1776,27 @@ export function startImport(queryClient: QueryClient, plan: ImportPlan, backup: 
  * effacement une fois begin confirme ; begin lui-meme se rejoue sans risque).
  */
 export function resumeImport(queryClient: QueryClient): Promise<void> {
+  return loop(queryClient)
+}
+
+/**
+ * Ignore le lot refuse par le serveur (4xx : rien n'a ete ecrit) et reprend au
+ * lot suivant. Les lignes ignorees figurent au bilan.
+ */
+export function skipRefusedBatch(queryClient: QueryClient): Promise<void> {
+  const { run, phase } = useImportStore.getState()
+  if (!run || phase !== 'failed' || !run.refused) return Promise.resolve()
+  if (run.step === 'transactions') {
+    run.refusedTx += run.txBatches[run.cursor]?.length ?? 0
+    run.pendingLost = 0
+  } else if (run.step === 'assignments') {
+    run.lostAssignments += run.asgBatches[run.cursor]?.length ?? 0
+  } else {
+    return Promise.resolve()
+  }
+  run.cursor++
+  run.verify = false
+  run.refused = null
   return loop(queryClient)
 }
 

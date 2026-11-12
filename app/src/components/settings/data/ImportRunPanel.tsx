@@ -15,6 +15,7 @@ import {
   PartyPopper,
   RotateCcw,
   ShieldCheck,
+  SkipForward,
   TriangleAlert,
   X,
 } from 'lucide-react'
@@ -22,6 +23,7 @@ import {
   forgetSafetyBackup,
   resetImport,
   resumeImport,
+  skipRefusedBatch,
   startImport,
   useImportStore,
   validatePlan,
@@ -495,6 +497,13 @@ export function ImportRunPanel({ source }: { source: 'ynab' | 'backup' }) {
                   : 'L’effacement a peut-être commencé avant la coupure. Réessayer relance l’import proprement (l’effacement est simplement refait) ; la sauvegarde de sécurité ramène sinon tes données à leur état d’avant.'
                 : 'L’import n’a pas pu démarrer et rien n’a été effacé. Réessayer le relance proprement.'}
             </p>
+            {run.refused && (
+              <p className="rounded-xl bg-surface2/70 px-3.5 py-2.5 text-[13px] leading-relaxed text-ink">
+                Le serveur refuse ce lot de {n(run.refused.rows)} ligne{run.refused.rows > 1 ? 's' : ''} : le renvoyer
+                tel quel échouera de nouveau. Tu peux l’ignorer et continuer avec la suite (les lignes ignorées figurent
+                au bilan).
+              </p>
+            )}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
               <Button variant="ghost" onClick={() => (started ? setAbandonOpen(true) : resetImport())}>
                 Abandonner
@@ -504,6 +513,12 @@ export function ImportRunPanel({ source }: { source: 'ynab' | 'backup' }) {
                 <Button variant="outline" onClick={() => setRestoreOpen(true)}>
                   <ArchiveRestore className="h-4 w-4" />
                   Restaurer la sauvegarde
+                </Button>
+              )}
+              {run.refused && (
+                <Button variant="outline" onClick={() => void skipRefusedBatch(queryClient)}>
+                  <SkipForward className="h-4 w-4" />
+                  Ignorer ce lot ({n(run.refused.rows)} ligne{run.refused.rows > 1 ? 's' : ''})
                 </Button>
               )}
               <Button onClick={() => void resumeImport(queryClient)}>

@@ -4,11 +4,14 @@
 // vers un autre groupe, couleur et icone des groupes, suppression avec
 // reaffectation optionnelle des transactions. Les categories de revenus ne se
 // masquent, ne se deplacent ni ne se suppriment (regles serveur). Toutes les
-// mutations sont optimistes (bootstrap + budgets, cf. lib/taxonomy.ts).
+// mutations sont optimistes (bootstrap + budgets, cf. lib/taxonomy.ts). Pendant
+// un import non termine (Donnees), la taxonomie est en lecture seule : l'import
+// envoie ses lignes vers les categories creees a son debut.
 
 import { useMemo, useState } from 'react'
-import { EyeOff, FolderPlus, Plus, Shapes } from 'lucide-react'
+import { EyeOff, FolderPlus, Lock, Plus, Shapes } from 'lucide-react'
 import { useBootstrap } from '@/lib/data'
+import { useImportStore } from '@/lib/ynabImport'
 import { newTempId } from '@/lib/mutationQueue'
 import type { Category, CategoryGroup, GroupIcon } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
@@ -41,6 +44,7 @@ import { GroupStyleDialog } from '@/components/settings/categories/GroupStyleDia
 import { MoveCategoryDialog } from '@/components/settings/categories/MoveCategoryDialog'
 import { DeleteCategoryDialog } from '@/components/settings/categories/DeleteCategoryDialog'
 import { useLatched } from '@/components/settings/shared/useLatched'
+import { cn } from '@/lib/utils'
 
 const bySort = <T extends { sortOrder: number }>(a: T, b: T) => a.sortOrder - b.sortOrder
 
@@ -175,6 +179,9 @@ export function CategoriesSection() {
   const [moveId, setMoveId] = useState<string | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [deleteGroupId, setDeleteGroupId] = useState<string | null>(null)
+  // Import en cours ou interrompu (a reprendre) : supprimer ou deplacer une
+  // categorie ferait refuser ses lots suivants.
+  const locked = useImportStore((s) => s.phase === 'running' || (s.phase === 'failed' && s.run !== null))
 
   const groups = useMemo(() => (boot.data?.groups ?? []).slice().sort(bySort), [boot.data?.groups])
   const categories = useMemo(() => boot.data?.categories ?? [], [boot.data?.categories])
@@ -251,72 +258,94 @@ export function CategoriesSection() {
 
   return (
     <div className="space-y-3">
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 px-1">
-        <p className="text-[13px] text-soft tnum">
-          {visibleGroups.length} groupe{visibleGroups.length > 1 ? 's' : ''} · {categories.length} catégorie
-          {categories.length > 1 ? 's' : ''}
-          {hiddenCount > 0 && (
-            <>
-              {' · '}
-              <span className="inline-flex items-center gap-1 align-[-1px]">
-                <EyeOff className="h-3 w-3" />
-                {hiddenCount} masquée{hiddenCount > 1 ? 's' : ''}
-              </span>
-            </>
-          )}
-        </p>
-        {!creatingGroup && groups.length > 0 && (
-          <Button variant="soft" size="sm" onClick={() => setCreatingGroup(true)}>
-            <Plus className="h-4 w-4" />
-            Nouveau groupe
-          </Button>
-        )}
-      </div>
-
-      {groups.length === 0 && !creatingGroup && (
-        <Card>
-          <EmptyState
-            compact
-            icon={Shapes}
-            title="Aucune catégorie"
-            description="Crée un premier groupe pour ranger tes enveloppes."
-            actionLabel="Nouveau groupe"
-            onAction={() => setCreatingGroup(true)}
-          />
-        </Card>
-      )}
-
-      {visibleGroups.map((group, i) => (
-        <GroupCard
-          key={renderKey(group.id)}
-          group={group}
-          categories={catsOf(group.id)}
-          canUp={i > 0}
-          canDown={i < visibleGroups.length - 1}
-          actions={actions}
-        />
-      ))}
-
-      {creatingGroup && <NewGroupCard onDone={() => setCreatingGroup(false)} />}
-
-      {hiddenGroups.length > 0 && (
-        <div className="space-y-3 pt-3">
-          <p className="flex items-center gap-1.5 px-1 text-[12px] font-medium uppercase tracking-[0.08em] text-soft">
-            <EyeOff className="h-3.5 w-3.5" />
-            Groupes masqués · {hiddenGroups.length}
-          </p>
-          {hiddenGroups.map((group) => (
-            <GroupCard
-              key={renderKey(group.id)}
-              group={group}
-              categories={catsOf(group.id)}
-              canUp={false}
-              canDown={false}
-              actions={actions}
-            />
-          ))}
+      {locked && (
+        <div
+          role="status"
+          className="flex items-start gap-3 rounded-2xl bg-surface2/70 px-4 py-3 ring-1 ring-inset ring-edge"
+        >
+          <Lock className="mt-0.5 h-5 w-5 shrink-0 text-soft" />
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-[13.5px] font-medium text-ink">Catégories en lecture seule pendant l’import</p>
+            <p className="text-[12.5px] leading-relaxed text-soft">
+              Un import ou une restauration n’est pas terminé (section « Données ») : modifier les catégories maintenant
+              ferait refuser ses prochains envois. Termine-le, reprends-le ou abandonne-le d’abord.
+            </p>
+          </div>
         </div>
       )}
+      {/* fieldset : desactive d'un coup boutons, champs et menus de la liste. */}
+      <fieldset
+        disabled={locked}
+        aria-disabled={locked || undefined}
+        className={cn('m-0 min-w-0 space-y-3 border-0 p-0', locked && 'pointer-events-none select-none opacity-60')}
+      >
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 px-1">
+          <p className="text-[13px] text-soft tnum">
+            {visibleGroups.length} groupe{visibleGroups.length > 1 ? 's' : ''} · {categories.length} catégorie
+            {categories.length > 1 ? 's' : ''}
+            {hiddenCount > 0 && (
+              <>
+                {' · '}
+                <span className="inline-flex items-center gap-1 align-[-1px]">
+                  <EyeOff className="h-3 w-3" />
+                  {hiddenCount} masquée{hiddenCount > 1 ? 's' : ''}
+                </span>
+              </>
+            )}
+          </p>
+          {!creatingGroup && groups.length > 0 && (
+            <Button variant="soft" size="sm" onClick={() => setCreatingGroup(true)}>
+              <Plus className="h-4 w-4" />
+              Nouveau groupe
+            </Button>
+          )}
+        </div>
+
+        {groups.length === 0 && !creatingGroup && (
+          <Card>
+            <EmptyState
+              compact
+              icon={Shapes}
+              title="Aucune catégorie"
+              description="Crée un premier groupe pour ranger tes enveloppes."
+              actionLabel="Nouveau groupe"
+              onAction={() => setCreatingGroup(true)}
+            />
+          </Card>
+        )}
+
+        {visibleGroups.map((group, i) => (
+          <GroupCard
+            key={renderKey(group.id)}
+            group={group}
+            categories={catsOf(group.id)}
+            canUp={i > 0}
+            canDown={i < visibleGroups.length - 1}
+            actions={actions}
+          />
+        ))}
+
+        {creatingGroup && <NewGroupCard onDone={() => setCreatingGroup(false)} />}
+
+        {hiddenGroups.length > 0 && (
+          <div className="space-y-3 pt-3">
+            <p className="flex items-center gap-1.5 px-1 text-[12px] font-medium uppercase tracking-[0.08em] text-soft">
+              <EyeOff className="h-3.5 w-3.5" />
+              Groupes masqués · {hiddenGroups.length}
+            </p>
+            {hiddenGroups.map((group) => (
+              <GroupCard
+                key={renderKey(group.id)}
+                group={group}
+                categories={catsOf(group.id)}
+                canUp={false}
+                canDown={false}
+                actions={actions}
+              />
+            ))}
+          </div>
+        )}
+      </fieldset>
 
       <GroupStyleDialog
         group={styleGroup}
