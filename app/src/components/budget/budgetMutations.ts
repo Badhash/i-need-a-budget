@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { BudgetGroupBlock, BudgetMonth, BudgetRow } from '@/lib/budget'
 import { apiSetAssigned } from '@/lib/data'
+import { isNetworkError } from '@/lib/connectivity'
 import { enqueue, resolveId } from '@/lib/mutationQueue'
 import { fmtEUR } from '@/lib/format'
 import { dismissToast, toast } from '@/lib/toast'
@@ -93,15 +94,24 @@ function describeChanges(previous: BudgetMonth, changes: AssignTarget[]): Assign
 }
 
 // Envoi reseau d'un lot : un setAssigned par enveloppe (pas d'action groupee
-// cote serveur), serialise dans la file globale. Arret au premier echec : la
-// relecture du mois qui suit lit un etat stable (plus aucune ecriture en vol).
+// cote serveur), enfile comme UNE SEULE tache de la file globale. Une saisie
+// faite pendant l'envoi passe donc derriere tout le lot : enfile element par
+// element, elle s'intercalait et l'element suivant du lot l'ecrasait. Les
+// dependances couvrent toutes les enveloppes du lot (aucun envoi si l'une
+// porte encore un id temporaire orphelin). Arret au premier echec ; apres un
+// echec reseau, la file rejoue la tache a partir de l'element en echec (les
+// elements deja confirmes ne repartent pas).
 async function sendAssignments(month: string, changes: AssignTarget[]): Promise<void> {
-  for (const c of changes) {
-    await enqueue(
-      () => apiSetAssigned({ categoryId: resolveId(c.categoryId), amount: c.amount, month }),
-      { deps: [c.categoryId] },
-    )
-  }
+  let sent = 0
+  await enqueue(
+    async () => {
+      for (; sent < changes.length; sent += 1) {
+        const c = changes[sent]!
+        await apiSetAssigned({ categoryId: resolveId(c.categoryId), amount: c.amount, month })
+      }
+    },
+    { deps: changes.map((c) => c.categoryId) },
+  )
 }
 
 interface AssignContext {
@@ -207,10 +217,10 @@ export function useAssignBatchMutation(month: string) {
 // un excedent) : deux setAssigned coherents. La mise a jour du cache applique
 // les DEUX cotes en une seule passe optimiste et UNE etape d'historique ; en cas
 // d'echec reseau, les deux sont annules ensemble (restauration du snapshot).
-// Cote serveur, on tente une compensation si le second POST echoue apres un
-// premier reussi, pour ne pas laisser un etat incoherent (la reconciliation
-// Realtime tranche ensuite). Le total assigne (from - X puis to + X) est
-// conserve : le RTA revient a l'identique une fois les deux deltas appliques.
+// Les deux POST et l'eventuelle compensation forment UNE SEULE tache de la
+// file : aucune saisie ne s'intercale entre eux (elle serait ecrasee par le
+// second cote ou par la compensation). Le total assigne (from - X puis to + X)
+// est conserve : le RTA revient a l'identique une fois les deux deltas appliques.
 // Utilise par la feuille d'actions mobile ET le popover desktop : les deux
 // beneficient de l'annulation en une etape.
 export function useMoveMutation(month: string) {
@@ -221,30 +231,34 @@ export function useMoveMutation(month: string) {
       // resout temp -> real au moment de l'envoi. Les deux enveloppes deviennent
       // des dependances : si l'une porte encore un id 'temp-*' non resolu, la
       // tache est annulee avant d'atteindre /api.
-      const deps = [fromId, toId]
+      let fromSent = false
       await enqueue(
-        () => apiSetAssigned({ categoryId: resolveId(fromId), amount: fromAssigned - amount, month }),
-        { deps },
+        async () => {
+          // Rejeu apres un echec reseau : la source deja confirmee ne repart pas.
+          if (!fromSent) {
+            await apiSetAssigned({ categoryId: resolveId(fromId), amount: fromAssigned - amount, month })
+            fromSent = true
+          }
+          try {
+            await apiSetAssigned({ categoryId: resolveId(toId), amount: toAssigned + amount, month })
+          } catch (err) {
+            // Coupure : la file rejoue la tache (destination seulement). Si
+            // elle abandonne, le demi-transfert reste cote serveur : la
+            // relecture du rollback le montre et « Réessayer » le termine.
+            if (isNetworkError(err)) throw err
+            // Refus du serveur (jamais rejoue) : compensation best-effort dans
+            // la meme tache, on restaure l'assigne de la source. Si elle echoue
+            // aussi, la relecture du rollback ramenera la verite.
+            try {
+              await apiSetAssigned({ categoryId: resolveId(fromId), amount: fromAssigned, month })
+            } catch {
+              // ignore
+            }
+            throw err
+          }
+        },
+        { deps: [fromId, toId] },
       )
-      try {
-        await enqueue(
-          () => apiSetAssigned({ categoryId: resolveId(toId), amount: toAssigned + amount, month }),
-          { deps },
-        )
-      } catch (err) {
-        // Compensation best-effort : on restaure l'assigne de la source pour
-        // eviter un demi-transfert cote serveur. Si elle echoue aussi, la
-        // reconciliation Realtime ramenera la verite.
-        try {
-          await enqueue(
-            () => apiSetAssigned({ categoryId: resolveId(fromId), amount: fromAssigned, month }),
-            { deps },
-          )
-        } catch {
-          // ignore : le refetch de reconciliation corrigera l'ecart.
-        }
-        throw err
-      }
     },
     // On applique EXACTEMENT les memes valeurs absolues que les POST serveur
     // (snapshot du moment de l'ouverture de la feuille) pour qu'aucun chiffre
