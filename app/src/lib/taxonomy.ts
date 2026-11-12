@@ -269,10 +269,15 @@ function rollback(queryClient: QueryClient, context: OptimisticContext | undefin
 
 // Invalidation silencieuse et scopee : la reconciliation serveur renvoie les
 // memes donnees, donc rien ne "saute" visuellement. Seules les requetes
-// affichees refetchent (les autres sont juste marquees perimees).
+// affichees refetchent (les autres sont juste marquees perimees). Relecture
+// DERRIERE les ecritures encore en file (FRONT-LIB-04) : lancee tout de suite,
+// elle pouvait repondre avant l'ecriture suivante (deux reordonnancements
+// rapides) et ecraser son etat optimiste (ordre ou assigne qui sautent).
 function settle(queryClient: QueryClient) {
-  void queryClient.invalidateQueries({ queryKey: BOOTSTRAP_KEY })
-  void queryClient.invalidateQueries({ queryKey: BUDGET_PREFIX })
+  void enqueue(async () => {
+    void queryClient.invalidateQueries({ queryKey: BOOTSTRAP_KEY })
+    void queryClient.invalidateQueries({ queryKey: BUDGET_PREFIX })
+  })
 }
 
 // Cle de rendu stable d'un groupe ou d'une categorie cree en optimiste : quand
