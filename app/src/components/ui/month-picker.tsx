@@ -27,7 +27,7 @@ const MONTH_ABBR = Array.from({ length: 12 }, (_, i) =>
 )
 
 const YEAR_ARROW =
-  "relative flex h-9 w-9 items-center justify-center rounded-full text-soft transition-colors after:absolute after:-inset-1 after:content-[''] hover:bg-surface2 hover:text-ink active:scale-95"
+  "relative flex h-9 w-9 items-center justify-center rounded-full text-soft transition-colors after:absolute after:-inset-1 after:content-[''] hover:bg-surface2 hover:text-ink active:scale-95 aria-disabled:pointer-events-none aria-disabled:opacity-30"
 
 function pad(m: number): string {
   return String(m).padStart(2, '0')
@@ -46,14 +46,22 @@ export function MonthPicker({
 }: MonthPickerProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
 
   const isAll = allowAll && value === ALL
-  // Annee affichee dans le popover : celle du mois selectionne, sinon l'annee courante.
+  // Bornes d'annee : les fleches s'y arretent (elles menaient a 2023 ou 2029,
+  // annees dont tous les mois etaient desactives).
+  const minYear = min ? Number(min.slice(0, 4)) : -Infinity
+  const maxYear = max ? Number(max.slice(0, 4)) : Infinity
+  // Annee affichee dans le popover : celle du mois selectionne, sinon l'annee
+  // courante (fuseau Europe/Paris, comme le mois courant), ramenee dans les bornes.
   const initialYear = useMemo(() => {
-    if (!isAll && /^\d{4}-\d{2}$/.test(value)) return Number(value.slice(0, 4))
-    return new Date().getFullYear()
-  }, [value, isAll])
+    const y = !isAll && /^\d{4}-\d{2}$/.test(value) ? Number(value.slice(0, 4)) : Number(currentMonth().slice(0, 4))
+    return Math.min(maxYear, Math.max(minYear, y))
+  }, [value, isAll, minYear, maxYear])
   const [year, setYear] = useState(initialYear)
+  const canPrev = year > minYear
+  const canNext = year < maxYear
 
   // Realigne l'annee visible sur la valeur a chaque ouverture.
   useEffect(() => {
@@ -70,6 +78,23 @@ export function MonthPicker({
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
+  // Echap ferme le panneau, et lui seul : Radix (Dialog) ecoute la touche en
+  // capture sur le document et fermait la feuille parente (filtres mobiles).
+  // La capture sur window passe avant lui ; la touche s'arrete ici. Le focus
+  // revient au bouton (il etait peut-etre sur un mois, retire du DOM).
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      if (rootRef.current?.contains(document.activeElement)) triggerRef.current?.focus()
+      setOpen(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open])
+
   const label = isAll ? 'Tous les mois' : fmtMonthTitle(value)
   const thisMonth = currentMonth()
 
@@ -81,8 +106,16 @@ export function MonthPicker({
   }
 
   return (
-    <div ref={rootRef} className={cn('relative min-w-[160px]', className)}>
+    <div
+      ref={rootRef}
+      // Focus parti ailleurs (Tab) : le panneau se ferme, comme au clic exterieur.
+      onBlur={(e) => {
+        if (open && e.relatedTarget instanceof Node && !e.currentTarget.contains(e.relatedTarget)) setOpen(false)
+      }}
+      className={cn('relative min-w-[160px]', className)}
+    >
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={ariaLabel ?? 'Choisir un mois'}
@@ -126,10 +159,13 @@ export function MonthPicker({
 
           {/* Fleches d'annee : 36px a l'oeil, zone de toucher etendue a 44px. */}
           <div className="flex items-center justify-between px-1 py-1">
+            {/* aria-disabled plutot que disabled : le focus clavier reste sur la
+                fleche arrivee en butee. */}
             <button
               type="button"
-              onClick={() => setYear((y) => y - 1)}
+              onClick={() => canPrev && setYear((y) => y - 1)}
               aria-label="Année précédente"
+              aria-disabled={!canPrev || undefined}
               className={YEAR_ARROW}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -137,8 +173,9 @@ export function MonthPicker({
             <span className="text-[14px] font-semibold tnum">{year}</span>
             <button
               type="button"
-              onClick={() => setYear((y) => y + 1)}
+              onClick={() => canNext && setYear((y) => y + 1)}
               aria-label="Année suivante"
+              aria-disabled={!canNext || undefined}
               className={YEAR_ARROW}
             >
               <ChevronRight className="h-4 w-4" />
