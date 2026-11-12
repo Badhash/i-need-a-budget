@@ -51,14 +51,17 @@ const KIND_RULES: KindRule[] = [
   { kind: 'solde', re: /^SOLDE D'?OUVERTURE/ },
   { kind: 'carte', re: /CARTE DEPENSES|DEPENSES CARTE|PRELEVEMENT CARTE/ },
   { kind: 'retrait', re: /^RETRAIT (AU DISTRIBUTEUR|DAB)/ },
-  { kind: 'versement', re: /^VERSEMENT/ },
+  // Seul un versement D'ESPECES en est un : « VERSEMENT PERIODIQUE » ou
+  // « VERSEMENT LIVRET » (virement programme) suit le cas general.
+  { kind: 'versement', re: /^VERSEMENT (D'?)?ESPECES/ },
   { kind: 'virement_recu', re: /VIREMENT EN VOTRE FAVEUR|VIR RECU/ },
   { kind: 'virement_emis', re: /^VIREMENT EMIS/ },
-  { kind: 'pret', re: /REMBOURSEMENT DE PRET/ },
+  { kind: 'pret', re: /REMBOURSEMENT (DE |DU )?PRET|ECHEANCE (DE |DU )?PRET/ },
   { kind: 'reglement', re: /^REGLEMENT/ },
   { kind: 'cotisation', re: /^(COTISATION|FRAIS|COMMISSION)/ },
   { kind: 'interets', re: /INTERETS/ },
-  { kind: 'cheque', re: /REMISE (DE )?CHEQUES?|CHEQUE/ },
+  // Ancre en tete : « CARTE 12/03 CHEQUE DEJEUNER » n'est pas un cheque.
+  { kind: 'cheque', re: /^(REMISE (DE )?CHEQUES?|CHEQUE)\b/ },
   { kind: 'prelevement', re: /^PRELEVEMENT/ },
 ]
 
@@ -72,10 +75,9 @@ function detectKind(u: string): BankLabelKind {
 // -- Marchands connus (match sur le libelle majuscule, prioritaire) ----------
 
 const MERCHANTS: Array<{ res: RegExp[]; name: string }> = [
-  { res: [/PAYPAL/], name: 'PayPal' },
   { res: [/TOTALENERGIES/], name: 'TotalEnergies' },
   { res: [/BOUYGUES TELECOM/], name: 'Bouygues Telecom' },
-  { res: [/ORANGE SA/], name: 'Orange' },
+  { res: [/\bORANGE SA\b/], name: 'Orange' },
   { res: [/NAVIGO/, /COMUTIT/], name: 'Navigo' },
   { res: [/HOMESERVE/], name: 'HomeServe' },
   { res: [/PAPERNEST/], name: 'Papernest energie' },
@@ -88,6 +90,18 @@ const MERCHANTS: Array<{ res: RegExp[]; name: string }> = [
 ]
 
 function findMerchant(u: string): string | null {
+  // PayPal sert d'intermediaire : le marchand reel suit souvent l'asterisque
+  // (« PAYPAL *STREAMING VIDEO »), il etait perdu derriere « PayPal ».
+  const pp = u.match(/PAYPAL\s*\*\s*([A-Z][A-Z0-9 .&'-]*)/)
+  if (pp) {
+    const name = softTitleCase(
+      cleanTokens(tokenize(pp[1]))
+        .map((t) => t.raw)
+        .join(' '),
+    )
+    return name ? `PayPal · ${name}` : 'PayPal'
+  }
+  if (/PAYPAL/.test(u)) return 'PayPal'
   for (const m of MERCHANTS) {
     if (m.res.some((re) => re.test(u))) return m.name
   }
@@ -111,8 +125,14 @@ function isNoiseToken(uTok: string): boolean {
   // Refs melangees alphanum >= 9 caracteres contenant chiffres ET lettres
   if (uTok.length >= 9 && /\d/.test(uTok) && /[A-Z]/.test(uTok) && /^[A-Z0-9\/\-]+$/.test(uTok))
     return true
-  // Prefixes de refs techniques
-  if (NOISE_PREFIXES.some((p) => uTok.startsWith(p))) return true
+  // Prefixes de refs techniques, suivis d'un chiffre ou d'un separateur (ou
+  // seuls) : « RUM:123 », pas « RUMBA » ni « DEMPSEY ».
+  if (
+    NOISE_PREFIXES.some(
+      (p) => uTok.startsWith(p) && (uTok.length === p.length || /[\d:\-\/.]/.test(uTok[p.length]) || /[-:]$/.test(p)),
+    )
+  )
+    return true
   // Dates JJ/MM(/AA(AA)) et heures
   if (/^\d{1,2}\/\d{1,2}(\/\d{2,4})?$/.test(uTok)) return true
   if (/^\d{1,2}H\d{2}$/.test(uTok)) return true
@@ -137,7 +157,11 @@ function tokenize(s: string): Token[] {
 function cleanTokens(tokens: Token[]): Token[] {
   const out: Token[] = []
   let prevU = ''
-  for (const t of tokens) {
+  for (const tok of tokens) {
+    // Enseigne suivie d'un numero de magasin (MONOPRIX75, FRANPRIX12) : le
+    // numero part, l'enseigne reste (le jeton entier passait pour une ref).
+    const store = /^([A-Z]{3,})\d{1,4}$/.exec(tok.u)
+    const t = store ? { raw: tok.raw.slice(0, store[1].length), u: store[1] } : tok
     if (isNoiseToken(t.u)) continue
     if (t.u === prevU) continue // doublons consecutifs
     out.push(t)
@@ -162,7 +186,7 @@ function stripKindPrefix(label: string, kind: BankLabelKind): string {
     retrait: /RETRAIT (AU DISTRIBUTEUR|DAB)/,
     versement: /VERSEMENT (D'?ESPECES)?/,
     reglement: /REGLEMENT/,
-    cheque: /REMISE (DE )?CHEQUES?|CHEQUE/,
+    cheque: /^(REMISE (DE )?CHEQUES?|CHEQUE)\b/,
   }
   const re = PREFIX_RES[kind]
   if (!re) return label
@@ -262,12 +286,12 @@ export function parseBankLabel(label: string): ParsedLabel {
     case 'solde':
       return finish("Solde d'ouverture")
     case 'interets':
-      return finish('Interets crediteurs')
+      return finish(/DEBIT/.test(u) ? 'Intérêts débiteurs' : /CREDIT/.test(u) ? 'Intérêts créditeurs' : 'Intérêts')
     case 'pret':
-      return finish(/CAPITAL/.test(u) ? 'Echeance de pret (capital)' : 'Echeance de pret')
+      return finish(/CAPITAL/.test(u) ? 'Échéance de prêt (capital)' : 'Échéance de prêt')
     case 'carte': {
       const m = u.match(/X\d{4}/)
-      return finish(m ? `Releve carte ${m[0]}` : 'Releve carte')
+      return finish(m ? `Relevé carte ${m[0]}` : 'Relevé carte')
     }
     case 'retrait': {
       const rest = stripKindPrefix(raw, kind)
@@ -281,7 +305,7 @@ export function parseBankLabel(label: string): ParsedLabel {
       const rest = stripKindPrefix(raw, kind)
       const tokens = cleanTokens(tokenize(rest)).filter((t) => t.u !== 'AU')
       const place = softTitleCase(tokens.map((t) => t.raw).join(' '))
-      return finish(place ? `Versement especes — ${place}` : 'Versement especes')
+      return finish(place ? `Versement d'espèces — ${place}` : "Versement d'espèces")
     }
     case 'virement_recu':
     case 'virement_emis': {
