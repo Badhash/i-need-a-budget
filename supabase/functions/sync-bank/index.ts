@@ -82,6 +82,9 @@ interface TxPayload {
   counterparty?: string | null
   transferGroupId?: string | null
   notes?: string | null
+  // Moitie de virement creee par l'app (miroir de carte differee) : meme contrat
+  // que /api (TxPayload.synthetic), seule supprimable par « Annuler le virement ».
+  synthetic?: boolean
 }
 
 // REF H : payload transaction scinde en enc_core (leger) et enc_text (lourd),
@@ -90,7 +93,7 @@ interface TxPayload {
 // ecrites via enc_insert/enc_update (decode(...,'base64')).
 type TxCore = Pick<
   TxPayload,
-  'accountId' | 'categoryId' | 'bookingDate' | 'bookingMonth' | 'amount' | 'transferGroupId'
+  'accountId' | 'categoryId' | 'bookingDate' | 'bookingMonth' | 'amount' | 'transferGroupId' | 'synthetic'
 >
 type TxText = Pick<TxPayload, 'label' | 'counterparty' | 'notes'>
 
@@ -316,6 +319,7 @@ async function encodeTxColumns(
     bookingMonth: payload.bookingMonth,
     amount: payload.amount,
     transferGroupId: payload.transferGroupId ?? null,
+    ...(payload.synthetic && payload.transferGroupId ? { synthetic: true } : {}),
   }
   const text: TxText = {
     label: payload.label,
@@ -976,6 +980,7 @@ async function linkDeferredCardSettlements(userId: string, sinceDays?: number): 
         counterparty: null,
         transferGroupId,
         notes: null,
+        synthetic: true,
       }
       await insertTx(userId, mirror, {
         month_idx: await txMonthIdx(keys, userId, mirror.bookingMonth),

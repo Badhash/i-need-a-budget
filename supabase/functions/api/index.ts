@@ -104,6 +104,13 @@ interface TxPayload {
   counterparty?: string | null
   transferGroupId?: string | null
   notes?: string | null
+  /**
+   * Moitie de virement creee par l'app (miroir de convertToTransfer, miroir de
+   * carte differee de sync-bank) et non par la banque ou l'utilisateur : la
+   * seule qu'« Annuler le virement » peut supprimer. Ecrit dans enc_core tant
+   * que la ligne est une moitie de virement, efface quand elle est deliee.
+   */
+  synthetic?: boolean
 }
 
 // REF H : le payload transaction est scinde en deux colonnes chiffrees.
@@ -117,7 +124,7 @@ interface TxPayload {
 // lecture, decode(...,'base64') via enc_insert/enc_update en ecriture).
 type TxCore = Pick<
   TxPayload,
-  'accountId' | 'categoryId' | 'bookingDate' | 'bookingMonth' | 'amount' | 'transferGroupId'
+  'accountId' | 'categoryId' | 'bookingDate' | 'bookingMonth' | 'amount' | 'transferGroupId' | 'synthetic'
 >
 type TxText = Pick<TxPayload, 'label' | 'counterparty' | 'notes'>
 
@@ -590,6 +597,7 @@ interface TxRow {
   enc_text?: string | null
   enc_payload?: string | null
   tx_hash?: string | null
+  created_at?: string | null
 }
 
 // Reconstitue le payload complet. Ligne migree : enc_core + enc_text (AAD par
@@ -633,6 +641,9 @@ async function encodeTxColumns(
     bookingMonth: payload.bookingMonth,
     amount: payload.amount,
     transferGroupId: payload.transferGroupId ?? null,
+    // Marqueur porte seulement par une moitie de virement : delier la ligne
+    // (transferGroupId null) l'efface, elle redevient une ecriture ordinaire.
+    ...(payload.synthetic && payload.transferGroupId ? { synthetic: true } : {}),
   }
   const text: TxText = {
     label: payload.label,
@@ -1886,16 +1897,18 @@ async function actionConvertToTransfer(userId: string, params: Params) {
     counterparty: null,
     transferGroupId,
     notes: null,
+    synthetic: true,
   }
   // Ordre anti-orphelin : la transaction d'origine est mise a jour AVANT
   // l'insertion du miroir. Si l'insert echoue, rollback compensatoire de
   // l'origine ; un miroir orphelin fausserait silencieusement le solde du
   // compte cible, alors qu'un demi-transfert sur l'origine reste visible et
   // annulable via convertTransferToNormal.
+  let mirrorId: string | null = null
   const writePair = async () => {
     await updateTx(userId, transactionId, origin)
     try {
-      await insertTx(userId, mirror, {
+      mirrorId = await insertTx(userId, mirror, {
         month_idx: await txMonthIdx(keys, userId, payload.bookingMonth),
       })
     } catch (err) {
@@ -1913,7 +1926,7 @@ async function actionConvertToTransfer(userId: string, params: Params) {
   if (cross) {
     // Paire croisee : hors maintenance incrementale (cf. withAggregatesStale).
     await withAggregatesStale(userId, writePair)
-    return { ok: true, transferGroupId }
+    return { ok: true, transferGroupId, mirrorId }
   }
   await writePair()
   // Ecritures reussies : origine devenue moitie de transfert (categorie
@@ -1922,100 +1935,171 @@ async function actionConvertToTransfer(userId: string, params: Params) {
     await b.replaceTx(payload, origin)
     await b.applyTx(1, mirror)
   })
-  return { ok: true, transferGroupId }
+  // mirrorId : le front remplace son id temporaire sans relire tout l'historique.
+  return { ok: true, transferGroupId, mirrorId }
+}
+
+// Moitie de virement lue en entier, avec tx_hash (import bancaire ou non) et
+// created_at (ordre de creation), en clair.
+interface TransferHalf {
+  id: string
+  txHash: string | null
+  createdAt: string | null
+  payload: TxPayload
+}
+
+const TX_HALF_COLUMNS =
+  'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash, created_at'
+
+async function toTransferHalf(keys: CryptoKeys, userId: string, row: TxRow): Promise<TransferHalf> {
+  return {
+    id: row.id,
+    txHash: row.tx_hash ?? null,
+    createdAt: row.created_at ?? null,
+    payload: await decodeTx(keys, userId, row),
+  }
+}
+
+async function loadTransferHalf(
+  userId: string,
+  keys: CryptoKeys,
+  transactionId: string,
+): Promise<TransferHalf> {
+  const { data, error } = await admin
+    .from('transactions')
+    .select(TX_HALF_COLUMNS)
+    .eq('user_id', userId)
+    .eq('id', transactionId)
+    .maybeSingle()
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  if (!data) throw new ApiError(404, 'transaction inconnue')
+  return toTransferHalf(keys, userId, data as TxRow)
+}
+
+// Autres moities du groupe de virement de `half`. Trouvees par une lecture
+// BORNEE (enc_core des mois voisins, cf. loadTransferGroups) puis relues en
+// entier par id : on ne dechiffre plus tout l'historique, texte compris, pour
+// trouver un miroir.
+async function loadTransferPeers(
+  userId: string,
+  keys: CryptoKeys,
+  half: TransferHalf,
+): Promise<TransferHalf[]> {
+  const groupId = half.payload.transferGroupId
+  if (!groupId) return []
+  const groups = await loadTransferGroups(userId, keys, [
+    { id: half.id, bookingMonth: half.payload.bookingMonth, transferGroupId: groupId },
+  ])
+  const ids = (groups.get(groupId) ?? []).map((r) => r.id).filter((id) => id !== half.id)
+  if (ids.length === 0) return []
+  const { data, error } = await admin
+    .from('transactions')
+    .select(TX_HALF_COLUMNS)
+    .eq('user_id', userId)
+    .in('id', ids)
+  if (error) throw new ApiError(500, 'lecture transactions impossible')
+  const peers = await Promise.all(
+    ((data ?? []) as TxRow[]).map((row) => toTransferHalf(keys, userId, row)),
+  )
+  return peers.filter((p) => p.payload.transferGroupId === groupId)
+}
+
+// Moitie « miroir systeme » d'une paire, la seule qu'« Annuler le virement »
+// peut supprimer. Un import bancaire (tx_hash) ne l'est jamais.
+//   1. Marqueur `synthetic` (miroirs crees depuis son introduction).
+//   2. Paires plus anciennes : un miroir systeme n'a ni tx_hash ni
+//      contrepartie et reprend la date, le libelle et le montant oppose de
+//      l'autre moitie. Si les deux moities y repondent (origine saisie a la
+//      main), le miroir est la plus recente (inseree apres la mise a jour de
+//      l'origine).
+//   3. Sinon (import YNAB, paire ambigue) : aucune, les deux sont deliees.
+// L'ancienne regle (« l'autre moitie sans tx_hash est le miroir ») supprimait
+// la saisie d'origine quand on annulait depuis la ligne miroir, et la vraie
+// moitie d'un virement importe de YNAB.
+function syntheticHalfId(a: TransferHalf, b: TransferHalf): string | null {
+  const markedA = a.txHash === null && a.payload.synthetic === true
+  const markedB = b.txHash === null && b.payload.synthetic === true
+  if (markedA !== markedB) return markedA ? a.id : b.id
+  if (markedA && markedB) return null
+  const mirrors = (x: TransferHalf, y: TransferHalf) =>
+    x.txHash === null &&
+    !x.payload.counterparty &&
+    x.payload.label === y.payload.label &&
+    x.payload.amount === -y.payload.amount &&
+    x.payload.bookingDate === y.payload.bookingDate
+  const legacyA = mirrors(a, b)
+  const legacyB = mirrors(b, a)
+  if (legacyA && !legacyB) return a.id
+  if (legacyB && !legacyA) return b.id
+  if (legacyA && legacyB && a.createdAt && b.createdAt && a.createdAt !== b.createdAt) {
+    return a.createdAt > b.createdAt ? a.id : b.id
+  }
+  return null
 }
 
 async function actionConvertTransferToNormal(userId: string, params: Params) {
   const transactionId = requireUuid(params.transactionId, 'transactionId')
-
-  // tx_hash est charge en clair pour distinguer un miroir systeme (tx_hash
-  // NULL, ecriture synthetique) d'un vrai import bancaire (tx_hash non NULL,
-  // cas des paires liees par sync-bank) : un import reel ne doit JAMAIS etre
-  // supprime, sous peine de fausser durablement le solde du compte.
-  const data = await loadAllRows<TxRow>(
-    'transactions',
-    userId,
-    'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash',
-  )
   const keys = await getKeys()
-  const rows = await Promise.all(
-    data.map(async (row) => ({
-      id: row.id,
-      txHash: row.tx_hash ?? null,
-      payload: await decodeTx(keys, userId, row),
-    })),
-  )
-  const kept = rows.find((t) => t.id === transactionId)
-  if (!kept) throw new ApiError(404, 'transaction inconnue')
-  if (!kept.payload.transferGroupId) {
+
+  const clicked = await loadTransferHalf(userId, keys, transactionId)
+  if (!clicked.payload.transferGroupId) {
     throw new ApiError(400, 'la transaction n est pas un transfert')
   }
-
-  const mirror = rows.find(
-    (t) => t.payload.transferGroupId === kept.payload.transferGroupId && t.id !== transactionId,
+  const mirror = (await loadTransferPeers(userId, keys, clicked))[0] ?? null
+  // La moitie systeme est supprimee, QUEL QUE SOIT le cote clique ; l'autre
+  // (saisie, import bancaire ou YNAB) redevient une transaction ordinaire.
+  const removedId = mirror ? syntheticHalfId(clicked, mirror) : null
+  const removed = [clicked, mirror].find((h) => h !== null && h.id === removedId) ?? null
+  const unlinked = [clicked, mirror].filter(
+    (h): h is TransferHalf => h !== null && h.id !== removedId,
   )
+
   // Paire CROISEE (un compte budget, un compte de suivi) : sa moitie cote
   // budget comptait comme une transaction ordinaire, que la maintenance
   // incrementale ne sait pas retirer (cf. withAggregatesStale).
-  const accounts = await loadAll<AccountPayload>('accounts', userId)
-  const onBudget = onBudgetIds(accounts)
-  const offGroups = offBudgetTransferGroups(rows.map((t) => t.payload), onBudget)
-  const cross = rows.some(
-    (t) =>
-      t.payload.transferGroupId === kept.payload.transferGroupId &&
-      isCrossBudgetHalf(t.payload, onBudget, offGroups),
-  )
+  const onBudget = onBudgetIds(await loadAll<AccountPayload>('accounts', userId))
+  const cross =
+    mirror !== null &&
+    onBudget.has(clicked.payload.accountId) !== onBudget.has(mirror.payload.accountId)
 
   const writes = async () => {
-    if (mirror) {
-      if (mirror.txHash === null) {
-        // Miroir systeme : suppression sans perte de donnees bancaires.
+    let written = 0
+    try {
+      if (removed) {
         const { error: delErr } = await admin
           .from('transactions')
           .delete()
           .eq('user_id', userId)
-          .eq('id', mirror.id)
+          .eq('id', removed.id)
         if (delErr) throw new ApiError(500, 'suppression transactions impossible')
-      } else {
-        // Import bancaire reel : on delie au lieu de supprimer, la transaction
-        // redevient une ecriture normale a recategoriser.
-        await updateTx(userId, mirror.id, {
-          ...mirror.payload,
-          transferGroupId: null,
-        })
+        written += 1
       }
-    }
-    // La transaction conservee redevient normale. Sa categorie est conservee :
-    // null en general (l'utilisateur la recategorise ensuite), celle de la
-    // moitie cote budget d'une paire croisee (meme effet sur le budget).
-    try {
-      await updateTx(userId, transactionId, {
-        ...kept.payload,
-        transferGroupId: null,
-      })
+      // Les moities conservees gardent leur categorie : null en general
+      // (l'utilisateur recategorise), celle de la moitie cote budget d'une paire
+      // croisee (meme effet sur le budget).
+      for (const h of unlinked) {
+        await updateTx(userId, h.id, { ...h.payload, transferGroupId: null })
+        written += 1
+      }
     } catch (err) {
-      // Le miroir a deja pu etre supprime/delie : demi-etat non reflete par les
-      // agregats, on les invalide (fallback calcul complet).
-      if (mirror) await aggMarkStale(admin, userId).catch(() => {})
+      // Demi-etat non reflete par les agregats : on les invalide.
+      if (written > 0) await aggMarkStale(admin, userId).catch(() => {})
       throw err
     }
   }
+  const result = { ok: true, removedId, unlinkedIds: unlinked.map((h) => h.id) }
   if (cross) {
     await withAggregatesStale(userId, writes)
-    return { ok: true }
+    return result
   }
   await writes()
   await aggMaintain(userId, keys, async (b) => {
-    await b.replaceTx(kept.payload, { ...kept.payload, transferGroupId: null })
-    if (mirror) {
-      if (mirror.txHash === null) {
-        await b.applyTx(-1, mirror.payload)
-      } else {
-        await b.replaceTx(mirror.payload, { ...mirror.payload, transferGroupId: null })
-      }
+    if (removed) await b.applyTx(-1, removed.payload)
+    for (const h of unlinked) {
+      await b.replaceTx(h.payload, { ...h.payload, transferGroupId: null })
     }
   })
-  return { ok: true }
+  return result
 }
 
 // Tombstone de dedup : quand on supprime une ligne IMPORTEE (tx_hash non NULL),
@@ -2043,24 +2127,19 @@ async function recordDeletedHashes(userId: string, hashes: string[]): Promise<vo
 async function actionDeleteTransaction(userId: string, params: Params) {
   const transactionId = requireUuid(params.transactionId, 'transactionId')
 
-  const { data, error } = await admin
-    .from('transactions')
-    .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash')
-    .eq('user_id', userId)
-    .eq('id', transactionId)
-    .maybeSingle()
-  if (error) throw new ApiError(500, 'lecture transactions impossible')
-  if (!data) throw new ApiError(404, 'transaction inconnue')
-
   const keys = await getKeys()
-  const payload = await decodeTx(keys, userId, data as TxRow)
+  const self = await loadTransferHalf(userId, keys, transactionId)
+  const payload = self.payload
+  const data = { tx_hash: self.txHash }
 
-  // Transfert : le miroir est traite comme dans convertTransferToNormal —
-  // supprime s'il est synthetique (tx_hash NULL), simplement delie s'il s'agit
-  // d'un vrai import bancaire (jamais de perte de donnees bancaires implicite).
-  // Il est d'abord RECHERCHE (sans ecrire) pour savoir si la paire est croisee.
+  // Transfert : le miroir est supprime s'il n'est pas un import bancaire
+  // (tx_hash NULL : miroir systeme, saisie, import YNAB — supprimer un virement
+  // le supprime entier, comme dans YNAB), simplement delie s'il s'agit d'un
+  // vrai import bancaire (jamais de perte de donnees bancaires implicite). Il
+  // est d'abord RECHERCHE (lecture bornee, sans ecrire) pour savoir si la paire
+  // est croisee.
   const mirror = payload.transferGroupId
-    ? await findTransferMirror(userId, keys, transactionId, payload.transferGroupId)
+    ? ((await loadTransferPeers(userId, keys, self))[0] ?? null)
     : null
   // Paire CROISEE (un compte budget, un compte de suivi) : sa moitie cote
   // budget comptait comme une transaction ordinaire, que la maintenance
@@ -2113,38 +2192,24 @@ async function actionDeleteTransaction(userId: string, params: Params) {
       throw new ApiError(500, 'suppression transactions impossible')
     }
   }
+  // Issue pour le miroir (front) : supprime s'il n'est pas un import bancaire
+  // (une paire saisie ou importee de YNAB disparait entiere, comme dans YNAB),
+  // simplement delie sinon. Le front l'applique sans relire tout l'historique.
+  const result = {
+    ok: true,
+    mirrorId: mirror?.id ?? null,
+    mirrorRemoved: mirror ? mirror.txHash === null : false,
+  }
   if (cross) {
     await withAggregatesStale(userId, writes)
-    return { ok: true }
+    return result
   }
   await writes()
   await aggMaintain(userId, keys, async (b) => {
     await b.applyTx(-1, payload)
     if (mirrorAgg) await mirrorAgg(b)
   })
-  return { ok: true }
-}
-
-// Premiere autre moitie du groupe de transfert (lecture complete, tx_hash en
-// clair : distingue un miroir systeme d'un import bancaire). null si orpheline.
-async function findTransferMirror(
-  userId: string,
-  keys: CryptoKeys,
-  transactionId: string,
-  transferGroupId: string,
-): Promise<{ id: string; txHash: string | null; payload: TxPayload } | null> {
-  const rows = await loadAllRows<TxRow>(
-    'transactions',
-    userId,
-    'id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64, tx_hash',
-  )
-  for (const row of rows) {
-    if (row.id === transactionId) continue
-    const other = await decodeTx(keys, userId, row)
-    if (other.transferGroupId !== transferGroupId) continue
-    return { id: row.id, txHash: (row.tx_hash as string | null) ?? null, payload: other }
-  }
-  return null
+  return result
 }
 
 async function actionSetAssigned(userId: string, params: Params) {
