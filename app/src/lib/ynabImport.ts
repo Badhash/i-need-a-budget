@@ -43,6 +43,13 @@ export interface ParsedAccount {
    * propose en suivi. L'utilisateur peut corriger dans l'apercu.
    */
   onBudget: boolean
+  /**
+   * Propose en suivi mais destinataire de virements SANS categorie depuis un
+   * compte budget : dans YNAB, seul un virement entre deux comptes budget n'en
+   * porte pas. Sans doute un compte budget alimente par virements (a verifier :
+   * en suivi, ces virements deviendraient des sorties du budget a categoriser).
+   */
+  reviewTracking: boolean
 }
 interface ParsedGroup {
   key: string
@@ -563,7 +570,12 @@ export function parseYnabExport(registerText: string, budgetText?: string, dateO
       continue
     }
     if (!accounts.has(r.accountKey)) {
-      accounts.set(r.accountKey, { key: r.accountKey, name: r.accountName.slice(0, 80) || 'Compte', onBudget: false })
+      accounts.set(r.accountKey, {
+        key: r.accountKey,
+        name: r.accountName.slice(0, 80) || 'Compte',
+        onBudget: false,
+        reviewTracking: false,
+      })
     }
 
     // On se fie a la colonne Category : categorie presente -> resolue ;
@@ -596,6 +608,12 @@ export function parseYnabExport(registerText: string, budgetText?: string, dateO
     if (!maxDate || iso > maxDate) maxDate = iso
   }
   for (const a of accounts.values()) a.onBudget = categorized.has(a.key)
+  const accountByName = new Map([...accounts.keys()].map((key) => [normalizeHeader(key), key]))
+  for (const t of transactions) {
+    if (t.transferTo === null || t.categoryKey !== null || !accounts.get(t.accountKey)?.onBudget) continue
+    const target = accounts.get(accountByName.get(normalizeHeader(t.transferTo)) ?? '')
+    if (target && !target.onBudget) target.reviewTracking = true
+  }
 
   let assignments: ParsedAssignment[] = []
   let hasBudget = false

@@ -14,6 +14,7 @@ import {
   Import,
   Info,
   Sparkles,
+  TriangleAlert,
 } from 'lucide-react'
 import {
   buildYnabPlan,
@@ -225,6 +226,15 @@ export function YnabImportCard() {
                         <span className="block text-[12px] text-soft tnum">
                           {n(txCount.get(a.key) ?? 0)} transaction{(txCount.get(a.key) ?? 0) > 1 ? 's' : ''}
                         </span>
+                        {a.reviewTracking && choice.selected && !choice.onBudget && (
+                          <span className="mt-0.5 flex items-start gap-1 text-[12px] leading-snug text-ink">
+                            <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-warning" />
+                            <span>
+                              <span className="font-medium">À vérifier :</span> reçoit des virements sans catégorie d’un
+                              compte budget, c’est sans doute un compte budget.
+                            </span>
+                          </span>
+                        )}
                       </span>
                     </button>
                     {choice.selected && (
