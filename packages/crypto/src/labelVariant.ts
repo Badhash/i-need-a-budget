@@ -23,15 +23,20 @@ function labelCore(label: string): string {
     .trim()
 }
 
+// Prefixe carte « carte 14/04/26 » : commun a tous les achats carte d'un jour,
+// il ne distingue rien et ne compte pas dans la longueur minimale.
+const CARD_PREFIX_RE = /^carte \d{2}\/\d{2}(\/\d{2,4})? /
+
 /**
  * Vrai si deux libelles designent vraisemblablement la meme operation : une
- * fois retire le suffixe carte, l'un est un prefixe de l'autre (12 caracteres
- * minimum). Ne compare que les libelles : l'appelant verifie lui-meme compte,
- * montant et date (identiques).
+ * fois retire le suffixe carte, l'un est un prefixe de l'autre, avec au moins
+ * 12 caracteres hors prefixe carte (sinon « CARTE 14/04/26 SNCF » absorberait
+ * « CARTE 14/04/26 SNCF INTERNET »). Ne compare que les libelles : l'appelant
+ * verifie lui-meme compte, montant et date (identiques).
  */
 export function isLabelVariant(a: string, b: string): boolean {
   const x = labelCore(a)
   const y = labelCore(b)
   const [short, long] = x.length <= y.length ? [x, y] : [y, x]
-  return short.length >= MIN_CORE && long.startsWith(short)
+  return short.replace(CARD_PREFIX_RE, '').length >= MIN_CORE && long.startsWith(short)
 }

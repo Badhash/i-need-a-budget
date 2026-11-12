@@ -34,4 +34,11 @@ describe('isLabelVariant', () => {
     expect(isLabelVariant('VIR', 'VIR INST')).toBe(false)
     expect(isLabelVariant('CARTE X', 'CARTE X1234 MAGASIN')).toBe(false)
   })
+
+  it('ne compte pas le prefixe carte dans la longueur minimale', () => {
+    expect(isLabelVariant('CARTE 14/04/26 SNCF', 'CARTE 14/04/26 SNCF INTERNET')).toBe(false)
+    expect(isLabelVariant('CARTE 14/04/26 SNCF CB*1234', 'CARTE 14/04/26 SNCF INTERNET')).toBe(false)
+    expect(isLabelVariant('CARTE 14/04/26 BOULANGERIE', 'CARTE 14/04/26 BOULANGERIE DU MARCHE')).toBe(false)
+    expect(isLabelVariant('CARTE 14/04/26 BOULANGERIE DU', 'CARTE 14/04/26 BOULANGERIE DU MARCHE')).toBe(true)
+  })
 })
