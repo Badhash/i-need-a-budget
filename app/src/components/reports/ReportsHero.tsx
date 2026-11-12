@@ -26,6 +26,11 @@ const EUROS = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR
 // Hauteurs fixes (squelette identique au rendu final : aucun decalage).
 const CHART_HEIGHT = 'h-32 sm:h-36 lg:h-44'
 
+// Taux d'epargne affiche borne : en dessous de -100 % (depenses plus de deux
+// fois superieures aux revenus, typique d'un debut de mois), on affiche
+// « < -100 % » et aucun ecart en points, qui n'aurait plus de sens.
+const RATE_FLOOR = -1
+
 function rateTone(rate: number | null): ProgressTone {
   if (rate === null) return 'neutral'
   if (rate < 0) return 'danger'
@@ -127,11 +132,25 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
   const spendDelta = spendAvg && spendAvg > 0 ? (spendRef - spendAvg) / spendAvg : null
   const netRef = a.toDate ? a.toDate.net : a.net
   const netAvg = a.toDate ? a.toDate.averageNet : (avg?.net ?? null)
-  const rateDelta = a.savingsRate !== null && avg?.savingsRate != null ? a.savingsRate - avg.savingsRate : null
+  // Taux d'epargne : meme regle. Le taux d'un mois partiel face a celui de
+  // mois complets donnait « -678 % » et « -698 pts » le 11 du mois.
+  const rateRef = a.toDate ? a.toDate.savingsRate : a.savingsRate
+  const rateAvg = a.toDate ? a.toDate.averageSavingsRate : (avg?.savingsRate ?? null)
+  const rateDelta =
+    rateRef !== null && rateAvg !== null && rateRef >= RATE_FLOOR && rateAvg >= RATE_FLOOR ? rateRef - rateAvg : null
+  const rateEmpty =
+    a.savingsRate === null || rateRef === null
+      ? 'En attente de revenus'
+      : rateAvg === null
+        ? a.toDate && avg
+          ? 'Pas de moyenne à date'
+          : 'Pas encore de moyenne'
+        : 'Pas de comparaison'
+  const vsAverage = a.toDate ? 'vs moyenne à date' : 'vs moyenne'
 
   const spent = useRevealNumber(a.spending)
   const saved = useRevealNumber(a.net)
-  const ratePermille = useRevealNumber(Math.round((a.savingsRate ?? 0) * 1000))
+  const ratePermille = useRevealNumber(Math.round(Math.max(RATE_FLOOR, a.savingsRate ?? 0) * 1000))
 
   const overPace =
     a.projectedSpending !== null && avg !== null && avg.spending > 0 && a.projectedSpending > avg.spending * 1.05
@@ -183,7 +202,7 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
             <TrendBadge
               delta={netAvg === null ? null : netRef - netAvg}
               format="amount"
-              label="vs moyenne"
+              label={vsAverage}
               emptyLabel="Pas encore de moyenne"
             />
           ),
@@ -212,22 +231,24 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
                 <Sprout aria-hidden className="h-4 w-4 text-success" />
               </ProgressRing>
               <span className={cn(KPI_VALUE, 'tnum', a.savingsRate !== null && a.savingsRate < 0 && 'text-danger')}>
-                {a.savingsRate === null ? '—' : fmtPercent(ratePermille / 1000)}
+                {a.savingsRate === null
+                  ? '—'
+                  : a.savingsRate < RATE_FLOOR
+                    ? `< ${fmtPercent(RATE_FLOOR)}`
+                    : fmtPercent(ratePermille / 1000)}
               </span>
             </span>
           ),
-          badge: (
-            <TrendBadge
-              delta={rateDelta}
-              format="points"
-              label="vs moyenne"
-              emptyLabel={a.savingsRate === null ? 'En attente de revenus' : 'Pas encore de moyenne'}
-            />
-          ),
+          badge: <TrendBadge delta={rateDelta} format="points" label={vsAverage} emptyLabel={rateEmpty} />,
           caption:
-            avg?.savingsRate != null ? (
+            rateAvg !== null && rateAvg >= RATE_FLOOR ? (
               <>
-                moyenne <span className="tnum">{fmtPercent(avg.savingsRate)}</span> sur {a.averageMonths.length} mois
+                moyenne{a.toDate ? ' à date' : ''} <span className="tnum">{fmtPercent(rateAvg)}</span> sur{' '}
+                {a.averageMonths.length} mois
+              </>
+            ) : a.toDate && avg?.savingsRate != null ? (
+              <>
+                moyenne de fin de mois <span className="tnum">{fmtPercent(avg.savingsRate)}</span>
               </>
             ) : undefined,
         },
@@ -274,7 +295,7 @@ export function ReportsHeroSkeleton({
               <InlineSkeleton className="h-[0.8em] w-[4.4em]" />
             </span>
           ),
-          badge: <BadgeSkeleton text="−000 € vs moyenne" />,
+          badge: <BadgeSkeleton text={reference === currentMonth ? '−000 € vs moyenne à date' : '−000 € vs moyenne'} />,
           caption: <InlineSkeleton className="h-3 w-40" />,
         },
         rate: {
@@ -287,7 +308,7 @@ export function ReportsHeroSkeleton({
               </span>
             </span>
           ),
-          badge: <BadgeSkeleton text="−0 pts vs moyenne" />,
+          badge: <BadgeSkeleton text={reference === currentMonth ? '−0 pts vs moyenne à date' : '−0 pts vs moyenne'} />,
           caption: <InlineSkeleton className="h-3 w-36" />,
         },
       }}

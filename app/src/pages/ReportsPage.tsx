@@ -55,6 +55,7 @@ function DesktopReports({ a, currentMonth, isDesktop }: LayoutProps) {
         reference={a.reference}
         average={a.average}
         averageCount={a.averageMonths.length}
+        currentMonth={currentMonth}
       />
       <NetWorthWidget a={a} accounts={accounts} />
       <RecurringWidget a={a} />
@@ -81,6 +82,7 @@ function MobileReports({ a, currentMonth, isDesktop }: LayoutProps) {
         reference={a.reference}
         average={a.average}
         averageCount={a.averageMonths.length}
+        currentMonth={currentMonth}
       />
       <TopMerchants a={a} currentMonth={currentMonth} />
       <WeekdayWidget a={a} />

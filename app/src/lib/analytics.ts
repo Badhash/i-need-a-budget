@@ -146,7 +146,7 @@ export interface Analytics {
   hasData: boolean // au moins une transaction
   hasActivity: boolean // depense ou revenu sur le mois de reference
   months: string[] // mois des graphes : periode + reference, sans les mois anterieurs aux donnees
-  averageMonths: string[] // mois pris en compte dans les moyennes
+  averageMonths: string[] // mois pris en compte dans les moyennes (mois clos uniquement)
   monthly: MonthPoint[] // un point par mois de `months`
   spending: number
   income: number
@@ -160,6 +160,8 @@ export interface Analytics {
     averageSpending: number | null
     net: number
     averageNet: number | null
+    savingsRate: number | null // taux a date (null sans revenu a date)
+    averageSavingsRate: number | null // taux moyen a la meme date (null sans revenu moyen a date)
   } | null
   projectedSpending: number | null // mois courant uniquement
   previousSpending: number | null // mois precedent (a date si mois courant), null sans donnees
@@ -493,8 +495,11 @@ export function computeAnalytics(
   const trimmed = windowMonths.filter((m) => m >= firstMonth)
   const months = trimmed.length > 0 ? trimmed : [reference]
   // Mois de comparaison : ceux de la periode qui ont une activite (on ne dilue
-  // pas les moyennes avec des mois anterieurs au premier import).
-  const averageMonths = windowMonths.filter((m) => m !== reference && m >= firstMonth && active(m))
+  // pas les moyennes avec des mois anterieurs au premier import), CLOS (le mois
+  // en cours, partiel, n'entre dans aucune moyenne, meme d'un mois futur).
+  const averageMonths = windowMonths.filter(
+    (m) => m !== reference && m < currentMonth && m >= firstMonth && active(m),
+  )
 
   // --- Identite des marchands ------------------------------------------------
   const displayCache = new Map<string, string>()
@@ -570,6 +575,13 @@ export function computeAnalytics(
       averageSpending: avgSpentToDate,
       net: incomeToDate - spentToDate,
       averageNet: avgSpentToDate === null || avgIncomeToDate === null ? null : avgIncomeToDate - avgSpentToDate,
+      // Taux d'epargne a date, a comparer au taux moyen a la MEME date : un
+      // mois partiel face a des mois complets donnait « −678 % » contre 20 %.
+      savingsRate: incomeToDate > 0 ? (incomeToDate - spentToDate) / incomeToDate : null,
+      averageSavingsRate:
+        avgSpentToDate !== null && avgIncomeToDate !== null && avgIncomeToDate > 0
+          ? (avgIncomeToDate - avgSpentToDate) / avgIncomeToDate
+          : null,
     }
     // Projection : le reste du mois « comme d'habitude » (fin de mois moyenne
     // moins cumul moyen a date). Sans historique : extrapolation lineaire.

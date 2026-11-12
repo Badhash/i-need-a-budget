@@ -1,7 +1,7 @@
 import { Bar, BarChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ArrowLeftRight } from 'lucide-react'
 import { useChartPalette } from '@/hooks/useTheme'
-import { fmtEUR, fmtEURSigned, fmtMonthShort, fmtMonthTitle } from '@/lib/format'
+import { currentMonth as parisMonth, fmtEUR, fmtEURSigned, fmtMonthShort, fmtMonthTitle } from '@/lib/format'
 import type { Averages, MonthPoint } from '@/lib/analytics'
 import { Amount } from '@/components/shared/Amount'
 import { Badge } from '@/components/ui/badge'
@@ -35,6 +35,7 @@ export function IncomeExpenseWidget({
   reference,
   average,
   averageCount,
+  currentMonth,
   className,
 }: {
   monthly: MonthPoint[]
@@ -45,6 +46,8 @@ export function IncomeExpenseWidget({
   /** Moyennes de la periode (defaut : calculees sur les mois precedant le dernier). */
   average?: Averages | null
   averageCount?: number
+  /** Mois en cours (defaut : celui du jour, fuseau Europe/Paris). */
+  currentMonth?: string
   className?: string
 }) {
   const palette = useChartPalette()
@@ -65,8 +68,12 @@ export function IncomeExpenseWidget({
         : null
   const count = averageCount ?? past.length
   const refPoint = points.find((p) => p.month === ref)
-  // Meilleur mois de la fenetre (celui ou l'on a le plus mis de cote).
-  const best = points.length > 1 ? points.reduce((b, p) => (p.net > b.net ? p : b), points[0]!) : null
+  // Meilleur mois de la fenetre (celui ou l'on a le plus mis de cote), parmi
+  // les mois CLOS : le mois en cours, partiel, l'emportait des que le salaire
+  // tombait en debut de mois (1 300 EUR « mis de cote » le 11 contre 500).
+  const thisMonth = currentMonth ?? parisMonth()
+  const closed = points.filter((p) => p.month < thisMonth)
+  const best = closed.length > 1 ? closed.reduce((b, p) => (p.net > b.net ? p : b), closed[0]!) : null
 
   const data = points.map((p) => ({ ...p, label: fmtMonthShort(p.month) }))
   const refLabel = ref ? fmtMonthShort(ref) : ''

@@ -24,13 +24,15 @@ function headline(a: Analytics): string {
     return a.isCurrentMonth ? 'Tes revenus du mois ne sont pas encore arrivés.' : `${when}, aucun revenu n’a été enregistré.`
   }
   if (a.savingsRate < 0) {
-    return `${when}, tes dépenses ont dépassé tes revenus de ${EUROS.format(-a.net / 100)}.`
+    return a.isCurrentMonth
+      ? `${when}, tes dépenses dépassent pour l’instant tes revenus de ${EUROS.format(-a.net / 100)}.`
+      : `${when}, tes dépenses ont dépassé tes revenus de ${EUROS.format(-a.net / 100)}.`
   }
-  const avg = a.average?.savingsRate
-  return (
-    `${when}, tu as mis de côté ${fmtPercent(a.savingsRate)} de tes revenus` +
-    (avg != null ? ` (moyenne ${fmtPercent(avg)}).` : '.')
-  )
+  // Mois en cours : la moyenne citee est celle a la meme date (un mois
+  // partiel face a des mois complets n'a pas de sens).
+  const avg = a.toDate ? a.toDate.averageSavingsRate : a.average?.savingsRate
+  const avgText = avg == null || avg < -1 ? '' : ` (moyenne${a.toDate ? ' à date' : ''} ${fmtPercent(avg)})`
+  return `${when}, tu as mis de côté ${fmtPercent(a.savingsRate)} de tes revenus${a.toDate ? ' pour l’instant' : ''}${avgText}.`
 }
 
 /** En-tete du coach (partage avec le squelette : memes boites, memes lignes). */
