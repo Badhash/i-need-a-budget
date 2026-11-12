@@ -114,10 +114,32 @@ async function sendAssignments(month: string, changes: AssignTarget[]): Promise<
   )
 }
 
+/** Valeur assignee posee par une action sur une enveloppe (avant -> apres). */
+interface AppliedChange {
+  categoryId: string
+  prev: number
+  next: number
+}
+
 interface AssignContext {
-  previous: BudgetMonth | undefined
   key: readonly ['budget', string]
+  /** Ce que l'action a change dans le cache : seul cela est annule en cas d'echec. */
+  applied: AppliedChange[]
   stepId: number | null
+}
+
+// Valeurs avant -> apres de chaque element du lot, dans l'ordre d'application
+// (une enveloppe presente deux fois part de la valeur posee juste avant).
+function describeApplied(previous: BudgetMonth, changes: AssignTarget[]): AppliedChange[] {
+  const current = new Map<string, number>()
+  const out: AppliedChange[] = []
+  for (const c of changes) {
+    const prev = current.get(c.categoryId) ?? findRow(previous, c.categoryId)?.assigned
+    if (prev === undefined) continue
+    out.push({ categoryId: c.categoryId, prev, next: c.amount })
+    current.set(c.categoryId, c.amount)
+  }
+  return out
 }
 
 // Mise a jour OPTIMISTE partagee : la valeur assignee, le Disponible des
@@ -145,19 +167,37 @@ async function optimisticAssign(
   queryClient.setQueryData<BudgetMonth>(key, (old) => (old ? applyAllToCache(old, changes) : old))
   // La cle est CAPTUREE ici : si l'utilisateur change de mois pendant le
   // POST, le rollback doit viser le mois de l'assignation, pas celui affiche.
-  return { previous, key, stepId }
+  return { key, applied: previous ? describeApplied(previous, changes) : [], stepId }
 }
 
-// Rollback discret si le reseau echoue : on restaure l'etat d'avant, PUIS on
-// refetch la cle du mois (le snapshot peut ecraser les patchs d'autres
-// mutations deja commitees cote serveur — le refetch scope remet la verite
-// sans attendre la reconciliation Realtime, jusqu'a 30 s). L'etape
-// d'historique de l'action echouee n'a plus rien a annuler : retiree.
+// Rollback discret si l'ecriture echoue : on annule SEULEMENT ce que l'action
+// avait pose (et non l'instantane complet du mois, qui effacait les valeurs
+// optimistes des actions suivantes encore en file). Une enveloppe dont la
+// valeur a ete remplacee depuis par une autre action garde cette valeur (son
+// propre rollback s'en charge). Puis le mois est relu DERRIERE la file
+// d'ecritures : un lot partiellement ecrit ou un demi-deplacement reapparait
+// tel que le serveur l'a enregistre, sans attendre la reconciliation Realtime
+// (jusqu'a 30 s), et sans qu'une reponse anterieure aux ecritures suivantes
+// n'ecrase leur optimisme. L'etape d'historique de l'action echouee n'a plus
+// rien a annuler : retiree.
 function rollbackAssign(queryClient: QueryClient, month: string, context: AssignContext | undefined): void {
   const k = context?.key ?? (['budget', month] as const)
-  if (context?.previous) queryClient.setQueryData(k, context.previous)
+  const applied = context?.applied ?? []
+  if (applied.length > 0) {
+    queryClient.setQueryData<BudgetMonth>(k, (old) => {
+      if (!old) return old
+      let next = old
+      for (let i = applied.length - 1; i >= 0; i -= 1) {
+        const c = applied[i]!
+        if (findRow(next, c.categoryId)?.assigned === c.next) next = applyAssignToCache(next, c.categoryId, c.prev)
+      }
+      return next
+    })
+  }
   if (context?.stepId != null) useBudgetHistory.getState().discard(context.stepId)
-  void queryClient.invalidateQueries({ queryKey: k })
+  void enqueue(async () => {
+    void queryClient.invalidateQueries({ queryKey: k })
+  })
 }
 
 // Pas de refetch du mois assigne (deja exact en optimiste). Les AUTRES mois en
@@ -216,7 +256,7 @@ export function useAssignBatchMutation(month: string) {
 // Deplacement d'argent entre deux enveloppes (couvrir un depassement / deplacer
 // un excedent) : deux setAssigned coherents. La mise a jour du cache applique
 // les DEUX cotes en une seule passe optimiste et UNE etape d'historique ; en cas
-// d'echec reseau, les deux sont annules ensemble (restauration du snapshot).
+// d'echec, les deux sont annules ensemble (rollbackAssign).
 // Les deux POST et l'eventuelle compensation forment UNE SEULE tache de la
 // file : aucune saisie ne s'intercale entre eux (elle serait ecrasee par le
 // second cote ou par la compensation). Le total assigne (from - X puis to + X)
@@ -273,8 +313,8 @@ export function useMoveMutation(month: string) {
         ],
         { record: true, label: `Déplacement de ${fmtEUR(amount)}` },
       ),
-    // Meme discipline que useAssignMutation : rollback sur la cle capturee puis
-    // refetch scope (le snapshot peut ecraser d'autres patchs deja commites).
+    // Meme discipline que useAssignMutation : rollback des deux cotes sur la cle
+    // capturee puis relecture scopee derriere la file.
     onError: (_err, _input, context) => rollbackAssign(queryClient, month, context),
     onSuccess: (_data, _input, context) => invalidateOtherMonths(queryClient, month, context),
   })
