@@ -657,18 +657,41 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
     const category = db.categories.find((c) => c.id === categoryId)
     if (!category) throw new ApiError(404, 'categorie inconnue')
     if (category.isIncome) throw new ApiError(400, 'les categories de revenus ne se suppriment pas')
+    // Reaffectation (fonctionnalite categoryReassign) : meme contrat que /api.
+    const reassignTo = hasFeature('categoryReassign') ? optionalUuid(p.reassignTo, 'reassignTo') : null
+    if (reassignTo) {
+      const target = db.categories.find((c) => c.id === reassignTo)
+      if (!target || reassignTo === categoryId) throw new ApiError(400, 'categorie de reaffectation invalide')
+      if (target.isIncome) throw new ApiError(400, 'reaffectation vers une categorie de revenus impossible')
+    }
+    const onBudget = new Set(db.accounts.filter((a) => a.onBudget).map((a) => a.id))
+    const groups = crossBudget() ? crossBudgetGroups(db) : new Set<string>()
     let uncategorized = 0
+    let reassigned = 0
     for (const t of db.transactions) {
       if (t.categoryId !== categoryId) continue
-      t.categoryId = null
-      uncategorized += 1
+      const next =
+        reassignTo && onBudget.has(t.accountId) && (!t.transferGroupId || isCrossBudgetHalf(db, t, groups))
+          ? reassignTo
+          : null
+      t.categoryId = next
+      if (next) reassigned += 1
+      else uncategorized += 1
+    }
+    if (reassignTo) {
+      for (const a of db.assignments.filter((x) => x.categoryId === categoryId)) {
+        const existing = db.assignments.find((x) => x.categoryId === reassignTo && x.month === a.month)
+        if (existing) existing.amount += a.amount
+        else db.assignments.push({ ...a, id: randomUuid(), categoryId: reassignTo })
+      }
+      for (const r of db.rules) if (r.categoryId === categoryId) r.categoryId = reassignTo
     }
     db.assignments = db.assignments.filter((a) => a.categoryId !== categoryId)
     db.targets = db.targets.filter((t) => t.categoryId !== categoryId)
     db.rules = db.rules.filter((r) => r.categoryId !== categoryId)
     forgetPayeeCategory(db, categoryId)
     db.categories = db.categories.filter((c) => c.id !== categoryId)
-    return { ok: true, uncategorized }
+    return { ok: true, uncategorized, reassigned }
   },
 
   createCategoryGroup: (db, p) => {

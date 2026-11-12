@@ -1,6 +1,8 @@
 // Feuille de suppression d'une categorie, avec reaffectation optionnelle de ses
 // transactions : sans cible, elles repassent « À catégoriser » (comportement
-// serveur de deleteCategory) ; avec une cible, elles y sont categorisees par
+// serveur de deleteCategory). Avec une cible et un serveur categoryReassign,
+// deleteCategory reaffecte en une action transactions, montants assignes et
+// regles (regle YNAB) ; serveur plus ancien : transactions categorisees par
 // lots de 200 (categorizeMany, progression affichee) AVANT la suppression.
 
 import { useMemo, useState } from 'react'
@@ -8,7 +10,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Check, Inbox, ReceiptText, Search } from 'lucide-react'
 import type { Category, CategoryGroup } from '@/types/domain'
 import { useTransactions } from '@/lib/queries'
-import { reassignCategoryTransactions, useDeleteCategoryMutation } from '@/lib/taxonomy'
+import { useServerFeatures } from '@/lib/data'
+import { reassignCategoryTransactions, reassignableTransactions, useDeleteCategoryMutation } from '@/lib/taxonomy'
 import { toast } from '@/lib/toast'
 import { useSheetKeyboardInset } from '@/hooks/useKeyboardInset'
 import { GroupPill } from '@/components/shared/GroupPill'
@@ -53,6 +56,7 @@ export function DeleteCategoryDialog({
   const remove = useDeleteCategoryMutation()
   const { data: txs, isPending: txPending } = useTransactions()
   const keyboardInset = useSheetKeyboardInset()
+  const serverReassign = useServerFeatures().has('categoryReassign')
   const [mode, setMode] = useState<Mode>('uncat')
   const [targetId, setTargetId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -117,6 +121,21 @@ export function DeleteCategoryDialog({
     if (!category || !canConfirm) return
     setError(null)
     let moved = 0
+    if (reassign && target && serverReassign) {
+      // Une seule action serveur : transactions, montants assignes et regles.
+      moved = txs ? reassignableTransactions(queryClient, txs, category.id).length : 0
+      remove.mutate({ categoryId: category.id, reassignTo: target.id })
+      toast({
+        message: `« ${category.name} » supprimée`,
+        description:
+          moved > 0
+            ? `${plural(moved, 'transaction', 'transactions')} et montants assignés réaffectés à « ${target.name} »`
+            : `Montants assignés réaffectés à « ${target.name} »`,
+        tone: 'success',
+      })
+      onClose()
+      return
+    }
     if (reassign && target) {
       setRunning(true)
       try {
@@ -155,10 +174,23 @@ export function DeleteCategoryDialog({
             <DialogHeader>
               <DialogTitle className="pr-8">Supprimer « {category.name} » ?</DialogTitle>
               <DialogDescription>
-                Ses montants assignés
-                {targetCount > 0 ? ', son objectif' : ''}
-                {ruleCount > 0 ? ` et ${plural(ruleCount, 'règle', 'règles')}` : ''} seront supprimés. Cette action est
-                irréversible.
+                {reassign && serverReassign ? (
+                  <>
+                    Ses transactions
+                    {ruleCount > 0
+                      ? `, ses montants assignés et ${plural(ruleCount, 'règle', 'règles')}`
+                      : ' et ses montants assignés'}{' '}
+                    passeront à la catégorie choisie{targetCount > 0 ? ', son objectif sera supprimé' : ''}. Cette
+                    action est irréversible.
+                  </>
+                ) : (
+                  <>
+                    Ses montants assignés
+                    {targetCount > 0 ? ', son objectif' : ''}
+                    {ruleCount > 0 ? ` et ${plural(ruleCount, 'règle', 'règles')}` : ''} seront supprimés. Cette action
+                    est irréversible.
+                  </>
+                )}
               </DialogDescription>
             </DialogHeader>
 

@@ -50,8 +50,12 @@ export async function apiUpdateCategory(input: {
   await apiCall('updateCategory', input)
 }
 
-export async function apiDeleteCategory(input: { categoryId: string }): Promise<{ ok: true; uncategorized: number }> {
-  return apiCall<{ ok: true; uncategorized: number }>('deleteCategory', input)
+export async function apiDeleteCategory(input: {
+  categoryId: string
+  /** Cible de reaffectation (fonctionnalite serveur categoryReassign). */
+  reassignTo?: string
+}): Promise<{ ok: true; uncategorized: number; reassigned?: number }> {
+  return apiCall<{ ok: true; uncategorized: number; reassigned?: number }>('deleteCategory', input)
 }
 
 export async function apiCreateGroup(input: {
@@ -411,37 +415,56 @@ export function useDeleteCategoryMutation() {
   return useMutation({
     // Supprimer pendant la fenetre de creation attendait jusqu'ici que l'id
     // serveur existe : la file resout categoryId apres confirmation.
-    mutationFn: ({ categoryId }: { categoryId: string }) =>
-      enqueue(() => apiDeleteCategory({ categoryId: resolveId(categoryId) }), {
-        deps: [categoryId],
-      }),
-    onMutate: async ({ categoryId }): Promise<DeleteContext> => {
+    mutationFn: ({ categoryId, reassignTo }: { categoryId: string; reassignTo?: string }) =>
+      enqueue(
+        () =>
+          apiDeleteCategory({
+            categoryId: resolveId(categoryId),
+            ...(reassignTo ? { reassignTo: resolveId(reassignTo) } : {}),
+          }),
+        { deps: reassignTo ? [categoryId, reassignTo] : [categoryId] },
+      ),
+    onMutate: async ({ categoryId, reassignTo }): Promise<DeleteContext> => {
       await pauseReads(queryClient, TRANSACTIONS_KEY)
-      // Le serveur decategorise les transactions de la categorie : meme effet
-      // en optimiste sur la liste et sur le badge « À catégoriser » (compteur
-      // du bootstrap), au lieu d'un refetch complet de ['transactions'].
+      // Le serveur decategorise les transactions de la categorie (ou les
+      // reaffecte a la cible) : meme effet en optimiste sur la liste et sur le
+      // badge « À catégoriser » (compteur du bootstrap), au lieu d'un refetch
+      // complet de ['transactions']. Meme selection que le serveur : comptes
+      // budget, hors moitie de virement neutre.
       const transactions = queryClient.getQueryData<Transaction[]>(TRANSACTIONS_KEY)
+      const boot = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)
+      const onBudget = new Set((boot?.accounts ?? []).filter((a) => a.onBudget).map((a) => a.id))
+      const nextCategory = (t: Transaction): string | null =>
+        reassignTo && onBudget.has(t.accountId) && reassignableTransactions(queryClient, [t], categoryId).length > 0
+          ? reassignTo
+          : null
       let countDelta = 0
-      let touched = false
+      const changed = new Map<string, string | null>()
       for (const t of transactions ?? []) {
         if (t.categoryId !== categoryId) continue
-        touched = true
+        const next = nextCategory(t)
+        changed.set(t.id, next)
         const before = countsAsUncategorized(queryClient, t)
-        const after = countsAsUncategorized(queryClient, { ...t, categoryId: null })
+        const after = countsAsUncategorized(queryClient, { ...t, categoryId: next })
         countDelta += (after ? 1 : 0) - (before ? 1 : 0)
       }
-      if (touched) {
+      if (changed.size > 0) {
         queryClient.setQueryData<Transaction[]>(TRANSACTIONS_KEY, (old) =>
-          old?.map((t) => (t.categoryId === categoryId ? { ...t, categoryId: null } : t)),
+          old?.map((t) => (changed.has(t.id) ? { ...t, categoryId: changed.get(t.id) ?? null } : t)),
         )
       }
-      // Objectif et regles de la categorie : purges aussi cote serveur.
+      // Objectif de la categorie : purge aussi cote serveur. Regles : purgees,
+      // ou reaffectees a la cible.
       const targets = queryClient.getQueryData(TARGETS_KEY)
       const rules = queryClient.getQueryData(RULES_KEY)
       const withoutCategory = (old: { categoryId: string }[] | undefined) =>
         old?.some((x) => x.categoryId === categoryId) ? old.filter((x) => x.categoryId !== categoryId) : old
+      const retargeted = (old: { categoryId: string }[] | undefined) =>
+        old?.some((x) => x.categoryId === categoryId)
+          ? old.map((x) => (x.categoryId === categoryId ? { ...x, categoryId: reassignTo! } : x))
+          : old
       queryClient.setQueryData<{ categoryId: string }[]>(TARGETS_KEY, withoutCategory)
-      queryClient.setQueryData<{ categoryId: string }[]>(RULES_KEY, withoutCategory)
+      queryClient.setQueryData<{ categoryId: string }[]>(RULES_KEY, reassignTo ? retargeted : withoutCategory)
 
       const ctx = await snapshotAndApply(
         queryClient,

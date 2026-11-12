@@ -18,6 +18,9 @@ export const SERVER_FEATURES = {
   refillTargets: 'refillTargets',
   /** importReplaceTransactions accepte transferGroupId (paires de virements YNAB). */
   importTransfers: 'importTransfers',
+  /** deleteCategory accepte reassignTo : transactions, montants assignes et
+   * regles passent a la categorie cible (regle YNAB). */
+  categoryReassign: 'categoryReassign',
 } as const
 
 export type ServerFeature = (typeof SERVER_FEATURES)[keyof typeof SERVER_FEATURES]

@@ -2816,6 +2816,15 @@ async function actionDeleteCategory(userId: string, params: Params) {
   const category = categories.find((c) => c.id === categoryId)
   if (!category) throw new ApiError(404, 'categorie inconnue')
   if (category.isIncome) throw new ApiError(400, 'les categories de revenus ne se suppriment pas')
+  // Reaffectation (fonctionnalite categoryReassign, regle YNAB) : transactions,
+  // montants assignes et regles passent a la categorie cible au lieu d'etre
+  // decategorises ou supprimes. Sans cible : comportement historique.
+  const reassignTo = params.reassignTo == null ? null : requireUuid(params.reassignTo, 'reassignTo')
+  if (reassignTo !== null) {
+    const target = categories.find((c) => c.id === reassignTo)
+    if (!target || reassignTo === categoryId) throw new ApiError(400, 'categorie de reaffectation invalide')
+    if (target.isIncome) throw new ApiError(400, 'reaffectation vers une categorie de revenus impossible')
+  }
 
   // enc_core seul pour l'historique ; le texte n'est relu que pour les lignes
   // decategorisees (reecrites en entier).
@@ -2839,19 +2848,31 @@ async function actionDeleteCategory(userId: string, params: Params) {
   )
   const aggTxOps: { old: AggTx; next: AggTx }[] = []
   let uncategorized = 0
+  let reassigned = 0
+  const onBudget = onBudgetIds(accounts)
+  const offGroups = offBudgetTransferGroups(transactions, onBudget)
+  // Seules les lignes categorisables suivent la cible : compte budget, hors
+  // moitie de virement neutre (sa categorie residuelle est ignoree) ; les
+  // autres sont decategorisees comme sans reaffectation.
+  const nextCategory = (t: TxCore): string | null =>
+    reassignTo !== null &&
+    onBudget.has(t.accountId) &&
+    (!t.transferGroupId || isCrossBudgetHalf(t, onBudget, offGroups))
+      ? reassignTo
+      : null
   const decategorize = async () => {
     for (const tx of touched) {
       const { id, ...payload } = tx
-      await updateTx(userId, id, { ...payload, categoryId: null })
-      aggTxOps.push({ old: payload, next: { ...payload, categoryId: null } })
-      uncategorized += 1
+      const categoryIdNext = nextCategory(payload)
+      await updateTx(userId, id, { ...payload, categoryId: categoryIdNext })
+      aggTxOps.push({ old: payload, next: { ...payload, categoryId: categoryIdNext } })
+      if (categoryIdNext) reassigned += 1
+      else uncategorized += 1
     }
   }
   // Moitie cote budget d'un transfert croise (budget <-> suivi) portant la
   // categorie : le lot se decategorise hors maintenance incrementale (cf.
   // withAggregatesStale), qui ne sait pas la compter.
-  const onBudget = onBudgetIds(accounts)
-  const offGroups = offBudgetTransferGroups(transactions, onBudget)
   // Gros lot : invalidation autour des ecritures (cf. AGG_INCREMENTAL_BATCH_MAX).
   if (touched.length > AGG_INCREMENTAL_BATCH_MAX || touched.some((t) => isCrossBudgetHalf(t, onBudget, offGroups))) {
     await withAggregatesStale(userId, decategorize)
@@ -2868,25 +2889,58 @@ async function actionDeleteCategory(userId: string, params: Params) {
   const orphanAssignments = assignments.filter((a) => a.categoryId === categoryId)
   const assignmentIds = orphanAssignments.map((a) => a.id)
   if (assignmentIds.length > 0) {
+    // Reaffectation : le montant de chaque mois s'ajoute a celui de la cible
+    // (meme mois), le Pret a assigner ne bouge pas.
+    const moveAssignments = async () => {
+      if (reassignTo === null) return
+      const rows = []
+      for (const a of orphanAssignments) {
+        const existing = assignments.find((x) => x.categoryId === reassignTo && x.month === a.month)
+        const payload: AssignmentPayload = {
+          categoryId: reassignTo,
+          month: a.month,
+          amount: (existing?.amount ?? 0) + a.amount,
+        }
+        rows.push({
+          user_id: userId,
+          assign_idx: await assignIdx(keys, userId, reassignTo, a.month),
+          month_idx: await assignMonthIdx(keys, userId, a.month),
+          enc_payload: bytesToBase64(await encryptJson(keys, payload, ['assignments', userId])),
+        })
+      }
+      for (let i = 0; i < rows.length; i += 100) {
+        const { error } = await admin.rpc('enc_insert', {
+          p_table: 'assignments',
+          p_rows: rows.slice(i, i + 100),
+          p_conflict: 'user_id,assign_idx',
+        })
+        if (error) throw new ApiError(500, 'ecriture assignments impossible')
+      }
+    }
     // Assignations purgees : la relecture (table videe) donne 0, les cellules
     // vides disparaissent (sparse). Suppression par paquets (limite d'URL).
-    await withAggMaintenance(
-      userId,
-      keys,
-      async () => {
-        for (let i = 0; i < assignmentIds.length; i += 100) {
-          const { error } = await admin
-            .from('assignments')
-            .delete()
-            .eq('user_id', userId)
-            .in('id', assignmentIds.slice(i, i + 100))
-          if (error) throw new ApiError(500, 'suppression assignments impossible')
+    const purgeAssignments = async () => {
+      await moveAssignments()
+      for (let i = 0; i < assignmentIds.length; i += 100) {
+        const { error } = await admin
+          .from('assignments')
+          .delete()
+          .eq('user_id', userId)
+          .in('id', assignmentIds.slice(i, i + 100))
+        if (error) throw new ApiError(500, 'suppression assignments impossible')
+      }
+    }
+    const cells = orphanAssignments.length * (reassignTo === null ? 1 : 2)
+    if (cells > AGG_INCREMENTAL_BATCH_MAX) {
+      await withAggregatesStale(userId, purgeAssignments)
+    } else {
+      await withAggMaintenance(userId, keys, purgeAssignments, async (b) => {
+        for (const a of orphanAssignments) {
+          await b.setAssigned(categoryId, a.month)
+          if (reassignTo !== null) await b.setAssigned(reassignTo, a.month)
         }
-      },
-      async (b) => {
-        for (const a of orphanAssignments) await b.setAssigned(categoryId, a.month)
-      },
-    )
+      })
+    }
   }
   const targetIds = targets.filter((t) => t.categoryId === categoryId).map((t) => t.id)
   if (targetIds.length > 0) {
@@ -2902,8 +2956,14 @@ async function actionDeleteCategory(userId: string, params: Params) {
   // sync-bank et applyRulesToUncategorized continueraient d'appliquer un
   // categoryId inexistant aux nouveaux imports (integrite referentielle
   // assuree ici, pas de FK SQL).
-  const ruleIds = rules.filter((r) => r.categoryId === categoryId).map((r) => r.id)
-  if (ruleIds.length > 0) {
+  const ownRules = rules.filter((r) => r.categoryId === categoryId)
+  const ruleIds = ownRules.map((r) => r.id)
+  if (reassignTo !== null) {
+    // Reaffectation : les regles visent desormais la cible.
+    for (const { id, ...rule } of ownRules) {
+      await updateEncrypted('rules', userId, id, { ...rule, categoryId: reassignTo })
+    }
+  } else if (ruleIds.length > 0) {
     const { error } = await admin
       .from('rules')
       .delete()
@@ -2925,7 +2985,7 @@ async function actionDeleteCategory(userId: string, params: Params) {
     .eq('user_id', userId)
     .eq('id', categoryId)
   if (error) throw new ApiError(500, 'suppression categories impossible')
-  return { ok: true, uncategorized }
+  return { ok: true, uncategorized, reassigned }
 }
 
 async function actionCreateCategoryGroup(userId: string, params: Params) {
