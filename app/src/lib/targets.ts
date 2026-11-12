@@ -32,12 +32,20 @@ export async function fetchTargets(): Promise<Target[]> {
   return targets
 }
 
+// Index par categorie. Fonction STABLE (niveau module) : TanStack ne rejoue le
+// `select` que si la liste change. En ligne, il creait une Map neuve a chaque
+// rendu et invalidait les memos de tous les appelants (plan de financement,
+// valeurs rapides...).
+function indexByCategory(list: Target[]): Map<string, Target> {
+  return new Map(list.map((t) => [t.categoryId, t]))
+}
+
 /** Objectifs indexes par categorie (cle = categoryId), partagent la meme query. */
 export function useTargets(): UseQueryResult<Map<string, Target>> {
   return useQuery({
     queryKey: TARGETS_KEY,
     queryFn: fetchTargets,
-    select: (list) => new Map(list.map((t) => [t.categoryId, t])),
+    select: indexByCategory,
   })
 }
 

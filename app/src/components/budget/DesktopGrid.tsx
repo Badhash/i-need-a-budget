@@ -360,6 +360,13 @@ export function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivi
     resetDrag()
   }
 
+  // dragover se declenche en continu pendant le survol : la cible n'est
+  // remplacee que si la ligne ou le cote change. Meme reference sinon, React
+  // abandonne la mise a jour (avant : un objet neuf, donc un rendu complet de
+  // la grille, a chaque evenement).
+  const hoverDropTarget = (id: string, after: boolean) =>
+    setDropTarget((current) => (current && current.id === id && current.after === after ? current : { id, after }))
+
   const dnd: DndApi = {
     dropTarget,
     onGroupDragStart: (e, groupId) => {
@@ -376,13 +383,13 @@ export function DesktopGrid({ groups, month, targets, onOpenTarget, onViewActivi
     onGroupRowOver: (e, groupId) => {
       if (!drag || drag.kind !== 'group') return
       e.preventDefault()
-      setDropTarget({ id: groupId, after: isAfter(e) })
+      hoverDropTarget(groupId, isAfter(e))
     },
     // Enveloppe : cible valide seulement pour un drag du MEME groupe.
     onCategoryRowOver: (e, groupId, categoryId) => {
       if (!drag || drag.kind !== 'category' || drag.groupId !== groupId) return
       e.preventDefault()
-      setDropTarget({ id: categoryId, after: isAfter(e) })
+      hoverDropTarget(categoryId, isAfter(e))
     },
     onDrop,
     onDragEnd: resetDrag,
