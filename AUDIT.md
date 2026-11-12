@@ -6,12 +6,12 @@ sur la branche `claude/fervent-euler-5e07sf`, et ce qui reste à faire.
 
 ## 1. Synthèse
 
-- 120 constats distincts sur 11 zones (un même défaut signalé par deux relectures
+- 122 constats distincts sur 11 zones (un même défaut signalé par deux relectures
   ne compte qu'une fois). Aucune faille critique : pas de contournement
   d'authentification, pas d'accès aux données d'un autre utilisateur, pas de fuite de
   données déchiffrées, primitives de chiffrement saines.
-- 48 corrigés, 8 corrigés en partie, 2 couverts par un script SQL fourni à appliquer,
-  62 ouverts : 4 de sévérité haute, 27 moyenne, 31 basse.
+- 58 corrigés, 7 corrigés en partie, 2 couverts par un script SQL fourni à appliquer,
+  55 ouverts : 4 de sévérité haute, 22 moyenne, 29 basse.
 - Les trois problèmes les plus lourds étaient fonctionnels, pas des failles :
   1. **Synchro bancaire** : après un re-consentement, plus rien n'était importé, en
      silence ; deux opérations identiques le même jour n'en donnaient qu'une.
@@ -91,7 +91,6 @@ Une correction = un commit. `git log --oneline` les liste, regroupées par port�
 | CORE-02 | La maintenance des agrégats a lieu après l'écriture métier : un recompute concurrent (synchro pendant une catégorisation) peut compter un lot deux fois | Poser la fence avant la première écriture, ou passer le marqueur à `dirty` pendant l'écriture |
 | SYNC-08 | Une ligne importée puis supprimée, renommée ou déplacée d'un mois peut être réimportée (la dédup lit l'état courant) | Conserver un `bankLabel` immuable, ajouter le hash des variantes aux tombstones |
 | SET-IMP-01 | Import avec remplacement : après l'effacement, « Abandonner » libère la sauvegarde de sécurité sans confirmation ; aucun signal d'import incomplet après un rechargement | Confirmation, conserver la sauvegarde, drapeau persistant et bannière |
-| REP-02 à REP-05 | Rapports : taux d'épargne du mois partiel comparé à des mois complets (« −678 % »), récurrence un mois sur deux affichée mensuelle, remboursements ignorés, virement vers l'épargne compté en dépense | Voir section 5, zone Rapports |
 
 ### Priorité 2 — egress (la contrainte d'exploitation)
 
@@ -109,8 +108,7 @@ Une correction = un commit. `git log --oneline` les liste, regroupées par port�
 
 | ID | Question |
 |---|---|
-| REP-05 | Un virement vers un compte de suivi rangé dans « Épargne » compte comme dépensé et fait tomber le taux d'épargne à 0 %. Indicateur à redéfinir ou à renommer |
-| ZAK-01, ZAK-02 | Widget Zakat : assiette (tous les comptes, suivi et dettes compris), taux, nisab saisi à la main, date au 1er janvier, « Ta méthode (3 %) » qui ignore le nisab. Hypothèses codées en dur, à exposer en réglages |
+| ZAK-01 | Widget Zakat : assiette (tous les comptes, suivi et dettes compris), taux, nisab saisi à la main, date au 1er janvier. Hypothèses codées en dur, à exposer en réglages |
 | API-SEC-03 | Le second facteur n'est exigé que s'il est enrôlé. Un secret `REQUIRE_MFA=1` le rendrait obligatoire côté serveur |
 | SET-CAT-03 | Supprimer une catégorie avec réaffectation déplace les transactions, pas les assignations ni les règles |
 
@@ -277,17 +275,19 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | ID | Sév. | Constat | Statut |
 |---|---|---|---|
 | REP-01 | H | Solde d'ouverture compté comme revenu (taux d'épargne de 55,6 % au lieu de 20 %) | corrigé |
-| REP-02 | M | Taux d'épargne du mois partiel, « Meilleur mois » incluant le mois en cours | ouvert |
-| REP-03 | M | Récurrence un mois sur deux affichée mensuelle | ouvert |
-| REP-04 | M | Remboursement sur une catégorie de dépense ignoré | ouvert |
-| REP-05 | M | Virement vers l'épargne compté en dépense | ouvert (décision) |
-| REP-06 à REP-08 | B | Premier mois partiel dans les moyennes, libellés de mois en double sur 13 points, jour de semaine sur la date comptable | ouvert |
+| REP-02 | M | Taux d'épargne du mois partiel, « Meilleur mois » incluant le mois en cours | corrigé (mois en cours comparé à date, affichage borné à « < −100 % », meilleur mois parmi les mois clos) |
+| REP-03 | M | Récurrence un mois sur deux affichée mensuelle | corrigé (montant proratisé par la fréquence observée, « tous les 2 mois » affiché). Reste : un bimestriel n'est détecté que les mois où il a passé le seuil de la moitié des mois actifs |
+| REP-04 | M | Remboursement sur une catégorie de dépense ignoré | corrigé (déduit de la catégorie, du groupe et du mois, plancher à 0 par catégorie et par mois) |
+| REP-05 | M | Virement vers l'épargne compté en dépense | corrigé (décision : la moitié budget d'un virement vers un compte de suivi est de l'épargne, quelle que soit sa catégorie) |
+| REP-06 | B | Premier mois partiel dans les moyennes, projection sans historique | corrigé (exclu des moyennes et du mois précédent de comparaison ; projection après 7 jours de données) |
+| REP-07 | B | Libellés de mois en double sur 13 points | corrigé |
+| REP-08 | B | Jour de semaine sur la date comptable | ouvert |
 | ZAK-01 | M | Hypothèses du widget Zakat codées en dur | ouvert (décision) |
-| ZAK-02 | B | Date vide enregistrée (« Invalid Date ») ; « Ta méthode » ignore le nisab | partiel (date corrigée) |
+| ZAK-02 | B | Date vide enregistrée (« Invalid Date ») ; « Ta méthode » ignore le nisab | corrigé |
 | UIKIT-02, UIKIT-05 | M | Combobox : Entrée choisissait la première option, frappe ajoutée au libellé après Échap | corrigé |
-| UIKIT-03 | M | Combobox sans navigation aux flèches | ouvert |
-| UIKIT-04 | B | Sélecteur de mois : flèches d'année hors bornes, pas d'Échap | ouvert |
-| PERF-01 | B | Compteurs animés qui re-rendent le graphe cumulé | ouvert |
+| UIKIT-03 | M | Combobox sans navigation aux flèches | corrigé (flèches, rôles ARIA, focus gardé dans le champ, Échap sans fermer la feuille) |
+| UIKIT-04 | B | Sélecteur de mois : flèches d'année hors bornes, pas d'Échap | corrigé |
+| PERF-01 | B | Compteurs animés qui re-rendent le graphe cumulé | corrigé |
 
 ## 6. Ce qui est sain
 
