@@ -3359,6 +3359,10 @@ async function actionExportData(userId: string) {
       loadAll<RulePayload>('rules', userId),
     ])
   return {
+    // Signature et version du format : une restauration refuse un fichier
+    // d'un autre format ou d'une version plus recente (perte silencieuse sinon).
+    format: 'inab-backup',
+    version: 1,
     exportedAt: new Date().toISOString(),
     budgetStartMonth: await loadStartMonth(userId),
     accounts,
