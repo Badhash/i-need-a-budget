@@ -197,10 +197,21 @@ export function BudgetPage() {
   const coverOverspending = () => {
     const done = overspentRows
     if (done.length === 0) return
-    assignBatch.mutate({
-      changes: done.map((row) => ({ categoryId: row.categoryId, amount: row.previousAssigned + row.added })),
-      label: COVER_LABEL,
-    })
+    // mutateAsync : l'issue de CET envoi est suivie meme si une autre action
+    // groupee part entre-temps (les callbacks de mutate() ne visent que le
+    // dernier appel du hook).
+    assignBatch
+      .mutateAsync({
+        changes: done.map((row) => ({ categoryId: row.categoryId, amount: row.previousAssigned + row.added })),
+        label: COVER_LABEL,
+      })
+      .catch(() => {
+        // Echec : le rollback a remis les depassements dans la grille, le
+        // recapitulatif « couverts » se ferme s'il montre encore cette
+        // couverture. Le toast d'erreur global (« Modification non
+        // enregistrée », Réessayer) signale l'echec.
+        setCoverDone((current) => (current === done ? null : current))
+      })
     setCoverDone(done)
   }
 
