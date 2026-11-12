@@ -68,7 +68,6 @@ export function NetWorthWidget({
   const last = series[series.length - 1]?.value ?? 0
   const first = series[0]?.value ?? 0
   const spanMonths = series.length - 1
-  const data = series.map((p) => ({ ...p, label: fmtMonthShort(p.month) }))
 
   // Soldes a la fin du mois affiche ; un compte clos a zero n'apporte rien.
   const lines: (AccountLine & { onBudget: boolean })[] = accounts
@@ -113,15 +112,17 @@ export function NetWorthWidget({
 
       <div className={cn('-mx-1', CHART_HEIGHT)} aria-hidden>
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 6, right: 10, left: 10, bottom: 0 }}>
+          <AreaChart data={series} margin={{ top: 6, right: 10, left: 10, bottom: 0 }}>
             <defs>
               <linearGradient id={ids.wealth} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={palette.accent} stopOpacity={0.26} />
                 <stop offset="100%" stopColor={palette.accent} stopOpacity={0} />
               </linearGradient>
             </defs>
+            {/* Cle d'axe = le mois 'YYYY-MM' (libelle court en double sur 13 points). */}
             <XAxis
-              dataKey="label"
+              dataKey="month"
+              tickFormatter={fmtMonthShort}
               axisLine={false}
               tickLine={false}
               tick={{ fill: palette.soft, fontSize: 11 }}

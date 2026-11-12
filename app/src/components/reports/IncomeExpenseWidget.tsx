@@ -75,8 +75,6 @@ export function IncomeExpenseWidget({
   const closed = points.filter((p) => p.month < thisMonth)
   const best = closed.length > 1 ? closed.reduce((b, p) => (p.net > b.net ? p : b), closed[0]!) : null
 
-  const data = points.map((p) => ({ ...p, label: fmtMonthShort(p.month) }))
-  const refLabel = ref ? fmtMonthShort(ref) : ''
   const barSize = points.length > 8 ? 10 : 14
 
   const renderTooltip = ({ active, payload }: { active?: boolean; payload?: { payload?: MonthPoint }[] }) => {
@@ -126,7 +124,7 @@ export function IncomeExpenseWidget({
 
       <div className={cn('-mx-1', CHART_HEIGHT)} aria-hidden>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 0 }} barGap={3} barCategoryGap="26%">
+          <BarChart data={points} margin={{ top: 6, right: 4, left: 4, bottom: 0 }} barGap={3} barCategoryGap="26%">
             <defs>
               <linearGradient id={ids.in} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={palette.flowIn} stopOpacity={1} />
@@ -137,14 +135,16 @@ export function IncomeExpenseWidget({
                 <stop offset="100%" stopColor={palette.flowOut} stopOpacity={0.62} />
               </linearGradient>
             </defs>
+            {/* Cle d'axe = le mois 'YYYY-MM' (le libelle court se repete sur 13
+                points : deux « nov. », toutes deux en gras). */}
             <XAxis
-              dataKey="label"
+              dataKey="month"
               axisLine={false}
               tickLine={false}
               interval={0}
               dy={6}
               tick={(props: { x: number; y: number; payload: { value: string } }) => {
-                const isRef = props.payload.value === refLabel
+                const isRef = props.payload.value === ref
                 return (
                   <text
                     x={props.x}
@@ -156,7 +156,7 @@ export function IncomeExpenseWidget({
                     fill={isRef ? 'rgb(var(--ink))' : palette.soft}
                     style={{ fill: isRef ? 'rgb(var(--ink))' : palette.soft }}
                   >
-                    {props.payload.value}
+                    {fmtMonthShort(props.payload.value)}
                   </text>
                 )
               }}
