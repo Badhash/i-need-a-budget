@@ -27,6 +27,17 @@ const ANON_KEY = SUPABASE_ANON_KEY
 // une ecriture : sans ca, chaque ouverture ouvrait la fenetre de silence 30 s).
 const READ_ACTION = /^(get|list|export|bootstrap)/
 
+// Delai maximal d'un appel (FRONT-INF-06) : un fetch pendu (reseau mobile qui
+// ne repond plus) bloquait la file d'ecritures indefiniment, sans indicateur.
+// Au-dela, l'appel est abandonne comme une coupure (NetworkError, rejouable :
+// les creations sont idempotentes, les autres ecritures posent une valeur).
+// Actions lourdes (demarrage complet, imports, export, lots) : delai plus long.
+const READ_TIMEOUT_MS = 30_000
+const WRITE_TIMEOUT_MS = 60_000
+const SLOW_TIMEOUT_MS = 120_000
+const SLOW_ACTION =
+  /^(bootstrapFull|exportData|import|applyRulesToUncategorized|newBudget|deleteAccount|deleteCategory|recomputeAggregates|migrateSplitPayload)/
+
 // Creations deja envoyees, par reference client (l'id temporaire de la
 // creation, stable d'un essai a l'autre). Un nouvel envoi de la meme creation
 // (essai reseau apres une reponse perdue, « Reessayer ») est signale au
@@ -123,6 +134,9 @@ export async function apiCall<T>(
   // rejouable. Une reponse, meme en erreur, prouve que le reseau fonctionne.
   let res: Response
   let text: string
+  const controller = new AbortController()
+  const timeoutMs = SLOW_ACTION.test(action) ? SLOW_TIMEOUT_MS : isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     res = await fetch(FUNCTIONS_URL, {
       method: 'POST',
@@ -132,11 +146,16 @@ export async function apiCall<T>(
         Authorization: `Bearer ${session.access_token}`,
       },
       body: JSON.stringify({ action, params }),
+      signal: controller.signal,
     })
     text = await res.text()
   } catch {
+    // Coupure ou delai depasse : la sonde de connectivite tranche (un serveur
+    // lent mais joignable ne fait pas passer l'app hors ligne).
     reportNetworkFailure()
     throw new NetworkError()
+  } finally {
+    clearTimeout(timer)
   }
   reportNetworkSuccess()
   let body: unknown = null
