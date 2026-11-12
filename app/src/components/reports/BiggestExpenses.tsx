@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { ChevronRight, Receipt } from 'lucide-react'
 import { inMonth, type Analytics } from '@/lib/analytics'
 import { fmtDateShort } from '@/lib/format'
@@ -12,7 +13,7 @@ const TOP = 5
 const ROW = 'flex min-h-[3.25rem] w-full items-center gap-3 rounded-xl px-2 py-2'
 
 /** Les plus grosses depenses du mois ; un appui ouvre la transaction. */
-export function BiggestExpenses({
+export const BiggestExpenses = memo(function BiggestExpenses({
   a,
   currentMonth,
   limit = TOP,
@@ -81,7 +82,7 @@ export function BiggestExpenses({
       )}
     </WidgetCard>
   )
-}
+})
 
 export function BiggestExpensesSkeleton({
   reference,

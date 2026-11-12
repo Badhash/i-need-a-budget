@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import { Bar, BarChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ArrowLeftRight } from 'lucide-react'
 import { useChartPalette } from '@/hooks/useTheme'
@@ -29,7 +30,7 @@ const CHART_HEIGHT = 'h-44'
  * Chiffre principal : l'epargne MOYENNE de la periode ; le mois affiche est
  * mis en avant sur l'axe, la depense moyenne tracee en pointilles.
  */
-export function IncomeExpenseWidget({
+export const IncomeExpenseWidget = memo(function IncomeExpenseWidget({
   monthly,
   months,
   reference,
@@ -53,7 +54,9 @@ export function IncomeExpenseWidget({
   const palette = useChartPalette()
   const reduced = usePrefersReducedMotion()
   const ids = useChartIds('in', 'out')
-  const points = monthly.slice(-months)
+  // Reference stable : des donnees recreees a chaque rendu rejouent
+  // l'animation des barres (Recharts compare `data` par identite).
+  const points = useMemo(() => monthly.slice(-months), [monthly, months])
   const ref = reference ?? points[points.length - 1]?.month
   const past = points.filter((p) => p.month !== ref)
   const avg =
@@ -218,7 +221,7 @@ export function IncomeExpenseWidget({
       </div>
     </WidgetCard>
   )
-}
+})
 
 export function IncomeExpenseSkeleton({ className }: { className?: string }) {
   return (

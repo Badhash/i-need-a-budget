@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Landmark } from 'lucide-react'
 import type { Analytics } from '@/lib/analytics'
@@ -52,7 +53,7 @@ function AccountColumn({ title, lines }: { title: string; lines: AccountLine[] }
  * Patrimoine (valeur nette de TOUS les comptes) fin de chaque mois de la
  * periode, et detail par compte a la fin du mois affiche.
  */
-export function NetWorthWidget({
+export const NetWorthWidget = memo(function NetWorthWidget({
   a,
   accounts,
   className,
@@ -167,7 +168,7 @@ export function NetWorthWidget({
       )}
     </WidgetCard>
   )
-}
+})
 
 export function NetWorthSkeleton({ className }: { className?: string }) {
   return (

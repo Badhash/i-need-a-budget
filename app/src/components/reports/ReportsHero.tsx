@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { memo, type ComponentProps, type ReactNode } from 'react'
 import { Area, ComposedChart, Line, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Sprout, TrendingUp } from 'lucide-react'
 import { inMonth, type Analytics } from '@/lib/analytics'
@@ -115,13 +115,24 @@ function Kpi({ label, value, badge, caption }: KpiSlots) {
 
 const KPI_VALUE = 'block text-[24px] font-semibold tracking-[-0.015em] lg:text-[30px]'
 
+// Compteurs reveles en COMPOSANTS FEUILLES : seuls eux se re-rendent a chaque
+// image de l'animation. Tenus dans le heros, ils le re-rendaient en entier, graphe
+// cumule compris (une vingtaine de rendus du graphe a chaque affichage).
+function RevealAmount({ cents, ...props }: Omit<ComponentProps<typeof Amount>, 'animate'>) {
+  return <Amount {...props} cents={useRevealNumber(cents)} />
+}
+
+function RevealPercent({ ratio }: { ratio: number }) {
+  return <>{fmtPercent(useRevealNumber(Math.round(ratio * 1000)) / 1000)}</>
+}
+
 /**
  * Heros de la page Rapports : ce que j'ai depense (et a quel rythme, compare a
  * ma moyenne), ce que j'ai mis de cote, et mon taux d'epargne. Les chiffres
  * se revelent au montage puis suivent en douceur les changements de mois et
  * de periode.
  */
-export function ReportsHero({ a, currentMonth, className }: { a: Analytics; currentMonth: string; className?: string }) {
+export const ReportsHero = memo(function ReportsHero({ a, currentMonth, className }: { a: Analytics; currentMonth: string; className?: string }) {
   const when = inMonth(a.reference, currentMonth)
   const avg = a.average
 
@@ -148,9 +159,6 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
         : 'Pas de comparaison'
   const vsAverage = a.toDate ? 'vs moyenne à date' : 'vs moyenne'
 
-  const spent = useRevealNumber(a.spending)
-  const saved = useRevealNumber(a.net)
-  const ratePermille = useRevealNumber(Math.round(Math.max(RATE_FLOOR, a.savingsRate ?? 0) * 1000))
 
   const overPace =
     a.projectedSpending !== null && avg !== null && avg.spending > 0 && a.projectedSpending > avg.spending * 1.05
@@ -182,7 +190,7 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
       className={className}
       slots={{
         spendingLabel: `Dépensé ${when}`,
-        spendingValue: <Amount cents={spent} size="hero" className="block" />,
+        spendingValue: <RevealAmount cents={a.spending} size="hero" className="block" />,
         spendingBadge: (
           <TrendBadge
             delta={spendDelta}
@@ -197,7 +205,7 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
         legend: <CumulativeLegend a={a} />,
         saved: {
           label: `Épargné ${when}`,
-          value: <Amount cents={saved} signed colored className={KPI_VALUE} />,
+          value: <RevealAmount cents={a.net} signed colored className={KPI_VALUE} />,
           badge: (
             <TrendBadge
               delta={netAvg === null ? null : netRef - netAvg}
@@ -231,11 +239,13 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
                 <Sprout aria-hidden className="h-4 w-4 text-success" />
               </ProgressRing>
               <span className={cn(KPI_VALUE, 'tnum', a.savingsRate !== null && a.savingsRate < 0 && 'text-danger')}>
-                {a.savingsRate === null
-                  ? '—'
-                  : a.savingsRate < RATE_FLOOR
-                    ? `< ${fmtPercent(RATE_FLOOR)}`
-                    : fmtPercent(ratePermille / 1000)}
+                {a.savingsRate === null ? (
+                  '—'
+                ) : a.savingsRate < RATE_FLOOR ? (
+                  `< ${fmtPercent(RATE_FLOOR)}`
+                ) : (
+                  <RevealPercent ratio={a.savingsRate} />
+                )}
               </span>
             </span>
           ),
@@ -255,7 +265,7 @@ export function ReportsHero({ a, currentMonth, className }: { a: Analytics; curr
       }}
     />
   )
-}
+})
 
 /** Squelette du heros : la MEME mise en page, des reflets a la place des chiffres. */
 export function ReportsHeroSkeleton({
@@ -339,7 +349,7 @@ interface CumulTooltipProps {
 }
 
 /** Cumul des depenses jour apres jour : le mois affiche contre le mois moyen. */
-function CumulativeChart({ a, className }: { a: Analytics; className?: string }) {
+const CumulativeChart = memo(function CumulativeChart({ a, className }: { a: Analytics; className?: string }) {
   const palette = useChartPalette()
   const reduced = usePrefersReducedMotion()
   const ids = useChartIds('fill', 'stroke')
@@ -460,4 +470,4 @@ function CumulativeChart({ a, className }: { a: Analytics; className?: string })
       </ResponsiveContainer>
     </div>
   )
-}
+})

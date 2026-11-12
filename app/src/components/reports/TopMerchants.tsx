@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { Store } from 'lucide-react'
 import type { Analytics } from '@/lib/analytics'
 import { fmtMonthLong, fmtPercent } from '@/lib/format'
@@ -26,7 +27,7 @@ function question(reference: string, currentMonth: string): string {
  * Marchands du mois, regroupes par cle de tiers (payeeKey) : « CB CARREFOUR
  * 12/03 » et « CB CARREFOUR 15/03 » ne font qu'un, sous le nom le plus frequent.
  */
-export function TopMerchants({ a, currentMonth }: { a: Analytics; currentMonth: string }) {
+export const TopMerchants = memo(function TopMerchants({ a, currentMonth }: { a: Analytics; currentMonth: string }) {
   const top = a.merchants.slice(0, TOP)
   const max = top[0]?.total ?? 1
   // Part rapportee aux achats bruts du mois (somme des marchands) et non a la
@@ -78,7 +79,7 @@ export function TopMerchants({ a, currentMonth }: { a: Analytics; currentMonth: 
       </ol>
     </WidgetCard>
   )
-}
+})
 
 export function TopMerchantsSkeleton({ reference, currentMonth }: { reference: string; currentMonth: string }) {
   return (

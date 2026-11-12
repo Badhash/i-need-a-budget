@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { ChevronDown, Repeat } from 'lucide-react'
 import type { Analytics } from '@/lib/analytics'
 import { fmtEUR } from '@/lib/format'
@@ -17,7 +17,7 @@ const VISIBLE = 6
  * par tiers. Montants en equivalent mensuel (une facture bimestrielle compte
  * pour moitie), periodicite rappelee sous le nom quand elle n'est pas mensuelle.
  */
-export function RecurringWidget({ a, className }: { a: Analytics; className?: string }) {
+export const RecurringWidget = memo(function RecurringWidget({ a, className }: { a: Analytics; className?: string }) {
   const [expanded, setExpanded] = useState(false)
   const list = a.recurring
   const shown = expanded ? list : list.slice(0, VISIBLE)
@@ -71,7 +71,7 @@ export function RecurringWidget({ a, className }: { a: Analytics; className?: st
       )}
     </WidgetCard>
   )
-}
+})
 
 export function RecurringSkeleton({ className }: { className?: string }) {
   return (

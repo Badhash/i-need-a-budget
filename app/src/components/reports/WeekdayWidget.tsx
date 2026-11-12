@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CalendarDays } from 'lucide-react'
 import type { Analytics } from '@/lib/analytics'
@@ -24,12 +25,13 @@ const CHART_HEIGHT = 'h-36'
  * prelevements recurrents. Emphase : le jour le plus depensier en accent
  * (degrade de marque), les autres en gris sur leur piste.
  */
-export function WeekdayWidget({ a, className }: { a: Analytics; className?: string }) {
+export const WeekdayWidget = memo(function WeekdayWidget({ a, className }: { a: Analytics; className?: string }) {
   const palette = useChartPalette()
   const reduced = usePrefersReducedMotion()
   const ids = useChartIds('peak', 'rest')
   const { average, peak, peakMerchant } = a.weekday
-  const data = average.map((value, i) => ({ name: SHORT[i]!, day: LONG[i]!, value, index: i }))
+  // Reference stable : des donnees recreees a chaque rendu rejouent l'animation.
+  const data = useMemo(() => average.map((value, i) => ({ name: SHORT[i]!, day: LONG[i]!, value, index: i })), [average])
 
   const renderTooltip = ({
     active,
@@ -133,7 +135,7 @@ export function WeekdayWidget({ a, className }: { a: Analytics; className?: stri
       )}
     </WidgetCard>
   )
-}
+})
 
 export function WeekdaySkeleton({ className }: { className?: string }) {
   return (

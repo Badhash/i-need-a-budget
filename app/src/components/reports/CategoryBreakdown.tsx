@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { ChevronDown, Gauge } from 'lucide-react'
 import type { Analytics, CategoryStat } from '@/lib/analytics'
 import { Amount } from '@/components/shared/Amount'
@@ -97,7 +97,7 @@ function Bar({ c, tone }: { c: CategoryStat; tone: ProgressTone }) {
  * « Où ça dérape ? » : chaque categorie du mois face a sa moyenne sur la
  * periode choisie. La jauge montre le mois, le repere la moyenne.
  */
-export function CategoryBreakdown({
+export const CategoryBreakdown = memo(function CategoryBreakdown({
   a,
   currentMonth,
   isDesktop,
@@ -192,7 +192,7 @@ export function CategoryBreakdown({
       )}
     </WidgetCard>
   )
-}
+})
 
 export function CategoryBreakdownSkeleton({
   reference,

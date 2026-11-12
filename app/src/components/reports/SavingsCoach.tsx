@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import { Coffee, Repeat, Scissors, Sparkles, Sprout, TrendingUp, type LucideIcon } from 'lucide-react'
 import { fmtMonthLong, fmtPercent } from '@/lib/format'
 import type { Analytics, SuggestionKind } from '@/lib/analytics'
@@ -58,7 +58,7 @@ function CoachHeader({ headline, potential }: { headline: ReactNode; potential: 
  * pour faire mieux. Ton encourageant, jamais culpabilisant. Mobile : idees en
  * carrousel horizontal ; desktop : grille.
  */
-export function SavingsCoach({ a, className }: { a: Analytics; className?: string }) {
+export const SavingsCoach = memo(function SavingsCoach({ a, className }: { a: Analytics; className?: string }) {
   const potential = a.suggestions.reduce((s, x) => s + x.annual, 0)
   return (
     <Card className={cn('p-5', className)}>
@@ -114,7 +114,7 @@ export function SavingsCoach({ a, className }: { a: Analytics; className?: strin
       )}
     </Card>
   )
-}
+})
 
 export function SavingsCoachSkeleton({ className }: { className?: string }) {
   return (

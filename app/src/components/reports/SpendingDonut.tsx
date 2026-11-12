@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector } from 'recharts'
 import { PieChart as PieIcon } from 'lucide-react'
 import { REST_KEY, type Analytics, type GroupSlice } from '@/lib/analytics'
@@ -39,7 +39,7 @@ function question(reference: string, currentMonth: string): string {
 const CAPTION = 'Par groupe de catégories'
 
 /** Repartition des depenses du mois par groupe de categories (donut + legende chiffree). */
-export function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth: string }) {
+export const SpendingDonut = memo(function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth: string }) {
   const palette = useChartPalette()
   const reduced = usePrefersReducedMotion()
   const [active, setActive] = useState<number | null>(null)
@@ -168,7 +168,7 @@ export function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth:
       </div>
     </WidgetCard>
   )
-}
+})
 
 export function SpendingDonutSkeleton({ reference, currentMonth }: { reference: string; currentMonth: string }) {
   return (
