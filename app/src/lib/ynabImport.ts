@@ -1027,8 +1027,11 @@ export interface ImportRun {
   rulesCreated: number
   accountsClosed: number
   linksRestored: number
-  /** Transactions confirmees par mois (verification de reprise). */
-  insertedByMonth: Record<string, number>
+  /**
+   * Signatures (compte, date, montant, libelle) des transactions confirmees,
+   * avec leur multiplicite (verification de reprise).
+   */
+  committedSigs: Map<string, number>
   lostCategorizations: number
   lostAssignments: number
   droppedTx: number
@@ -1159,18 +1162,53 @@ function isAmbiguous(err: unknown): boolean {
 
 const monthOfDate = (date: string) => date.slice(0, 7)
 
+/** Signature d'une transaction : compte, date, montant, libelle (tel que stocke, sans blancs de bord). */
+const txSig = (accountId: string, date: string, amount: number, label: string) =>
+  `${accountId}\u0000${date}\u0000${amount}\u0000${label.trim()}`
+
+/** Ligne renvoyee par getTransactions (seuls les champs de la signature servent). */
+interface StoredTx {
+  accountId?: unknown
+  bookingDate?: unknown
+  amount?: unknown
+  label?: unknown
+}
+
 /**
- * Reprise apres un echec ambigu : le lot a-t-il ete ecrit malgre tout ? Apres
- * l'effacement, un mois ne contient que les lignes de cet import (comptes
- * encore sans association bancaire) : on compare, mois par mois, le nombre de
- * transactions lues au nombre confirme avant ce lot. Evite les doublons.
+ * Reprise apres un echec ambigu : le lot a-t-il ete ecrit malgre tout ? Un
+ * lot s'ecrit en une seule insertion (tout ou rien). On lit les mois du lot et
+ * on compare par SIGNATURE : le lot est ecrit si chacune de ses lignes s'y
+ * retrouve, multiplicites comprises, une fois retirees les lignes deja
+ * confirmees par les lots precedents. Compter les lignes du mois ne suffisait
+ * pas : une saisie manuelle pendant la pause faisait declarer ecrit un lot qui
+ * ne l'etait pas. Evite aussi les doublons dans l'autre sens.
  */
 async function batchAlreadyCommitted(run: ImportRun, batch: TxRow[]): Promise<boolean> {
-  const perMonth = new Map<string, number>()
-  for (const row of batch) perMonth.set(monthOfDate(row.date), (perMonth.get(monthOfDate(row.date)) ?? 0) + 1)
-  for (const [month, count] of perMonth) {
-    const { transactions } = await apiCall<{ transactions: unknown[] }>('getTransactions', { month })
-    if (transactions.length < (run.insertedByMonth[month] ?? 0) + count) return false
+  const available = new Map<string, number>()
+  for (const month of new Set(batch.map((row) => monthOfDate(row.date)))) {
+    const { transactions } = await apiCall<{ transactions: StoredTx[] }>('getTransactions', { month })
+    for (const t of transactions) {
+      if (
+        typeof t.accountId !== 'string' ||
+        typeof t.bookingDate !== 'string' ||
+        typeof t.amount !== 'number' ||
+        typeof t.label !== 'string'
+      ) {
+        continue
+      }
+      const sig = txSig(t.accountId, t.bookingDate, t.amount, t.label)
+      available.set(sig, (available.get(sig) ?? 0) + 1)
+    }
+  }
+  for (const [sig, count] of run.committedSigs) {
+    const left = available.get(sig)
+    if (left !== undefined) available.set(sig, left - count)
+  }
+  for (const row of batch) {
+    const sig = txSig(row.accountId, row.date, row.amount, row.label)
+    const left = available.get(sig) ?? 0
+    if (left <= 0) return false
+    available.set(sig, left - 1)
   }
   return true
 }
@@ -1178,8 +1216,8 @@ async function batchAlreadyCommitted(run: ImportRun, batch: TxRow[]): Promise<bo
 function commitTxBatch(run: ImportRun, batch: TxRow[], inserted: number): void {
   run.insertedTx += inserted
   for (const row of batch) {
-    const m = monthOfDate(row.date)
-    run.insertedByMonth[m] = (run.insertedByMonth[m] ?? 0) + 1
+    const sig = txSig(row.accountId, row.date, row.amount, row.label)
+    run.committedSigs.set(sig, (run.committedSigs.get(sig) ?? 0) + 1)
   }
   run.cursor++
 }
@@ -1618,7 +1656,7 @@ export function startImport(queryClient: QueryClient, plan: ImportPlan, backup: 
     rulesCreated: 0,
     accountsClosed: 0,
     linksRestored: 0,
-    insertedByMonth: {},
+    committedSigs: new Map(),
     lostCategorizations: 0,
     lostAssignments: 0,
     droppedTx: 0,
