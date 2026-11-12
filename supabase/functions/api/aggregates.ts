@@ -83,7 +83,7 @@ import {
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
 import { countsForBudget, offBudgetTransferGroups } from '../../../packages/engine/src/index.ts'
-import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0'
 import { loadUserSettings } from './settings.ts'
 
 // Version de la LOGIQUE d'agregation. La bumper force un recompute : un

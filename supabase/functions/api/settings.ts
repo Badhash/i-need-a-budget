@@ -11,7 +11,7 @@ import {
   encryptJson,
   type CryptoKeys,
 } from '../../../packages/crypto/src/index.ts'
-import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0'
 
 export interface UserSettings {
   /** Mois de depart du budget (YYYY-MM) ; null = budget depuis l'origine. */

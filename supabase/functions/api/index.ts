@@ -8,7 +8,7 @@
 // INTERDIT : logger des payloads dechiffres, la cle, ou tout contenu metier.
 // Les logs se limitent a : nom d'action, code HTTP, message d'erreur statique.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2.119.0'
 import {
   addMonths,
   computeBudget,

@@ -24,7 +24,7 @@
 // INTERDIT : logger un payload dechiffre, la cle, un token EB, ou tout contenu
 // metier. Les logs se limitent a : action, code, message statique.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2.119.0'
 import {
   base64Decode,
   base64ToBytes,
