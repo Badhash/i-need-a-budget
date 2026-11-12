@@ -61,7 +61,9 @@ export async function loadPayeeDefaults(
   const out = new Map<string, string>()
   for (const row of (await loadAllRows(admin, userId)) ?? []) {
     const m = await decode(keys, userId, row.enc_payload)
-    if (m.key && m.categoryId) out.set(m.key, m.categoryId)
+    // Une cle que payeeKey ne produit plus (mots generiques seuls, ex.
+    // « cheque ») ne peut plus servir : ecartee, sans reecriture de la table.
+    if (m.key && m.categoryId && payeeKey(m.key)) out.set(m.key, m.categoryId)
   }
   return out
 }

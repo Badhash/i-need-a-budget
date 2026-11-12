@@ -32,8 +32,43 @@ const NOISE_WORDS = new Set([
   'x',
 ])
 
+// Mots qui ne designent jamais un tiers a eux seuls : une cle reduite a ces
+// mots regrouperait des tiers differents (tous les cheques, tous les virements
+// instantanes, tous les prets) sous une seule categorie apprise. Elle est donc
+// vide (pas de memoire) ; les regles restent le moyen de les categoriser.
+const GENERIC_WORDS = new Set([
+  'cheque',
+  'chq',
+  'remise',
+  'ref',
+  'reference',
+  'inst',
+  'instantane',
+  'permanent',
+  'sct',
+  'sdd',
+  'echeance',
+  'mensualite',
+  'pret',
+  'facture',
+  'paris',
+  'france',
+  'fr',
+  'eu',
+  'eur',
+  'sa',
+  'sas',
+  'sarl',
+])
+
 export function payeeKey(label: string): string {
   const base = label
+    // ligatures que NFD ne decompose pas (CŒUR -> coeur, pas « c ur »)
+    .replace(/[œŒ]/g, 'oe')
+    .replace(/[æÆ]/g, 'ae')
+    // sigles a esperluette (H&M, C&A, M & S) : une seule lettre de chaque cote
+    // serait sinon ecartee et le sigle perdu (H&M -> cle vide)
+    .replace(/\b([A-Za-z]) ?& ?([A-Za-z])\b/g, '$1$2')
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
@@ -46,5 +81,6 @@ export function payeeKey(label: string): string {
   const words = base
     .split(/\s+/)
     .filter((w) => w.length > 1 && !NOISE_WORDS.has(w))
+  if (words.every((w) => GENERIC_WORDS.has(w))) return ''
   return words.join(' ').slice(0, MAX_KEY).trim()
 }
