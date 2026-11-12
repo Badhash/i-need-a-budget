@@ -271,6 +271,7 @@ export function useAddTransaction(onFailure: (vars: AddTransactionVars, error: u
           const res = await apiAddTransaction({
             ...input,
             categoryId: input.categoryId === null ? null : resolveId(input.categoryId),
+            clientRef: tempId,
           })
           // Dans la tache : les actions en file derriere l'ajout (categoriser la
           // nouvelle ligne...) partent avec l'id serveur.

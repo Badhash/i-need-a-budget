@@ -527,6 +527,7 @@ export function useAdjustBalance() {
             label: ADJUSTMENT_LABEL,
             categoryId: vars.categoryId === null ? null : resolveId(vars.categoryId),
             amount: vars.delta,
+            clientRef: vars.tempId,
           })
           registerRealId(vars.tempId, res.id)
           let closeFailed = false
@@ -647,6 +648,7 @@ async function createAccountRemote(vars: CreateAccountVars): Promise<{ id: strin
     onBudget: vars.onBudget,
     openingBalance: vars.openingBalance,
     openingDate: vars.openingDate,
+    clientRef: vars.tempId,
   })
   confirmId(vars.tempId, id)
   let openingTxId: string | null = null

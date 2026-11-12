@@ -7,7 +7,7 @@
 // invalidation silencieuse et scopee de ['bootstrap'] et ['budget'].
 
 import { useMutation, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
-import { apiCall } from '@/lib/api'
+import { apiCall, creationRef } from '@/lib/api'
 import { enqueue, isTempId, registerRealId, resolveId } from '@/lib/mutationQueue'
 import {
   BOOTSTRAP_KEY,
@@ -32,8 +32,13 @@ const RULES_KEY = ['rules'] as const
 // Appels /api (contrats figes)
 // ---------------------------------------------------------------------------
 
-export async function apiCreateCategory(input: { groupId: string; name: string }): Promise<{ id: string }> {
-  return apiCall<{ id: string }>('createCategory', input)
+export async function apiCreateCategory(input: {
+  groupId: string
+  name: string
+  clientRef?: string
+}): Promise<{ id: string }> {
+  const { clientRef, ...rest } = input
+  return apiCall<{ id: string }>('createCategory', { ...rest, ...(clientRef ? creationRef(clientRef) : {}) })
 }
 
 export async function apiUpdateCategory(input: {
@@ -53,8 +58,10 @@ export async function apiCreateGroup(input: {
   name: string
   color: CatColor
   icon: GroupIcon
+  clientRef?: string
 }): Promise<{ id: string }> {
-  return apiCall<{ id: string }>('createCategoryGroup', input)
+  const { clientRef, ...rest } = input
+  return apiCall<{ id: string }>('createCategoryGroup', { ...rest, ...(clientRef ? creationRef(clientRef) : {}) })
 }
 
 export async function apiUpdateGroup(input: {
@@ -294,7 +301,7 @@ export function useCreateCategoryMutation() {
     mutationFn: ({ groupId, name, tempId }: { groupId: string; name: string; tempId: string }) =>
       enqueue(
         async () => {
-          const res = await apiCreateCategory({ groupId: resolveId(groupId), name })
+          const res = await apiCreateCategory({ groupId: resolveId(groupId), name, clientRef: tempId })
           registerRealId(tempId, res.id)
           return res
         },
@@ -465,7 +472,7 @@ export function useCreateGroupMutation() {
     // tache reseau enregistre tempId -> realId pour les mutations dependantes.
     mutationFn: ({ name, color, icon, tempId }: { name: string; color: CatColor; icon: GroupIcon; tempId: string }) =>
       enqueue(async () => {
-        const res = await apiCreateGroup({ name, color, icon })
+        const res = await apiCreateGroup({ name, color, icon, clientRef: tempId })
         registerRealId(tempId, res.id)
         return res
       }),

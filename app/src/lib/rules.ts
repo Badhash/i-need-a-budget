@@ -22,7 +22,7 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query'
 import type { Transaction } from '@/types/domain'
-import { apiCall } from '@/lib/api'
+import { apiCall, creationRef } from '@/lib/api'
 import {
   BOOTSTRAP_KEY,
   TRANSACTIONS_KEY,
@@ -308,6 +308,8 @@ interface CreateRuleInput {
   matcher: RuleMatcher
   categoryId: string
   priority?: number
+  /** Id temporaire de la creation : rend un rejeu reseau idempotent (creationRef). */
+  clientRef?: string
 }
 
 export async function apiCreateRule(input: CreateRuleInput): Promise<{ id: string }> {
@@ -315,6 +317,7 @@ export async function apiCreateRule(input: CreateRuleInput): Promise<{ id: strin
     matcher: input.matcher,
     categoryId: input.categoryId,
     priority: input.priority,
+    ...(input.clientRef ? creationRef(input.clientRef) : {}),
   })
 }
 
@@ -370,6 +373,7 @@ export function useCreateRule(): UseMutationResult<string, Error, { rule: Rule }
             matcher: rule.matcher,
             categoryId: resolveId(rule.categoryId),
             priority: rule.priority,
+            clientRef: rule.id,
           })
           registerRealId(rule.id, id)
           return id

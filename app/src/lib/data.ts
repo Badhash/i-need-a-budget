@@ -5,7 +5,7 @@
 
 import { useMemo } from 'react'
 import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query'
-import { apiCall } from '@/lib/api'
+import { apiCall, creationRef } from '@/lib/api'
 import type {
   Account,
   AccountKind,
@@ -35,6 +35,8 @@ interface NewTransactionInput {
   categoryId: string | null
   amount: number // centimes signes
   note?: string
+  /** Id temporaire de la creation : rend un rejeu reseau idempotent (creationRef). */
+  clientRef?: string
 }
 
 /** Forme brute renvoyee par l'action bootstrap. */
@@ -425,6 +427,7 @@ export async function apiAddTransaction(input: NewTransactionInput): Promise<{ i
     categoryId: input.categoryId,
     amount: input.amount,
     notes: input.note,
+    ...(input.clientRef ? creationRef(input.clientRef) : {}),
   })
 }
 
@@ -457,10 +460,13 @@ interface CreateAccountInput {
   onBudget: boolean
   openingBalance: number
   openingDate: string
+  /** Id temporaire de la creation : rend un rejeu reseau idempotent (creationRef). */
+  clientRef?: string
 }
 
 export async function apiCreateAccount(input: CreateAccountInput): Promise<{ id: string }> {
-  return apiCall<{ id: string }>('createAccount', { ...input })
+  const { clientRef, ...rest } = input
+  return apiCall<{ id: string }>('createAccount', { ...rest, ...(clientRef ? creationRef(clientRef) : {}) })
 }
 
 interface UpdateAccountInput {

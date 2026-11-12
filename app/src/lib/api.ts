@@ -27,6 +27,20 @@ const ANON_KEY = SUPABASE_ANON_KEY
 // une ecriture : sans ca, chaque ouverture ouvrait la fenetre de silence 30 s).
 const READ_ACTION = /^(get|list|export|bootstrap)/
 
+// Creations deja envoyees, par reference client (l'id temporaire de la
+// creation, stable d'un essai a l'autre). Un nouvel envoi de la meme creation
+// (essai reseau apres une reponse perdue, « Reessayer ») est signale au
+// serveur comme un rejeu : il retrouve la ligne ecrite par l'envoi precedent
+// au lieu d'en creer une seconde. Le premier envoi ne paie aucune recherche.
+const sentCreations = new Set<string>()
+
+/** Parametres d'idempotence d'une creation (a joindre a l'appel /api). */
+export function creationRef(clientRef: string): { clientRef: string; replay?: true } {
+  const replay = sentCreations.has(clientRef)
+  sentCreations.add(clientRef)
+  return replay ? { clientRef, replay: true } : { clientRef }
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,

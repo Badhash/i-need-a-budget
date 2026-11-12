@@ -77,6 +77,8 @@ interface AccountPayload {
    * d'ouverture saisi a la main (hors import d'historique explicite).
    */
   syncFrom?: string | null
+  /** Reference client de la creation (id temporaire du front) : idempotence. */
+  clientRef?: string | null
 }
 
 interface GroupPayload {
@@ -85,6 +87,7 @@ interface GroupPayload {
   icon: string
   sortOrder: number
   hidden: boolean
+  clientRef?: string | null
 }
 
 interface CategoryPayload {
@@ -93,6 +96,7 @@ interface CategoryPayload {
   isIncome: boolean
   sortOrder: number
   hidden: boolean
+  clientRef?: string | null
 }
 
 interface TxPayload {
@@ -112,6 +116,8 @@ interface TxPayload {
    * que la ligne est une moitie de virement, efface quand elle est deliee.
    */
   synthetic?: boolean
+  /** Reference client d'une saisie (id temporaire du front) : idempotence des rejeux. */
+  clientRef?: string | null
 }
 
 // REF H : le payload transaction est scinde en deux colonnes chiffrees.
@@ -125,7 +131,14 @@ interface TxPayload {
 // lecture, decode(...,'base64') via enc_insert/enc_update en ecriture).
 type TxCore = Pick<
   TxPayload,
-  'accountId' | 'categoryId' | 'bookingDate' | 'bookingMonth' | 'amount' | 'transferGroupId' | 'synthetic'
+  | 'accountId'
+  | 'categoryId'
+  | 'bookingDate'
+  | 'bookingMonth'
+  | 'amount'
+  | 'transferGroupId'
+  | 'synthetic'
+  | 'clientRef'
 >
 type TxText = Pick<TxPayload, 'label' | 'counterparty' | 'notes'>
 
@@ -148,6 +161,7 @@ interface RulePayload {
   matcher: RuleMatcher
   categoryId: string
   priority: number
+  clientRef?: string | null
 }
 
 // 'refill' (« recharger jusqu'a ») : remplir l'enveloppe jusqu'a `amount`, report
@@ -663,6 +677,7 @@ async function encodeTxColumns(
     // Marqueur porte seulement par une moitie de virement : delier la ligne
     // (transferGroupId null) l'efface, elle redevient une ecriture ordinaire.
     ...(payload.synthetic && payload.transferGroupId ? { synthetic: true } : {}),
+    ...(payload.clientRef ? { clientRef: payload.clientRef } : {}),
   }
   const text: TxText = {
     label: payload.label,
@@ -1553,6 +1568,32 @@ async function actionGetReports(userId: string, params: Params) {
   return computeReports(data, month)
 }
 
+// Idempotence des creations. Le front envoie l'id temporaire de la creation
+// (`clientRef`, stable d'un essai a l'autre) et `replay: true` quand il
+// renvoie une creation deja tentee (essai reseau apres une reponse perdue,
+// « Reessayer »). Seul un rejeu paie la recherche de la ligne : une premiere
+// tentative ecrit directement. Sans cela, une reponse perdue (PWA mise en
+// arriere-plan juste apres l'envoi) etait rejouee et la creation dedoublee.
+function optionalClientRef(params: Params): { clientRef: string | null; replay: boolean } {
+  const raw = params.clientRef
+  if (raw == null) return { clientRef: null, replay: false }
+  if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]{8,80}$/.test(raw)) {
+    throw new ApiError(400, 'clientRef invalide')
+  }
+  return { clientRef: raw, replay: params.replay === true }
+}
+
+// Transaction deja creee par un envoi precedent (lecture bornee au mois).
+async function findTxByClientRef(
+  userId: string,
+  keys: CryptoKeys,
+  month: string,
+  clientRef: string,
+): Promise<WithId<TxCore> | null> {
+  const rows = await loadTxCoreByMonthIdxs(userId, keys, [await txMonthIdx(keys, userId, month)])
+  return rows.find((r) => r.clientRef === clientRef) ?? null
+}
+
 async function actionAddTransaction(userId: string, params: Params) {
   const accountId = requireUuid(params.accountId, 'accountId')
   const bookingDate = requireDate(params.date)
@@ -1560,6 +1601,7 @@ async function actionAddTransaction(userId: string, params: Params) {
   const label = requireText(params.label, 'label')
   const categoryId = params.categoryId == null ? null : requireUuid(params.categoryId, 'categoryId')
   const notes = params.notes == null ? null : requireText(params.notes, 'notes', 500)
+  const { clientRef, replay } = optionalClientRef(params)
 
   const [accounts, categories] = await Promise.all([
     loadAll<AccountPayload>('accounts', userId),
@@ -1581,6 +1623,12 @@ async function actionAddTransaction(userId: string, params: Params) {
     label,
     notes,
     transferGroupId: null,
+    ...(clientRef ? { clientRef } : {}),
+  }
+  // Rejeu : la ligne a pu etre ecrite au premier envoi, on renvoie son id.
+  if (clientRef && replay) {
+    const existing = await findTxByClientRef(userId, keys, bookingMonth, clientRef)
+    if (existing) return { id: existing.id }
   }
   // tx_hash reste NULL : saisie manuelle, pas de dedup (doublons legitimes)
   const id = await withAggMaintenance(
@@ -2291,6 +2339,7 @@ async function actionCreateAccount(userId: string, params: Params) {
   const onBudget = params.onBudget !== false
   const openingBalance = requireAmount(params.openingBalance ?? 0)
   const openingDate = requireDate(params.openingDate ?? todayParis())
+  const { clientRef, replay } = optionalClientRef(params)
 
   // Prerequis verifies AVANT d'inserer le compte : un 409 ne doit pas laisser
   // un compte orphelin sans solde d'ouverture.
@@ -2313,15 +2362,34 @@ async function actionCreateAccount(userId: string, params: Params) {
     closed: false,
     connectionId: null,
     providerAccountUid: null,
+    ...(clientRef ? { clientRef } : {}),
   }
-  const accountId = await insertEncrypted('accounts', userId, payload)
+  const keys = await getKeys()
+  // Rejeu : le compte a pu etre cree au premier envoi, et son solde
+  // d'ouverture ecrit ou non (deux ecritures distinctes). On reprend la ou le
+  // premier envoi s'est arrete.
+  let accountId: string | null = null
+  let openingDone = false
+  if (clientRef && replay) {
+    const existing = (await loadAll<AccountPayload>('accounts', userId)).find(
+      (a) => a.clientRef === clientRef,
+    )
+    if (existing) {
+      accountId = existing.id
+      openingDone =
+        openingBalance === 0 ||
+        (await loadTxCoreByMonthIdxs(userId, keys, [await txMonthIdx(keys, userId, openingDate.slice(0, 7))]))
+          .some((t) => t.accountId === existing.id && t.amount === openingBalance && t.bookingDate === openingDate)
+      if (openingDone) return { id: existing.id }
+    }
+  }
+  if (accountId === null) accountId = await insertEncrypted('accounts', userId, payload)
 
   let openingTx: TxPayload | null = null
   // Agregats : cree la ligne de solde (a 0) du nouveau compte + repercute
   // l'eventuel solde d'ouverture.
-  const keys = await getKeys()
   const session = await openAggSession(userId, keys)
-  if (openingBalance !== 0) {
+  if (openingBalance !== 0 && !openingDone) {
     const bookingMonth = openingDate.slice(0, 7)
     const txPayload: TxPayload = {
       accountId,
@@ -2338,11 +2406,12 @@ async function actionCreateAccount(userId: string, params: Params) {
     openingTx = txPayload
   }
 
+  const createdId = accountId
   await closeAggSession(userId, keys, session, async (b) => {
-    await b.ensureAccount(accountId)
+    await b.ensureAccount(createdId)
     if (openingTx) await b.applyTx(1, openingTx)
   })
-  return { id: accountId }
+  return { id: createdId }
 }
 
 // Solde d'un compte : agregats si prets (O(comptes)), sinon somme complete des
@@ -2607,11 +2676,16 @@ function nextSortOrder(rows: { sortOrder: number }[]): number {
 async function actionCreateCategory(userId: string, params: Params) {
   const groupId = requireUuid(params.groupId, 'groupId')
   const name = requireText(params.name, 'name', 80)
+  const { clientRef, replay } = optionalClientRef(params)
 
   const [groups, categories] = await Promise.all([
     loadAll<GroupPayload>('category_groups', userId),
     loadAll<CategoryPayload>('categories', userId),
   ])
+  if (clientRef && replay) {
+    const existing = categories.find((c) => c.clientRef === clientRef)
+    if (existing) return { id: existing.id }
+  }
   if (!groups.some((g) => g.id === groupId)) throw new ApiError(404, 'groupe inconnu')
 
   const payload: CategoryPayload = {
@@ -2620,6 +2694,7 @@ async function actionCreateCategory(userId: string, params: Params) {
     isIncome: false,
     sortOrder: nextSortOrder(categories.filter((c) => c.groupId === groupId)),
     hidden: false,
+    ...(clientRef ? { clientRef } : {}),
   }
   const id = await insertEncrypted('categories', userId, payload)
   return { id }
@@ -2775,14 +2850,20 @@ async function actionCreateCategoryGroup(userId: string, params: Params) {
   // Defauts raisonnables si absents : couleur et icone neutres de la palette.
   const color = params.color == null ? 'blue' : requireGroupColor(params.color)
   const icon = params.icon == null ? 'sparkles' : requireGroupIcon(params.icon)
+  const { clientRef, replay } = optionalClientRef(params)
 
   const groups = await loadAll<GroupPayload>('category_groups', userId)
+  if (clientRef && replay) {
+    const existing = groups.find((g) => g.clientRef === clientRef)
+    if (existing) return { id: existing.id }
+  }
   const payload: GroupPayload = {
     name,
     color,
     icon,
     sortOrder: nextSortOrder(groups),
     hidden: false,
+    ...(clientRef ? { clientRef } : {}),
   }
   const id = await insertEncrypted('category_groups', userId, payload)
   return { id }
@@ -2909,16 +2990,21 @@ async function actionListRules(userId: string) {
 async function actionCreateRule(userId: string, params: Params) {
   const matcher = requireMatcher(params.matcher)
   const categoryId = requireUuid(params.categoryId, 'categoryId')
+  const { clientRef, replay } = optionalClientRef(params)
   await requireNonIncomeCategory(userId, categoryId)
 
   const rules = await loadAll<RulePayload>('rules', userId)
+  if (clientRef && replay) {
+    const existing = rules.find((r) => r.clientRef === clientRef)
+    if (existing) return { id: existing.id }
+  }
   // Defaut : se place a la fin (priorite la plus basse) = max existant + 1.
   const priority =
     params.priority == null
       ? rules.reduce((max, r) => Math.max(max, r.priority), -1) + 1
       : requirePriority(params.priority)
 
-  const payload: RulePayload = { matcher, categoryId, priority }
+  const payload: RulePayload = { matcher, categoryId, priority, ...(clientRef ? { clientRef } : {}) }
   const id = await insertEncrypted('rules', userId, payload)
   return { id }
 }
