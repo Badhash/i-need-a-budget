@@ -217,10 +217,23 @@ export function App() {
     }
     if (finalizedCodeRef.current === code) return
     finalizedCodeRef.current = code
+    // La banque renvoie toujours le state recu au depart : un retour sans
+    // state n'est pas issu d'un consentement lance depuis l'app (lien forge).
+    const state = params.get('state')
+    if (!state) {
+      cleanUrl()
+      toast({
+        message: 'Connexion bancaire non finalisée',
+        description: 'Ce retour de la banque est incomplet. Relance la connexion depuis Réglages.',
+        tone: 'danger',
+      })
+      void router.navigate({ to: '/reglages' })
+      return
+    }
 
     void (async () => {
       try {
-        await bankFinalizeAuth(code)
+        await bankFinalizeAuth(code, state)
         await queryClient.invalidateQueries({ queryKey: ['bankConnections'] })
       } catch (err) {
         // Un retour de consentement ne doit jamais casser l'app, mais l'echec

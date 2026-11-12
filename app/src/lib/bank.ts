@@ -134,16 +134,21 @@ export function useAspsps(): UseQueryResult<Aspsp[]> {
 }
 
 /** Demarre le flow d'auth PSD2 : retourne l'URL de redirection Enable Banking. */
-export async function bankStartAuth(redirectUrl: string, aspspName: string): Promise<{ url: string }> {
-  return syncBankCall<{ url: string }>('startAuth', { redirectUrl, aspspName })
+export async function bankStartAuth(
+  redirectUrl: string,
+  aspspName: string,
+): Promise<{ url: string; state?: string }> {
+  return syncBankCall<{ url: string; state?: string }>('startAuth', { redirectUrl, aspspName })
 }
 
 /**
  * Finalise le flow d'auth PSD2 : echange le code OAuth renvoye par Enable
  * Banking (au retour de redirection) contre une connexion bancaire persistee.
+ * `state` (renvoye avec le code) est verifie par le serveur : signe au depart
+ * pour cet utilisateur, il ecarte un lien de retour forge.
  */
-export async function bankFinalizeAuth(code: string): Promise<{ ok: boolean; connectionId: string }> {
-  return syncBankCall<{ ok: boolean; connectionId: string }>('finalizeAuth', { code })
+export async function bankFinalizeAuth(code: string, state: string): Promise<{ ok: boolean; connectionId: string }> {
+  return syncBankCall<{ ok: boolean; connectionId: string }>('finalizeAuth', { code, state })
 }
 
 interface BankSyncResult {

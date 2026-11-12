@@ -29,6 +29,7 @@ import {
   base64Decode,
   base64ToBytes,
   base64UrlEncode,
+  blindIndex,
   bytesToBase64,
   decryptJson,
   deriveKeys,
@@ -1770,6 +1771,35 @@ async function refreshAggregatesSafe(userId: string): Promise<void> {
 
 type Params = Record<string, unknown>
 
+// Parametre `state` du consentement (SYNC-11) : il etait genere puis jamais
+// verifie, si bien qu'un lien de retour forge (code d'une autre session)
+// pouvait etre finalise chez l'utilisateur. Il est desormais SIGNE et lie a
+// l'utilisateur : nonce.expiration.HMAC(k_idx, domaine, user, nonce, exp). Rien
+// a stocker, et le retour peut se finaliser dans un autre contexte que celui du
+// depart (navigateur plutot que l'app installee, iOS).
+const AUTH_STATE_TTL_S = 60 * 60
+
+async function signAuthState(userId: string): Promise<string> {
+  const nonce = base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)))
+  const exp = (Math.floor(Date.now() / 1000) + AUTH_STATE_TTL_S).toString(36)
+  const mac = await blindIndex(await getKeys(), ['eb-auth-state', userId, nonce, exp])
+  return `${nonce}.${exp}.${mac}`
+}
+
+async function authStateValid(userId: string, state: string): Promise<boolean> {
+  const parts = state.split('.')
+  if (parts.length !== 3 || parts.some((p) => !/^[A-Za-z0-9_-]{1,64}$/.test(p))) return false
+  const [nonce, exp, mac] = parts
+  const expiresAt = parseInt(exp, 36) * 1000
+  if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return false
+  const expected = await blindIndex(await getKeys(), ['eb-auth-state', userId, nonce, exp])
+  // Comparaison a temps constant (longueurs publiques).
+  if (expected.length !== mac.length) return false
+  let diff = 0
+  for (let i = 0; i < mac.length; i++) diff |= expected.charCodeAt(i) ^ mac.charCodeAt(i)
+  return diff === 0
+}
+
 // startAuth : ouvre une session d'autorisation PSD2, renvoie l'URL de la banque.
 async function actionStartAuth(userId: string, params: Params) {
   // On privilegie l'URL du secret ENABLE_BANKING_REDIRECT_URL : elle DOIT etre
@@ -1791,8 +1821,9 @@ async function actionStartAuth(userId: string, params: Params) {
   // valid_until en ISO 8601. 90 jours : plafond PSD2 usuel des ASPSP (180 j
   // n'est accepte que par certaines banques et provoque un 400 sinon).
   const validUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
-  // state anti-CSRF/correlation : aleatoire, renvoye par EB au redirect.
-  const state = crypto.randomUUID()
+  // state anti-CSRF : signe et lie a l'utilisateur, renvoye par EB au redirect
+  // et verifie par finalizeAuth.
+  const state = await signAuthState(userId)
 
   // HYP EB : POST /auth -> { url, authorization_id, ... }. On ne renvoie que url.
   const body = {
@@ -1804,7 +1835,7 @@ async function actionStartAuth(userId: string, params: Params) {
   }
   const res = (await ebFetch('/auth', { method: 'POST', body })) as { url?: string }
   if (!res.url) throw new ApiError(502, 'Enable Banking : URL d autorisation absente')
-  return { url: res.url }
+  return { url: res.url, state }
 }
 
 type EbAccountRef = BankConnectionPayload['accounts'][number]
@@ -1884,6 +1915,14 @@ async function relinkAccountsAfterReconsent(
 async function actionFinalizeAuth(userId: string, params: Params) {
   const code = typeof params.code === 'string' ? params.code.trim() : ''
   if (!code) throw new ApiError(400, 'code d autorisation manquant')
+  // state transmis par le front (a jour) : il doit avoir ete signe pour cet
+  // utilisateur, il y a moins d'une heure. Un front plus ancien ne l'envoie
+  // pas encore : accepte tel quel le temps de sa mise a jour.
+  if (params.state != null) {
+    if (typeof params.state !== 'string' || !(await authStateValid(userId, params.state))) {
+      throw new ApiError(400, 'retour de consentement invalide ou expire, relance la connexion')
+    }
+  }
 
   // HYP EB : POST /sessions { code } -> { session_id, accounts, access,
   // aspsp }. `accounts` peut etre une liste d'uid (chaines) ou d'objets { uid,
