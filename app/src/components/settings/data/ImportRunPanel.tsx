@@ -180,7 +180,7 @@ type SafetyState =
 function RestoreSafetyDialog({ file, open, onClose }: { file: SavedFile; open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient()
   const features = useServerFeatures()
-  const { data: connections, isPending: connectionsPending } = useBankConnections()
+  const { data: connections, isPending: connectionsPending, isError: connectionsFailed } = useBankConnections()
   const [state, setState] = useState<SafetyState>({ status: 'loading' })
 
   useEffect(() => {
@@ -207,9 +207,10 @@ function RestoreSafetyDialog({ file, open, onClose }: { file: SavedFile; open: b
             accountFlags: features.has('accountFlags'),
             refillTargets: features.has('refillTargets'),
             connections,
+            connectionsFailed,
           })
         : null,
-    [state, features, connections],
+    [state, features, connections, connectionsFailed],
   )
   const invalid = plan ? validatePlan(plan) : null
   const ready = plan !== null && invalid === null && !connectionsPending

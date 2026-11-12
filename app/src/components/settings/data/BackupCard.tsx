@@ -61,7 +61,9 @@ function fmtExportedAt(iso: string | null): string | null {
 export function BackupCard() {
   const queryClient = useQueryClient()
   const features = useServerFeatures()
-  const { data: connections } = useBankConnections()
+  // Associations bancaires restaurees seulement vers une connexion encore
+  // presente : la liste doit etre lue avant de restaurer.
+  const { data: connections, isPending: connectionsPending, isError: connectionsFailed } = useBankConnections()
   const phase = useImportStore((s) => s.phase)
   const runSource = useImportStore((s) => s.source)
   // Envoi en cours, ou import interrompu apres l'effacement (a reprendre,
@@ -86,9 +88,10 @@ export function BackupCard() {
             accountFlags: features.has('accountFlags'),
             refillTargets: features.has('refillTargets'),
             connections,
+            connectionsFailed,
           })
         : null,
-    [backup, features, connections],
+    [backup, features, connections, connectionsFailed],
   )
   const invalid = plan ? validatePlan(plan) : null
 
@@ -216,6 +219,11 @@ export function BackupCard() {
               Restauration impossible : {invalid}.
             </p>
           )}
+          {connectionsPending && (
+            <p className="text-[12.5px] text-soft" aria-live="polite">
+              Vérification des associations bancaires…
+            </p>
+          )}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button
               variant="ghost"
@@ -226,7 +234,11 @@ export function BackupCard() {
             >
               Annuler
             </Button>
-            <Button variant="danger" onClick={() => setConfirmOpen(true)} disabled={invalid !== null || busy}>
+            <Button
+              variant="danger"
+              onClick={() => setConfirmOpen(true)}
+              disabled={invalid !== null || busy || connectionsPending}
+            >
               <ArchiveRestore className="h-4 w-4" />
               Restaurer et tout remplacer
             </Button>

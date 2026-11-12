@@ -271,8 +271,14 @@ export interface BackupOptions {
   accountFlags: boolean
   /** Serveur refillTargets : les objectifs « recharger » sont restaures. */
   refillTargets: boolean
-  /** Connexions bancaires actuelles (conservees par l'import), si connues. */
+  /**
+   * Connexions bancaires actuelles (conservees par l'import). undefined tant
+   * qu'elles ne sont pas lues : les associations ne sont pas verifiables et
+   * l'appelant ne doit pas lancer la restauration.
+   */
   connections: BankConnection[] | undefined
+  /** Lecture des connexions en echec (connections absent) : liens non verifiables. */
+  connectionsFailed?: boolean
 }
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('fr-FR')} ${n > 1 ? many : one}`
@@ -472,9 +478,14 @@ export function buildBackupPlan(backup: ParsedBackup, opts: BackupOptions): Impo
       linksLost++
     }
   }
-  if (linksLost > 0) {
+  // Connexions en cours de lecture : rien a annoncer encore (restauration
+  // bloquee par l'appelant). En echec : ne pas annoncer une connexion expiree
+  // qui ne l'est peut-etre pas.
+  if (linksLost > 0 && (opts.connections !== undefined || opts.connectionsFailed)) {
+    const reason =
+      opts.connections !== undefined ? 'connexion expirée ou retirée' : 'connexions bancaires illisibles pour le moment'
     notes.push(
-      `${plural(linksLost, 'association bancaire', 'associations bancaires')} à refaire dans « Banque » (connexion expirée ou retirée).`,
+      `${plural(linksLost, 'association bancaire', 'associations bancaires')} à refaire dans « Banque » (${reason}).`,
     )
   }
   if (backup.payees > 0) {
