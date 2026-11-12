@@ -6,12 +6,12 @@ sur la branche `claude/fervent-euler-5e07sf`, et ce qui reste à faire.
 
 ## 1. Synthèse
 
-- 119 constats distincts sur 11 zones (un même défaut signalé par deux relectures
+- 120 constats distincts sur 11 zones (un même défaut signalé par deux relectures
   ne compte qu'une fois). Aucune faille critique : pas de contournement
   d'authentification, pas d'accès aux données d'un autre utilisateur, pas de fuite de
   données déchiffrées, primitives de chiffrement saines.
-- 41 corrigés, 7 corrigés en partie, 2 couverts par un script SQL fourni à appliquer,
-  69 ouverts : 4 de sévérité haute, 29 moyenne, 36 basse.
+- 48 corrigés, 8 corrigés en partie, 2 couverts par un script SQL fourni à appliquer,
+  62 ouverts : 4 de sévérité haute, 27 moyenne, 31 basse.
 - Les trois problèmes les plus lourds étaient fonctionnels, pas des failles :
   1. **Synchro bancaire** : après un re-consentement, plus rien n'était importé, en
      silence ; deux opérations identiques le même jour n'en donnaient qu'une.
@@ -75,7 +75,7 @@ Une correction = un commit. `git log --oneline` les liste, regroupées par port�
 |---|---|
 | `fix(crypto)`, `fix(sync-bank)`, `refactor(sync-bank)` | Rang d'occurrence du hash, isolation par compte, délai de 25 s, report des associations au re-consentement, journaux et réponse cron sans données |
 | `fix(api)`, `feat(api)` | Agrégats (statut après la fence, invalidation jamais avalée, reconstruction planifiée, filet sur les 5xx), « Nouveau budget », seed, validations, CORS, clé anon, pagination, linkBankAccount, syncFrom |
-| `fix(front)`, `perf(front)` | Lectures annulées relancées, egress de l'historique, saisie des montants, import YNAB, tri, banque, rapports, bundle |
+| `fix(front)`, `perf(front)` | Lectures annulées relancées, egress de l'historique, saisie des montants, import YNAB, tri, banque, rapports, bundle, écran Budget (lots d'assignations, rollback, objectifs, feuilles mobiles) |
 | `chore(ci)`, `chore(sql)` | CI de tests avant déploiement, scripts SQL de durcissement |
 | `docs` | Ce document, `CLAUDE.md` |
 
@@ -109,7 +109,6 @@ Une correction = un commit. `git log --oneline` les liste, regroupées par port�
 
 | ID | Question |
 |---|---|
-| UI-BUD-02, FRONT-LIB-12 | Objectif « Recharger jusqu'à » : le besoin est recalculé après chaque dépense, donc « Financer les objectifs » repropose le montant dépensé. YNAB mesure par rapport au report. Quel sens veux-tu ? |
 | REP-05 | Un virement vers un compte de suivi rangé dans « Épargne » compte comme dépensé et fait tomber le taux d'épargne à 0 %. Indicateur à redéfinir ou à renommer |
 | ZAK-01, ZAK-02 | Widget Zakat : assiette (tous les comptes, suivi et dettes compris), taux, nisab saisi à la main, date au 1er janvier, « Ta méthode (3 %) » qui ignore le nisab. Hypothèses codées en dur, à exposer en réglages |
 | API-SEC-03 | Le second facteur n'est exigé que s'il est enrôlé. Un secret `REQUIRE_MFA=1` le rendrait obligatoire côté serveur |
@@ -199,12 +198,12 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | FRONT-INF-01 | H | Rejeu réseau sans idempotence | ouvert (voir API-SEC-02) |
 | FRONT-INF-02 | H | Dialogue d'édition : historique retéléchargé à chaque réconciliation | corrigé |
 | FRONT-INF-03 | M | Le budget est adapté avec la taxonomie du rendu précédent : une enveloppe tout juste créée peut refuser une assignation | ouvert |
-| FRONT-INF-04 | M | Un lot d'assignations n'entre pas dans la file comme un bloc : une correction intercalée est écrasée | ouvert |
+| FRONT-INF-04 | M | Un lot d'assignations n'entre pas dans la file comme un bloc : une correction intercalée est écrasée | corrigé (lot et déplacement = une tâche de la file) |
 | FRONT-INF-05 | M | Realtime : jeton posé à la main, pas de reconnexion après fermeture du canal | ouvert (à valider en conditions réelles) |
 | FRONT-INF-06 | M | `fetch` sans délai : une requête pendue bloque la file sans indicateur | ouvert (dépend de l'idempotence) |
 | FRONT-INF-07 | M | Recharts chargé au démarrage | corrigé (1 370 kB → 874 kB) |
 | FRONT-INF-08 | M | Caches préchargés jetés après 5 min | corrigé |
-| FRONT-INF-09 | B | Le rollback d'une assignation restaure tout le mois | ouvert |
+| FRONT-INF-09 | B | Le rollback d'une assignation restaure tout le mois | corrigé (seules les valeurs de l'action échouée, relecture derrière la file) |
 | FRONT-INF-10 | B | Pas de CSP | ouvert |
 | FRONT-INF-12 | B | Service worker : URL de retour bancaire gardée comme clé de cache ; page blanche possible hors ligne juste après un déploiement | ouvert |
 | FRONT-INF-13 | B | Erreur réseau affichée « Identifiants invalides » ; désactivation du second facteur sans confirmation | ouvert |
@@ -222,7 +221,7 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | FRONT-LIB-06 | M | Libellés courts : « INTERETS DEBITEURS » rendu « Interets crediteurs », marchands PayPal confondus, « VERSEMENT PERIODIQUE » rendu « Versement especes » | ouvert |
 | FRONT-LIB-08, UI-BUD-06 | M | « 1.000 » lu 1,00 €, « - » seul lu 0 | corrigé |
 | FRONT-LIB-09 | B | Caches qui gardent l'identifiant temporaire d'une catégorie | ouvert |
-| FRONT-LIB-10 | B | Prédicat « à catégoriser » recalculé par ligne | ouvert |
+| FRONT-LIB-10 | B | Prédicat « à catégoriser » recalculé par ligne | ouvert (le `select` instable de `useTargets`, signalé avec, est corrigé : voir UI-BUD-05) |
 | FRONT-LIB-11 | B | Date du jour au fuseau de l'appareil | corrigé (Europe/Paris) |
 | — | B | `MIN_MONTH = '2026-02'` en dur : les mois antérieurs (historique importé) ne sont pas navigables | ouvert |
 
@@ -230,14 +229,15 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 
 | ID | Sév. | Constat | Statut |
 |---|---|---|---|
+| UI-BUD-02, FRONT-LIB-12 | M | Objectif « Recharger jusqu'à » : chaque dépense rouvrait le besoin, « Financer les objectifs » reproposait le montant dépensé | corrigé (décision : sémantique YNAB, besoin = cible − report − assigné du mois) |
 | UI-BUD-03 | M | Mois précédent retéléchargé à chaque assignation | corrigé |
 | UI-ACC-01 | M | Double clic sur « Créer le compte » : deux comptes | corrigé |
-| UI-BUD-04 | M | Mobile : impossible de saisir un assigné négatif ou de rendre de l'argent au Prêt à assigner | ouvert |
-| UI-BUD-05 | B | Grille re-rendue en entier à chaque survol de glisser-déposer | ouvert |
+| UI-BUD-04 | M | Mobile : impossible de saisir un assigné négatif ou de rendre de l'argent au Prêt à assigner | corrigé |
+| UI-BUD-05 | B | Grille re-rendue en entier à chaque survol de glisser-déposer | partiel (survol et index des objectifs stables ; pas de `React.memo` sur les lignes, qui demanderait de refondre leurs callbacks) |
 | UI-ACC-02 | B | « Ajuster et clôturer » clôturait même avec une cible non nulle | corrigé |
-| UI-BUD-07 | B | Dialogue d'objectif réinitialisé pendant la saisie | ouvert |
-| UI-BUD-08 | B | Feuille d'actions d'une enveloppe accessible seulement par appui long | ouvert |
-| UI-BUD-09 | B | « Couvrir les dépassements » sans gestion d'échec | ouvert |
+| UI-BUD-07 | B | Dialogue d'objectif réinitialisé pendant la saisie | corrigé |
+| UI-BUD-08 | B | Feuille d'actions d'une enveloppe accessible seulement par appui long | corrigé (bouton « Plus d'actions » de la feuille d'assignation) |
+| UI-BUD-09 | B | « Couvrir les dépassements » sans gestion d'échec | corrigé (un lot refusé en cours d'envoi reste partiel côté serveur ; la relecture l'affiche) |
 
 ### Écrans Transactions, Tri, Règles
 
