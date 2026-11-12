@@ -129,9 +129,23 @@ export function TargetDialog({ category, target, row = null, onClose }: TargetDi
   const [dueMonth, setDueMonth] = useState(() => addMonths(currentMonth(), 6))
   const [error, setError] = useState<string | null>(null)
 
-  // Reinitialise le formulaire a chaque ouverture (categorie / objectif).
+  // Reinitialise le formulaire a l'ouverture et au changement de categorie.
+  // L'objet `target` change d'identite sans action de l'utilisateur (id
+  // temporaire remplace par l'id serveur, relecture de fond) : une saisie en
+  // cours n'est jamais ecrasee. Tant que rien n'a ete touche, le formulaire
+  // suit l'objectif (objectifs charges apres l'ouverture, valeur reconciliee).
+  const categoryId = category?.id ?? null
+  const openedFor = useRef<string | null>(null)
+  const touched = useRef(false)
   useEffect(() => {
-    if (!category) return
+    if (categoryId === null) {
+      openedFor.current = null
+      return
+    }
+    const opening = openedFor.current !== categoryId
+    if (!opening && touched.current) return
+    openedFor.current = categoryId
+    touched.current = false
     if (target) {
       setType(target.type)
       setAmount(centsToInput(target.amount))
@@ -142,7 +156,7 @@ export function TargetDialog({ category, target, row = null, onClose }: TargetDi
       setDueMonth(addMonths(currentMonth(), 6))
     }
     setError(null)
-  }, [category, target])
+  }, [categoryId, target])
 
   // « Recharger jusqu'a » n'existe qu'avec un serveur qui l'annonce ; un
   // objectif recharge deja pose reste editable dans tous les cas.
@@ -245,6 +259,7 @@ export function TargetDialog({ category, target, row = null, onClose }: TargetDi
                   role="radio"
                   aria-checked={selected}
                   onClick={() => {
+                    touched.current = true
                     setType(option.type)
                     setError(null)
                   }}
@@ -291,6 +306,7 @@ export function TargetDialog({ category, target, row = null, onClose }: TargetDi
                 id="target-amount"
                 value={amount}
                 onChange={(e) => {
+                  touched.current = true
                   setAmount(e.target.value)
                   setError(null)
                 }}
@@ -315,7 +331,16 @@ export function TargetDialog({ category, target, row = null, onClose }: TargetDi
               <label htmlFor="target-due" className="label-caps mb-1.5 block">
                 Échéance
               </label>
-              <DueMonthField id="target-due" value={dueMonth} onChange={setDueMonth} min={minDue} max={maxDue} />
+              <DueMonthField
+                id="target-due"
+                value={dueMonth}
+                onChange={(next) => {
+                  touched.current = true
+                  setDueMonth(next)
+                }}
+                min={minDue}
+                max={maxDue}
+              />
               {dueMonth < thisMonth && (
                 <p className="mt-1.5 text-[12.5px] text-warning">
                   Échéance passée ({relativeMonths(dueMonth)}) : il reste tout à financer maintenant.
