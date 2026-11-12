@@ -76,10 +76,24 @@ DialogOverlay.displayName = 'DialogOverlay'
 const DISMISS_DISTANCE = 110
 const DISMISS_VELOCITY = 0.6
 
+/**
+ * Props a poser sur une couche portalisee dans body (popover maison) qui doit
+ * rester utilisable par-dessus un dialog ouvert. Le dialog Radix piege le focus
+ * (FocusScope) et bloque le defilement (react-remove-scroll) par des ecouteurs
+ * sur document : arreter ici focusin, wheel et touchmove avant document laisse
+ * la recherche recevoir le clavier et la liste defiler. A combiner avec
+ * l'attribut data-inab-popover (le tap ne ferme pas le dialog).
+ */
+export const dialogLayerProps = {
+  onFocus: (e: React.FocusEvent) => e.stopPropagation(),
+  onWheel: (e: React.WheelEvent) => e.stopPropagation(),
+  onTouchMove: (e: React.TouchEvent) => e.stopPropagation(),
+}
+
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, style, onInteractOutside, onAnimationStart, onAnimationEnd, ...props }, ref) => {
+>(({ className, children, style, onInteractOutside, onAnimationStart, onAnimationEnd, onBlur, ...props }, ref) => {
   const closeRef = React.useRef<HTMLButtonElement>(null)
   const dragStart = React.useRef<{ y: number; t: number } | null>(null)
   const [drag, setDrag] = React.useState(0)
@@ -130,6 +144,12 @@ const DialogContent = React.forwardRef<
         onInteractOutside={(e) => {
           if ((e.target as HTMLElement | null)?.closest?.('[data-inab-popover],[data-toaster]')) e.preventDefault()
           onInteractOutside?.(e)
+        }}
+        // Focus qui part vers un popover maison (recherche du CategoryPicker) :
+        // le piege de focus de Radix le ramenerait aussitot dans le dialog.
+        onBlur={(e) => {
+          if ((e.relatedTarget as HTMLElement | null)?.closest?.('[data-inab-popover]')) e.stopPropagation()
+          onBlur?.(e)
         }}
         // Remise a zero du glisse a chaque ouverture / fin de fermeture : le
         // composant appelant reste monte entre deux ouvertures.

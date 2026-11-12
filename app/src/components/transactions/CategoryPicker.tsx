@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, CircleSlash, Search } from 'lucide-react'
 import { useCategoriesList, useCategoriesMap, useGroupsList, useGroupsMap } from '@/lib/data'
@@ -8,6 +8,7 @@ import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import { GroupPill } from '@/components/shared/GroupPill'
 import { cn } from '@/lib/utils'
+import { dialogLayerProps } from '@/components/ui/dialog'
 
 interface CategoryPickerProps {
   children: ReactNode
@@ -192,13 +193,20 @@ function PickerPanel({ triggerRef, includeIncome, label, value, onClose, onChoos
     setPos({ top: r.bottom + 6, left, maxHeight: Math.max(200, Math.min(440, below - 6)) })
   }
 
-  // Ouverture : place le panneau (desktop uniquement), focus sur la recherche.
+  // Ouverture : place le panneau (desktop uniquement).
   useEffect(() => {
     if (isDesktop) place()
-    const raf = requestAnimationFrame(() => inputRef.current?.focus())
-    return () => cancelAnimationFrame(raf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDesktop])
+  // Focus sur la recherche une fois le panneau rendu : en desktop, il ne
+  // l'est qu'apres le calcul de sa position (le champ n'existait pas encore et
+  // la frappe restait sur le declencheur).
+  const rendered = !isDesktop || pos !== null
+  useEffect(() => {
+    if (!rendered) return
+    const raf = requestAnimationFrame(() => inputRef.current?.focus())
+    return () => cancelAnimationFrame(raf)
+  }, [rendered])
 
   // Recalage au scroll/resize : DESKTOP uniquement (le popover ancre suit le
   // declencheur). Sur mobile la feuille est calee sur le clavier, pas au scroll.
@@ -215,6 +223,32 @@ function PickerPanel({ triggerRef, includeIncome, label, value, onClose, onChoos
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDesktop])
+
+  // Echap dans le panneau : il se ferme, lui seul. Radix (Dialog parent)
+  // ecoute la touche en capture sur document et fermait aussi la feuille ; la
+  // capture sur window passe avant lui et preventDefault lui signale que la
+  // touche est prise (le champ de recherche ferme le panneau). A la fermeture,
+  // le focus revient au declencheur (il etait dans le panneau, retire du DOM).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && panelRef.current?.contains(e.target as Node)) e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+  // Nettoyage d'effet de mise en page : il s'execute AVANT le retrait du
+  // panneau du DOM (un effet passif verrait deja le focus sur body).
+  // Le panneau est lu au nettoyage : en desktop, il n'est rendu qu'apres le
+  // calcul de sa position (null au montage).
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      if (panelRef.current?.contains(document.activeElement)) {
+        trigger?.querySelector<HTMLElement>('button, [tabindex]:not([tabindex="-1"])')?.focus()
+      }
+    }
+  }, [triggerRef])
 
   // Fermeture au clic hors du declencheur ET du panneau.
   useEffect(() => {
@@ -321,6 +355,8 @@ function PickerPanel({ triggerRef, includeIncome, label, value, onClose, onChoos
               }),
         }}
         onClick={(e) => e.stopPropagation()}
+        // Ouvert depuis un dialog : recherche et defilement utilisables.
+        {...dialogLayerProps}
         className={cn(
           'z-[60] flex flex-col border border-edge bg-surface3 p-1.5 shadow-elevated',
           isDesktop ? 'origin-top animate-scale-in rounded-2xl' : 'animate-slide-up rounded-[26px]',
