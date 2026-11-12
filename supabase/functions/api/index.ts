@@ -751,6 +751,23 @@ async function loadTxCore(userId: string): Promise<WithId<TxCore>[]> {
   return Promise.all(rows.map(async (r) => ({ id: r.id, ...(await decodeTxCore(keys, userId, r)) })))
 }
 
+// Lignes completes (enc_core + enc_text) designees par leurs ids, par lots de
+// 100 (la liste passe dans l'URL PostgREST). Pour les actions qui ne relisent
+// le texte que des lignes qu'elles reecrivent ou dont elles testent le libelle.
+async function loadTxFullByIds(userId: string, keys: CryptoKeys, ids: string[]): Promise<WithId<TxPayload>[]> {
+  const out: WithId<TxPayload>[] = []
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await admin
+      .from('transactions')
+      .select('id, enc_core:enc_core_b64, enc_text:enc_text_b64, enc_payload:enc_b64')
+      .eq('user_id', userId)
+      .in('id', ids.slice(i, i + 100))
+    if (error) throw new ApiError(500, 'lecture transactions impossible')
+    for (const r of (data ?? []) as TxRow[]) out.push({ id: r.id, ...(await decodeTx(keys, userId, r)) })
+  }
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Transferts croises (budget <-> suivi) : recherche SCOPEE des miroirs
 // ---------------------------------------------------------------------------
@@ -2545,7 +2562,9 @@ async function actionDeleteAccount(userId: string, params: Params) {
   const account = accounts.find((a) => a.id === accountId)
   if (!account) throw new ApiError(404, 'compte inconnu')
 
-  const transactions = await loadTxFull(userId)
+  // enc_core seul : le texte n'est relu que pour les moities de virement a
+  // delier (reecrites en entier), pas pour tout l'historique.
+  const transactions = await loadTxCore(userId)
   const own = transactions.filter((t) => t.accountId === accountId)
   const ownIds = own.map((t) => t.id)
   const ownIdSet = new Set(ownIds)
@@ -2574,9 +2593,10 @@ async function actionDeleteAccount(userId: string, params: Params) {
     }
     await recordDeletedHashes(userId, deletedHashes)
 
-    for (const tx of transactions) {
-      if (ownIdSet.has(tx.id)) continue
-      if (!tx.transferGroupId || !ownGroups.has(tx.transferGroupId)) continue
+    const peerIds = transactions
+      .filter((tx) => !ownIdSet.has(tx.id) && !!tx.transferGroupId && ownGroups.has(tx.transferGroupId))
+      .map((tx) => tx.id)
+    for (const tx of await loadTxFullByIds(userId, await getKeys(), peerIds)) {
       const { id, ...payload } = tx
       await updateTx(userId, id, { ...payload, transferGroupId: null })
     }
@@ -2797,8 +2817,10 @@ async function actionDeleteCategory(userId: string, params: Params) {
   if (!category) throw new ApiError(404, 'categorie inconnue')
   if (category.isIncome) throw new ApiError(400, 'les categories de revenus ne se suppriment pas')
 
+  // enc_core seul pour l'historique ; le texte n'est relu que pour les lignes
+  // decategorisees (reecrites en entier).
   const [transactions, assignments, targets, rules, accounts] = await Promise.all([
-    loadTxFull(userId),
+    loadTxCore(userId),
     loadAll<AssignmentPayload>('assignments', userId),
     loadAll<TargetPayload>('targets', userId),
     loadAll<RulePayload>('rules', userId),
@@ -2810,7 +2832,11 @@ async function actionDeleteCategory(userId: string, params: Params) {
   // laisserait un etat partiel non reflete par les agregats : on les invalide
   // avant de propager l'erreur (fallback calcul complet, jamais de chiffre faux).
   const keys = await getKeys()
-  const touched = transactions.filter((t) => t.categoryId === categoryId)
+  const touched = await loadTxFullByIds(
+    userId,
+    keys,
+    transactions.filter((t) => t.categoryId === categoryId).map((t) => t.id),
+  )
   const aggTxOps: { old: AggTx; next: AggTx }[] = []
   let uncategorized = 0
   const decategorize = async () => {
@@ -2826,7 +2852,8 @@ async function actionDeleteCategory(userId: string, params: Params) {
   // withAggregatesStale), qui ne sait pas la compter.
   const onBudget = onBudgetIds(accounts)
   const offGroups = offBudgetTransferGroups(transactions, onBudget)
-  if (touched.some((t) => isCrossBudgetHalf(t, onBudget, offGroups))) {
+  // Gros lot : invalidation autour des ecritures (cf. AGG_INCREMENTAL_BATCH_MAX).
+  if (touched.length > AGG_INCREMENTAL_BATCH_MAX || touched.some((t) => isCrossBudgetHalf(t, onBudget, offGroups))) {
     await withAggregatesStale(userId, decategorize)
   } else if (touched.length > 0) {
     // Maintenance immediate du lot decategorise : les etapes suivantes peuvent
@@ -3096,9 +3123,9 @@ async function actionDeleteRule(userId: string, params: Params) {
 
 async function actionApplyRulesToUncategorized(userId: string) {
   const keys = await getKeys()
-  const [rules, transactions, accounts, categories, payeeDefaults] = await Promise.all([
+  const [rules, cores, accounts, categories, payeeDefaults] = await Promise.all([
     loadAll<RulePayload>('rules', userId),
-    loadTxFull(userId),
+    loadTxCore(userId),
     loadAll<AccountPayload>('accounts', userId),
     loadAll<CategoryPayload>('categories', userId),
     loadPayeeDefaults(admin, keys, userId).catch(() => new Map<string, string>()),
@@ -3117,11 +3144,17 @@ async function actionApplyRulesToUncategorized(userId: string) {
   const cardAccounts = new Set(accounts.filter((a) => a.kind === 'card_deferred').map((a) => a.id))
   const hasOnBudgetCard = accounts.some((a) => a.kind === 'card_deferred' && !a.closed && a.onBudget)
 
-  // 1. Selection, sans ecrire.
+  // 1. Selection, sans ecrire. On ne touche qu'aux transactions non
+  // categorisees et hors transfert, sur les comptes budget : seul leur texte
+  // (libelle teste par les regles) est relu, pas celui de tout l'historique.
+  const candidateIds = cores
+    .filter((tx) => !tx.categoryId && !tx.transferGroupId && onBudget.has(tx.accountId))
+    .map((tx) => tx.id)
+  if (candidateIds.length === 0) return { categorized: 0 }
+  const transactions = await loadTxFullByIds(userId, keys, candidateIds)
   const matches: { id: string; old: TxPayload; next: TxPayload }[] = []
   for (const tx of transactions) {
-    // On ne touche qu'aux transactions non categorisees et hors transfert,
-    // sur les comptes budget.
+    // Relecture : une ligne categorisee entre les deux lectures est laissee.
     if (tx.categoryId || tx.transferGroupId || !onBudget.has(tx.accountId)) continue
     if (
       hasOnBudgetCard &&
