@@ -1630,7 +1630,10 @@ async function syncUser(
             await txMonthIdx(keys, userId, mapped.bookingMonth),
             hash,
           )
-          if (inserted) importedForConn += 1
+          if (inserted) {
+            importedForConn += 1
+            await aggStaleAfterWrite(userId)
+          }
         }
         polledAccounts += 1
       } catch (err) {
@@ -1682,6 +1685,8 @@ async function syncUser(
     } catch (err) {
       errors.push(err instanceof ApiError ? err.message : 'liaison carte differee echouee')
     }
+    // Liaisons ecrites (ou tentees) apres le dernier import : meme garde.
+    await aggStaleAfterWrite(userId)
   }
 
   // Agregats (REF I) : si des transactions ont ete ecrites (l'invalidation a
@@ -1718,6 +1723,16 @@ async function aggStaleBeforeWrite(userId: string, guard: AggWriteGuard): Promis
     guard.staled = true
   }
   guard.count += 1
+}
+
+// Invalidation APRES chaque ecriture (SYNC-09) : une reconstruction concurrente
+// (bootstrapFull) lancee entre deux imports lisait un instantane sans les
+// lignes suivantes puis basculait 'ready' (agregats faux jusqu'au recompute
+// final). Supprimer le marqueur apres l'ecriture fait echouer son CAS final.
+// Requete legere, sans charge utile ; best-effort (l'invalidation avant la
+// premiere ecriture et le recompute final restent les garanties).
+async function aggStaleAfterWrite(userId: string): Promise<void> {
+  await aggMarkStale(admin, userId).catch(() => {})
 }
 
 // Recompute complet des agregats depuis les tables sources (transactions lues
@@ -2193,6 +2208,7 @@ async function actionReconcile(userId: string) {
           month_idx: await txMonthIdx(keys, userId, bookingMonth),
         })
       }
+      await aggStaleAfterWrite(userId)
 
       adjusted.push({
         accountId: localAccount.id,
