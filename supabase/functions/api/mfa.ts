@@ -25,12 +25,20 @@ export function jwtClaims(authHeader: string): Record<string, unknown> {
   }
 }
 
-/** True si l'utilisateur n'a aucun facteur verifie, ou si le jeton est aal2. */
+/**
+ * True si le jeton est aal2, ou si l'utilisateur n'a aucun facteur verifie.
+ *
+ * Secret optionnel REQUIRE_MFA=1 : le second facteur devient OBLIGATOIRE, meme
+ * sans facteur enrole (fail-closed). Sans lui, un compte dont le TOTP n'est pas
+ * (ou plus) enrole s'ouvre au mot de passe seul, et un attaquant qui le connait
+ * peut enroler son propre facteur. A activer une fois le TOTP enrole.
+ */
 export function mfaLevelSatisfied(
   authHeader: string,
   user: { factors?: FactorLike[] | null },
 ): boolean {
+  const required = (Deno.env.get('REQUIRE_MFA') ?? '').trim() === '1'
   const hasVerifiedFactor = (user.factors ?? []).some((f) => f.status === 'verified')
-  if (!hasVerifiedFactor) return true
+  if (!hasVerifiedFactor && !required) return true
   return jwtClaims(authHeader).aal === 'aal2'
 }
