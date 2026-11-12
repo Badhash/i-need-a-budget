@@ -117,7 +117,8 @@ export function MobileGroups({ groups, month, targets, onOpenTarget, onViewActiv
   const rta = useBudgetMonth(month).data?.rta
   const collapsedGroups = useUiStore((s) => s.collapsedGroups)
   const toggleGroup = useUiStore((s) => s.toggleGroupCollapsed)
-  // Feuille d'assignation (tape) et menu contextuel (appui long). Les lignes
+  // Feuille d'assignation (tape) et menu contextuel (appui long, ou « Plus
+  // d'actions » depuis la feuille d'assignation). Les lignes
   // sont relues dans `groups` a chaque rendu : la feuille suit le cache.
   const [assignCtx, setAssignCtx] = useState<{ groupId: string; categoryId: string } | null>(null)
   const [actionCtx, setActionCtx] = useState<{ groupId: string; categoryId: string } | null>(null)
@@ -283,6 +284,11 @@ export function MobileGroups({ groups, month, targets, onOpenTarget, onViewActiv
         onViewActivity={(categoryId) => {
           setAssignCtx(null)
           onViewActivity(categoryId)
+        }}
+        onMoreActions={() => {
+          if (!assignCtx) return
+          setAssignCtx(null)
+          setActionCtx(assignCtx)
         }}
         onClose={() => setAssignCtx(null)}
       />

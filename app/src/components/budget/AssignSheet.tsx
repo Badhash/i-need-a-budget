@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, MoreHorizontal } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { GroupPill } from '@/components/shared/GroupPill'
@@ -25,6 +25,8 @@ interface AssignSheetProps {
   onCommit: (categoryId: string, cents: number) => void
   // Clic sur l'activite : ferme la feuille et ouvre les transactions filtrees.
   onViewActivity?: (categoryId: string) => void
+  /** « Plus d'actions » : ferme la feuille et ouvre la feuille d'actions de l'enveloppe. */
+  onMoreActions?: () => void
   onClose: () => void
 }
 
@@ -64,6 +66,7 @@ function AssignSheetContent({
   rta,
   onCommit,
   onViewActivity,
+  onMoreActions,
   onClose,
 }: AssignSheetProps & { row: BudgetRow }) {
   const [draft, setDraft] = useState(() => toDraft(row.assigned))
@@ -135,7 +138,21 @@ function AssignSheetContent({
         // suivre son apparition sans saut.
         style={keyboardInset > 0 ? { transform: `translateY(-${keyboardInset}px)` } : undefined}
       >
-        <DialogHeader className="pb-3 pr-14 pt-6">
+        {/* Acces sans appui long a la feuille d'actions (objectif, deplacer,
+            masquer, renommer, supprimer), a cote du bouton de fermeture :
+            meme pastille, zone de toucher etendue a 44px. */}
+        {onMoreActions && (
+          <button
+            type="button"
+            onClick={onMoreActions}
+            aria-label="Plus d'actions"
+            title="Plus d'actions"
+            className="absolute right-[3.75rem] top-4 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-surface2 text-soft transition-[background-color,color,transform] duration-150 ease-spring after:absolute after:-inset-1.5 after:content-[''] hover:bg-line/80 hover:text-ink active:scale-90"
+          >
+            <MoreHorizontal className="h-4 w-4" strokeWidth={2.4} />
+          </button>
+        )}
+        <DialogHeader className={cn('pb-3 pt-6', onMoreActions ? 'pr-24' : 'pr-14')}>
           <DialogTitle className="flex items-center gap-3">
             <GroupPill group={group} size="md" />
             <span className="min-w-0">
