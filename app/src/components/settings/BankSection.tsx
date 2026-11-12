@@ -4,7 +4,7 @@
 // (ecran d'accueil), le consentement s'ouvre hors de l'app : on le dit, et on
 // relit les connexions au retour.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -151,6 +151,10 @@ export function BankSection() {
   const [importConnId, setImportConnId] = useState('')
   const [importing, setImporting] = useState(false)
   const [importMessage, setImportMessage] = useState<string | null>(null)
+  // Comptes bancaires dont le compte local est en cours de creation : un second
+  // choix « Creer » pendant l'envoi creerait un doublon.
+  const creatingRef = useRef(new Set<string>())
+  const [creating, setCreating] = useState<ReadonlySet<string>>(() => new Set())
 
   const list = connections ?? []
   const hasConnections = list.length > 0
@@ -262,30 +266,57 @@ export function BankSection() {
 
   // Cree le compte local qui correspond au compte bancaire (type deduit du
   // libelle produit : carte a debit differe si ca ressemble a une carte),
-  // l'associe, puis laisse la reconciliation d'import fixer le solde.
+  // l'associe, puis laisse la reconciliation d'import fixer le solde. Les deux
+  // ecritures sont distinctes : un compte cree dont l'association echoue doit
+  // apparaitre dans la liste (a associer a la main), jamais etre recree.
   async function handleCreateAndLink(c: BankConnection, acc: EbAccountLink) {
+    if (creatingRef.current.has(acc.uid)) return
+    const setBusy = (busy: boolean) => {
+      if (busy) creatingRef.current.add(acc.uid)
+      else creatingRef.current.delete(acc.uid)
+      setCreating(new Set(creatingRef.current))
+    }
+    setBusy(true)
+    const name = acc.product ?? acc.name ?? 'Compte bancaire'
     const label = `${acc.product ?? ''} ${acc.name ?? ''}`.toUpperCase()
     const isCard = /\bDD\b|DEBIT DIFFERE|WORLD ELITE|CARTE|CARD|VISA|MASTERCARD|GOLD/.test(label)
     try {
-      const { id } = await apiCreateAccount({
-        name: acc.product ?? acc.name ?? 'Compte bancaire',
-        institution: c.institution,
-        kind: isCard ? 'card_deferred' : 'checking',
-        onBudget: true,
-        openingBalance: 0,
-        openingDate: today(),
-      })
-      await apiLinkBankAccount({ connectionId: c.id, providerAccountUid: acc.uid, accountId: id })
+      let id: string
+      try {
+        ;({ id } = await apiCreateAccount({
+          name,
+          institution: c.institution,
+          kind: isCard ? 'card_deferred' : 'checking',
+          onBudget: true,
+          openingBalance: 0,
+          openingDate: today(),
+        }))
+      } catch {
+        setSyncMessage('Création du compte impossible pour le moment.')
+        toast({ message: 'Création du compte impossible', description: 'Réessaie dans un instant.', tone: 'danger' })
+        return
+      }
+      try {
+        await apiLinkBankAccount({ connectionId: c.id, providerAccountUid: acc.uid, accountId: id })
+      } catch {
+        // Compte cree mais non associe : la liste des comptes est relue pour
+        // qu'il soit propose ici, sans nouvelle creation.
+        await queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+        const message = `Compte « ${name} » créé, association à refaire : choisis-le dans la liste de ce compte bancaire.`
+        setSyncMessage(message)
+        toast({ message: 'Compte créé, association à refaire', description: message, tone: 'warning' })
+        return
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
         queryClient.invalidateQueries({ queryKey: ['transactions'] }),
         queryClient.invalidateQueries({ queryKey: ['bankConnections'] }),
       ])
       setSyncMessage(
-        `Compte « ${acc.product ?? acc.name ?? 'Compte bancaire'} » créé et associé. Lance « Importer l’historique » pour récupérer les transactions et caler le solde.`,
+        `Compte « ${name} » créé et associé. Lance « Importer l’historique » pour récupérer les transactions et caler le solde.`,
       )
-    } catch {
-      setSyncMessage('Création du compte impossible pour le moment.')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -434,7 +465,7 @@ export function BankSection() {
                     </div>
                     <Combobox
                       options={[
-                        { value: '', label: 'Non associé' },
+                        { value: '', label: creating.has(acc.uid) ? 'Création du compte…' : 'Non associé' },
                         ...localAccounts
                           .filter((a) => !a.closed || a.id === acc.linkedAccountId)
                           .map((a) => ({ value: a.id, label: a.name })),
@@ -447,6 +478,7 @@ export function BankSection() {
                       }}
                       placeholder="Non associé"
                       searchPlaceholder="Rechercher un compte…"
+                      disabled={creating.has(acc.uid)}
                       className="w-full sm:w-64"
                       aria-label={`Associer ${acc.product ?? acc.name ?? 'ce compte bancaire'} à un compte de l’app`}
                     />
