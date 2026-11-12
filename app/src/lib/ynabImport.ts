@@ -16,8 +16,10 @@
 // REPREND la ou il s'est arrete, sans effacer a nouveau.
 //
 // Rappel securite : ce module manipule des donnees en clair EN MEMOIRE et les
-// envoie a l'Edge Function /api (qui chiffre). On ne LOGGE jamais leur contenu
-// et rien n'est ecrit dans le stockage du navigateur.
+// envoie a l'Edge Function /api (qui chiffre). On ne LOGGE jamais leur contenu.
+// Seul un drapeau sans donnee (date de debut d'un effacement non termine) est
+// ecrit dans le stockage du navigateur, pour signaler un import incomplet apres
+// un rechargement.
 
 import { create } from 'zustand'
 import type { QueryClient } from '@tanstack/react-query'
@@ -1035,6 +1037,11 @@ export interface ImportRun {
   skipped: string[]
   /** Dernier envoi en echec ambigu (reseau, 5xx) : verifier avant de renvoyer. */
   verify: boolean
+  /**
+   * L'effacement a peut-etre commence (begin envoye sans refus explicite) :
+   * les anciennes donnees sont perdues tant que l'import n'est pas termine.
+   */
+  wipeStarted: boolean
 }
 
 export interface ImportProgress {
@@ -1225,7 +1232,23 @@ async function execute(run: ImportRun, report: (p: ImportProgress) => void): Pro
     report(progressOf(run))
     switch (run.step) {
       case 'begin': {
-        run.begin = await apiCall<BeginResult>('importReplaceBegin', beginPayload(plan))
+        // Drapeau pose AVANT l'envoi : une coupure pendant begin peut avoir
+        // efface sans que la reponse arrive.
+        const firstAttempt = !run.wipeStarted
+        run.wipeStarted = true
+        markImportIncomplete()
+        try {
+          run.begin = await apiCall<BeginResult>('importReplaceBegin', beginPayload(plan))
+        } catch (err) {
+          // Le serveur valide tout AVANT d'effacer : une reponse 4xx au premier
+          // essai prouve que rien n'a ete touche. Apres un essai ambigu, on
+          // reste prudent.
+          if (firstAttempt && err instanceof ApiError && err.status < 500) {
+            run.wipeStarted = false
+            clearImportIncomplete()
+          }
+          throw err
+        }
         prepareBatches(run)
         run.step = plan.startMonth ? 'startMonth' : 'transactions'
         run.cursor = 0
@@ -1471,6 +1494,72 @@ const IDLE: ImportState = {
 
 export const useImportStore = create<ImportState>(() => IDLE)
 
+// ---------------------------------------------------------------------------
+// Import incomplet : drapeau persistant (sans donnee) et garde de fermeture
+// ---------------------------------------------------------------------------
+
+const INCOMPLETE_KEY = 'inab-import-incomplete'
+/** Evenement emis sur window quand le drapeau change (meme onglet). */
+export const IMPORT_INCOMPLETE_EVENT = INCOMPLETE_KEY
+
+function writeIncomplete(value: string | null): void {
+  try {
+    if (value === null) localStorage.removeItem(INCOMPLETE_KEY)
+    else localStorage.setItem(INCOMPLETE_KEY, value)
+  } catch {
+    // Stockage indisponible (navigation privee) : signal perdu, sans effet.
+  }
+  try {
+    window.dispatchEvent(new Event(INCOMPLETE_KEY))
+  } catch {
+    // Hors navigateur : sans effet.
+  }
+}
+
+/** Pose le drapeau « effacement commence, import non termine ». */
+function markImportIncomplete(): void {
+  writeIncomplete(new Date().toISOString())
+}
+
+/** Retire le drapeau (import termine, ou signal ecarte par l'utilisateur). */
+export function clearImportIncomplete(): void {
+  writeIncomplete(null)
+}
+
+/** Vrai si un remplacement a commence a effacer sans se terminer (cet appareil). */
+export function readImportIncomplete(): boolean {
+  try {
+    return localStorage.getItem(INCOMPLETE_KEY) !== null
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Les anciennes donnees sont peut-etre effacees et l'import n'est pas
+ * termine : quitter la page perdrait la reprise (en memoire), et a l'echec,
+ * la sauvegarde de securite telechargeable.
+ */
+export function isWipeInProgress(state: Pick<ImportState, 'phase' | 'run'>): boolean {
+  return state.phase === 'running' || (state.phase === 'failed' && state.run?.wipeStarted === true)
+}
+
+function preventUnload(e: BeforeUnloadEvent) {
+  e.preventDefault()
+  e.returnValue = ''
+}
+
+// Garde beforeunload synchronisee sur l'etat : envoi en cours, ou echec apres
+// le debut de l'effacement (la reprise et la sauvegarde ne vivent qu'en memoire).
+let unloadGuarded = false
+useImportStore.subscribe((state) => {
+  const guard = isWipeInProgress(state)
+  if (guard === unloadGuarded) return
+  unloadGuarded = guard
+  if (guard) window.addEventListener('beforeunload', preventUnload)
+  else window.removeEventListener('beforeunload', preventUnload)
+})
+
 // Requetes touchees par un remplacement complet (tout sauf la liste des
 // banques Enable Banking et l'historique de synchronisation, inchanges).
 const REPLACED_KEYS = ['bootstrap', 'transactions', 'budget', 'reports', 'targets', 'rules', 'bankConnections']
@@ -1479,35 +1568,34 @@ function invalidateReplaced(queryClient: QueryClient): Promise<unknown> {
   return Promise.all(REPLACED_KEYS.map((key) => queryClient.invalidateQueries({ queryKey: [key] })))
 }
 
-function preventUnload(e: BeforeUnloadEvent) {
-  e.preventDefault()
-  e.returnValue = ''
-}
-
 async function loop(queryClient: QueryClient): Promise<void> {
   const { run, phase } = useImportStore.getState()
   if (!run || phase === 'running') return
+  // Quitter la page pendant l'envoi perdrait la reprise : le navigateur demande
+  // (garde posee par l'abonnement au store, cf. isWipeInProgress).
   useImportStore.setState({ phase: 'running', error: null })
-  // Quitter la page pendant l'envoi perdrait la reprise : le navigateur demande.
-  window.addEventListener('beforeunload', preventUnload)
   try {
     await execute(run, (progress) => useImportStore.setState({ progress }))
+    clearImportIncomplete()
     useImportStore.setState({ phase: 'done', result: summarize(run), progress: progressOf(run) })
     await invalidateReplaced(queryClient)
   } catch (err) {
     useImportStore.setState({ phase: 'failed', error: describeImportError(err), progress: progressOf(run) })
     // Donnees deja effacees : les caches de l'app ne refletent plus rien.
     if (run.begin) void invalidateReplaced(queryClient)
-  } finally {
-    window.removeEventListener('beforeunload', preventUnload)
   }
 }
 
 /** Lance un remplacement complet (le plan doit avoir passe validatePlan). */
 export function startImport(queryClient: QueryClient, plan: ImportPlan, backup: SavedFile | null): Promise<void> {
-  if (useImportStore.getState().phase === 'running') return Promise.resolve()
+  const current = useImportStore.getState()
+  if (current.phase === 'running') return Promise.resolve()
   const invalid = validatePlan(plan)
   if (invalid) {
+    // Un import interrompu apres l'effacement garde sa reprise et sa
+    // sauvegarde : un plan invalide (les appelants valident avant) ne les
+    // ecrase jamais.
+    if (isWipeInProgress(current)) return Promise.resolve()
     useImportStore.setState({
       ...IDLE,
       source: plan.source,
@@ -1538,6 +1626,7 @@ export function startImport(queryClient: QueryClient, plan: ImportPlan, backup: 
     skippedRules: 0,
     skipped: [],
     verify: false,
+    wipeStarted: false,
   }
   useImportStore.setState({ ...IDLE, source: plan.source, backup, run, progress: progressOf(run) })
   return loop(queryClient)
@@ -1551,9 +1640,22 @@ export function resumeImport(queryClient: QueryClient): Promise<void> {
   return loop(queryClient)
 }
 
-/** Oublie l'import termine ou abandonne (sans effet pendant un envoi). */
+/**
+ * Oublie l'import termine ou abandonne (sans effet pendant un envoi). Un import
+ * abandonne apres le debut de l'effacement garde sa sauvegarde de securite en
+ * memoire (telechargeable et restaurable depuis « Sauvegarde et restauration ») ;
+ * le drapeau d'import incomplet reste pose : les donnees le sont.
+ */
 export function resetImport(): void {
-  if (useImportStore.getState().phase !== 'running') useImportStore.setState(IDLE)
+  const { phase, run, backup } = useImportStore.getState()
+  if (phase === 'running') return
+  const keepBackup = phase === 'failed' && run?.wipeStarted === true
+  useImportStore.setState({ ...IDLE, backup: keepBackup ? backup : null })
+}
+
+/** Ecarte la sauvegarde de securite gardee apres un abandon. */
+export function forgetSafetyBackup(): void {
+  if (useImportStore.getState().phase === 'idle') useImportStore.setState({ backup: null })
 }
 
 /** Mois de depart restaurable : le serveur refuse au-dela du mois prochain. */

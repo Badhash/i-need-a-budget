@@ -10,6 +10,7 @@ import {
   buildYnabPlan,
   decodeYnabCsv,
   parseYnabExport,
+  isWipeInProgress,
   startImport,
   useImportStore,
   validatePlan,
@@ -64,7 +65,9 @@ export function YnabImportCard() {
   const withTransfers = features.has('importTransfers')
   const phase = useImportStore((s) => s.phase)
   const runSource = useImportStore((s) => s.source)
-  const busy = phase === 'running'
+  // Envoi en cours, ou import interrompu apres l'effacement (a reprendre,
+  // restaurer ou abandonner d'abord) : pas de nouveau remplacement.
+  const busy = useImportStore(isWipeInProgress)
   // Import YNAB en cours, interrompu ou termine : le panneau de suivi remplace
   // le formulaire jusqu'a sa fermeture.
   const ownRun = phase !== 'idle' && runSource === 'ynab'

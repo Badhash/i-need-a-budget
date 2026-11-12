@@ -7,14 +7,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArchiveRestore, CalendarRange, Check, DatabaseBackup, Download, FileJson } from 'lucide-react'
-import { startImport, useImportStore, validatePlan, type SavedFile } from '@/lib/ynabImport'
+import { isWipeInProgress, startImport, useImportStore, validatePlan, type SavedFile } from '@/lib/ynabImport'
 import { useServerFeatures } from '@/lib/data'
 import { useBankConnections } from '@/lib/bank'
 import { fmtDateNumeric, fmtRelativeTime } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { SettingsCard } from '@/components/settings/shared/SettingsCard'
 import { FileDrop } from '@/components/settings/data/FileDrop'
-import { ImportRunPanel } from '@/components/settings/data/ImportRunPanel'
+import { ImportRunPanel, SafetyBackupNotice } from '@/components/settings/data/ImportRunPanel'
 import { ReplaceConfirmDialog } from '@/components/settings/data/ReplaceConfirmDialog'
 import { buildBackupPlan, parseBackup, type ParsedBackup } from '@/components/settings/data/backupPlan'
 import { LAST_BACKUP_EVENT, fetchBackup, fmtSize, readLastBackup, saveFile } from '@/components/settings/data/download'
@@ -64,7 +64,9 @@ export function BackupCard() {
   const { data: connections } = useBankConnections()
   const phase = useImportStore((s) => s.phase)
   const runSource = useImportStore((s) => s.source)
-  const busy = phase === 'running'
+  // Envoi en cours, ou import interrompu apres l'effacement (a reprendre,
+  // restaurer ou abandonner d'abord) : pas de nouveau remplacement.
+  const busy = useImportStore(isWipeInProgress)
   const ownRun = phase !== 'idle' && runSource === 'backup'
   const lastBackup = useLastBackup()
 
@@ -154,6 +156,7 @@ export function BackupCard() {
       </div>
 
       <ImportRunPanel source="backup" />
+      <SafetyBackupNotice />
 
       {!ownRun && (
         <div className="space-y-3">

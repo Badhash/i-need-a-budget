@@ -5,6 +5,7 @@ import { Header } from '@/components/layout/Header'
 import { BottomNav, Fab } from '@/components/layout/BottomNav'
 import { NetworkStatusPill } from '@/components/layout/NetworkStatusPill'
 import { UpdateBanner } from '@/components/shared/UpdateBanner'
+import { ImportIncompleteBanner } from '@/components/settings/data/ImportIncompleteBanner'
 import { PullToRefresh } from '@/components/shared/PullToRefresh'
 import { Toaster } from '@/components/shared/Toaster'
 import { AddTransactionDialog } from '@/components/transactions/AddTransactionDialog'
@@ -101,6 +102,7 @@ export function AppShell() {
         <Header />
         <main className="mx-auto max-w-content px-4 pb-32 pt-6 lg:px-8 lg:pb-12">
           <UpdateBanner />
+          <ImportIncompleteBanner />
           {/* Entree a chaque changement de page (cf. usePageEnter). */}
           <div key={pageKey} ref={pageRef} className="relative">
             <Outlet />
