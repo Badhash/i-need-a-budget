@@ -2,9 +2,11 @@
 // sauvegarde de securite OBLIGATOIRE : l'export est prepare des l'ouverture de
 // la feuille, puis enregistre dans le geste de confirmation (exige par la
 // feuille de partage iOS) juste avant l'effacement. Sans sauvegarde prete,
-// rien ne peut etre efface.
+// rien ne peut etre efface. La confirmation n'est pas reentrante : un double
+// toucher pendant la feuille de partage ne relance ni l'enregistrement ni
+// l'effacement.
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CircleAlert, CircleCheck, Landmark, ShieldCheck } from 'lucide-react'
 import type { SavedFile } from '@/lib/ynabImport'
 import { Button } from '@/components/ui/button'
@@ -40,6 +42,13 @@ export function ReplaceConfirmDialog({
   const [backup, setBackup] = useState<BackupState>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
   const [cancelled, setCancelled] = useState(false)
+  // Enregistrement en cours (feuille de partage ouverte) : etat pour le rendu,
+  // ref pour la garde (deux touchers dans le meme rendu voient la meme valeur
+  // d'etat).
+  const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
+  const openRef = useRef(open)
+  openRef.current = open
 
   // Sauvegarde de securite preparee des l'ouverture (et a chaque nouvel essai).
   useEffect(() => {
@@ -47,6 +56,8 @@ export function ReplaceConfirmDialog({
     let alive = true
     setBackup({ status: 'loading' })
     setCancelled(false)
+    savingRef.current = false
+    setSaving(false)
     fetchBackup('sauvegarde-avant-remplacement')
       .then((file) => alive && setBackup({ status: 'ready', file }))
       .catch(() => alive && setBackup({ status: 'error' }))
@@ -56,19 +67,31 @@ export function ReplaceConfirmDialog({
   }, [open, attempt])
 
   const confirm = async () => {
-    if (backup.status !== 'ready') return
-    // Enregistrement dans le geste (la feuille de partage iOS l'exige), puis
-    // effacement. Feuille fermee sans enregistrer : rien n'est efface.
-    const saved = await saveFile(backup.file)
-    if (!saved) {
-      setCancelled(true)
-      return
+    if (backup.status !== 'ready' || savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    setCancelled(false)
+    let confirmed = false
+    try {
+      // Enregistrement dans le geste (la feuille de partage iOS l'exige), puis
+      // effacement. Feuille fermee sans enregistrer : rien n'est efface.
+      const saved = await saveFile(backup.file)
+      if (!saved) setCancelled(true)
+      else if (openRef.current) {
+        confirmed = true
+        onConfirm(backup.file)
+      }
+    } finally {
+      // Confirme : la garde reste posee jusqu'a la prochaine ouverture.
+      if (!confirmed) {
+        savingRef.current = false
+        setSaving(false)
+      }
     }
-    onConfirm(backup.file)
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && !savingRef.current && onClose()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle className="pr-8">{title}</DialogTitle>
@@ -127,11 +150,11 @@ export function ReplaceConfirmDialog({
           </p>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose} disabled={saving}>
             Annuler
           </Button>
-          <Button variant="danger" onClick={() => void confirm()} disabled={backup.status !== 'ready'}>
-            {confirmLabel}
+          <Button variant="danger" onClick={() => void confirm()} disabled={backup.status !== 'ready' || saving}>
+            {saving ? 'Enregistrement…' : confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>
