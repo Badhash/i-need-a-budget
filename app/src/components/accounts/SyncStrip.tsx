@@ -57,7 +57,6 @@ export function SyncStrip({ connections }: { connections: BankConnection[] }) {
         queryClient.invalidateQueries({ queryKey: ['bootstrap'] }),
         queryClient.invalidateQueries({ queryKey: ['transactions'] }),
         queryClient.invalidateQueries({ queryKey: ['budget'] }),
-        queryClient.invalidateQueries({ queryKey: ['reports'] }),
         queryClient.invalidateQueries({ queryKey: ['syncLogs'] }),
       ])
     } catch {

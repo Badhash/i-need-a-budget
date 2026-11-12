@@ -1498,7 +1498,9 @@ async function actionBootstrapFull(userId: string, params: Params) {
     bootstrap: buildBootstrap(data, payees),
     budget: computeBudget(toEngineInput(data, month)),
     transactions: buildTransactionList(data).transactions,
-    reports: computeReports(data, month),
+    // Plus de `reports` : aucun ecran ne lisait ces agregats (la page Rapports
+    // les calcule sur la liste des transactions), ils coutaient un calcul et
+    // quelques Ko a chaque lancement. getReports reste disponible.
   }
 }
 

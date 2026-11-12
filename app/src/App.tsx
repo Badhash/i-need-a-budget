@@ -17,7 +17,6 @@ import {
   budgetKey,
   fetchBootstrapFull,
   fetchBudgetMonth,
-  reportsKey,
   type Bootstrap,
 } from '@/lib/data'
 import { markServerSync } from '@/lib/freshness'
@@ -54,18 +53,17 @@ async function preloadCritical(
 ): Promise<Bootstrap | undefined> {
   try {
     // UN SEUL appel serveur (une seule lecture/dechiffrement des transactions)
-    // qui renvoie taxonomie + budget du mois + transactions + rapports. On
-    // hydrate directement les caches TanStack concernes, sans refetch : les
-    // hooks (useBootstrap, useBudgetMonth, useTransactions, useReports) trouvent
-    // leur donnee deja en place, comme s'ils avaient charge separement.
+    // qui renvoie taxonomie + budget du mois + transactions. On hydrate
+    // directement les caches TanStack concernes, sans refetch : les hooks
+    // (useBootstrap, useBudgetMonth, useTransactions) trouvent leur donnee deja
+    // en place, comme s'ils avaient charge separement.
     const full = await fetchBootstrapFull(month)
     queryClient.setQueryData(BOOTSTRAP_KEY, full.bootstrap)
     queryClient.setQueryData(budgetKey(month), full.budget)
     queryClient.setQueryData(TRANSACTIONS_KEY, full.transactions)
-    queryClient.setQueryData(reportsKey(month), full.reports)
     // Donnees fraiches du serveur (et non une mise a jour optimiste) :
     // l'indicateur de fraicheur part de cet instant.
-    markServerSync([BOOTSTRAP_KEY, budgetKey(month), TRANSACTIONS_KEY, reportsKey(month)])
+    markServerSync([BOOTSTRAP_KEY, budgetKey(month), TRANSACTIONS_KEY])
     return full.bootstrap
   } catch {
     // Demarrage consolide indisponible : on entre quand meme, les vues gerent

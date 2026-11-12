@@ -16,7 +16,7 @@
 import { useCallback, useSyncExternalStore } from 'react'
 import { create } from 'zustand'
 import { hashKey, onlineManager, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { BOOTSTRAP_KEY, TRANSACTIONS_KEY, budgetKey, reportsKey } from '@/lib/data'
+import { BOOTSTRAP_KEY, TRANSACTIONS_KEY, budgetKey } from '@/lib/data'
 import { checkConnectivity, isNetworkError } from '@/lib/connectivity'
 import { whenQueueIdle } from '@/lib/mutationQueue'
 import { ApiError } from '@/lib/api'
@@ -126,7 +126,7 @@ async function runRefresh(client: QueryClient): Promise<RefreshResult> {
   // APRES elles (aucune valeur optimiste ne « saute »).
   await whenQueueIdle(8000)
   const month = useUiStore.getState().month
-  const keys = [BOOTSTRAP_KEY, budgetKey(month), TRANSACTIONS_KEY, reportsKey(month)]
+  const keys = [BOOTSTRAP_KEY, budgetKey(month), TRANSACTIONS_KEY]
   const settled = Promise.allSettled(
     keys.map((queryKey) => client.invalidateQueries({ queryKey, exact: true }, { throwOnError: true })),
   ).then((results): RefreshResult => {

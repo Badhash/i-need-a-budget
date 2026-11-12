@@ -46,11 +46,8 @@ export function scheduleBudgetRefetch(queryClient: QueryClient): void {
     void enqueue(async () => {
       void queryClient.invalidateQueries({ queryKey: ['budget'] })
       // Soldes de comptes et compteur « À catégoriser » vivent dans bootstrap
-      // (agregats, quelques Ko). Les rapports ne sont refetches que s'ils sont
-      // affiches ; sinon ils sont juste marques perimes pour leur prochain
-      // affichage (zero egress maintenant).
+      // (agregats, quelques Ko).
       void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
-      void queryClient.invalidateQueries({ queryKey: ['reports'] })
     })
   }, BUDGET_REFETCH_DEBOUNCE_MS)
 }

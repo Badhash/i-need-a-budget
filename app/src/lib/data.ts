@@ -16,7 +16,6 @@ import type {
 } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
 import type { BudgetMonth, BudgetGroupBlock, BudgetRow } from '@/lib/budget'
-import type { ReportsData } from '@/lib/reports'
 import { monthOf, today } from '@/lib/format'
 import type { ServerFeature } from '@/lib/features'
 
@@ -341,15 +340,9 @@ export function useAccounts(): UseQueryResult<AccountWithBalance[]> {
   return useQuery({ queryKey: BOOTSTRAP_KEY, queryFn: fetchBootstrap, select: (b) => b.accounts })
 }
 
-export const reportsKey = (month: string) => ['reports', month] as const
-
-function fetchReports(month: string): Promise<ReportsData> {
-  return apiCall<ReportsData>('getReports', { month })
-}
-
 // ---------------------------------------------------------------------------
 // Demarrage consolide : un seul appel /api (bootstrapFull) qui derive taxonomie,
-// budget du mois, transactions et rapports d'un UNIQUE chargement serveur des
+// budget du mois et transactions d'un UNIQUE chargement serveur des
 // transactions. Evite le double/triple chargement de la table au lancement.
 // ---------------------------------------------------------------------------
 
@@ -357,7 +350,6 @@ interface BootstrapFullResponse {
   bootstrap: BootstrapResponse
   budget: FlatBudgetMonth
   transactions: ApiTransaction[]
-  reports: ReportsData
 }
 
 /** Donnees de demarrage hydratees, pretes a peupler les caches TanStack. */
@@ -365,7 +357,6 @@ export interface BootstrapFull {
   bootstrap: Bootstrap
   budget: BudgetMonth
   transactions: Transaction[]
-  reports: ReportsData
 }
 
 export async function fetchBootstrapFull(month: string): Promise<BootstrapFull> {
@@ -375,15 +366,7 @@ export async function fetchBootstrapFull(month: string): Promise<BootstrapFull> 
     bootstrap,
     budget: adaptBudget(raw.budget, bootstrap),
     transactions: raw.transactions.map(toTransaction),
-    reports: raw.reports,
   }
-}
-
-export function useReports(month: string): UseQueryResult<ReportsData> {
-  return useQuery({
-    queryKey: reportsKey(month),
-    queryFn: () => fetchReports(month),
-  })
 }
 
 // ---------------------------------------------------------------------------
