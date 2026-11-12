@@ -125,6 +125,7 @@ interface ApiTransaction {
   transferGroupId?: string | null
   notes?: string | null
   label: string
+  synthetic?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +320,7 @@ function toTransaction(t: ApiTransaction): Transaction {
     transferGroupId: t.transferGroupId ?? null,
     note: t.notes ?? undefined,
     counterparty: t.counterparty ?? null,
+    ...(t.synthetic ? { synthetic: true } : {}),
   }
 }
 

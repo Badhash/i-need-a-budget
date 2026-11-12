@@ -48,6 +48,8 @@ export interface DemoTransaction {
   notes: string | null
   /** Colonne en clair cote serveur : non nul = import bancaire (jamais expose). */
   txHash: string | null
+  /** Miroir de virement cree par l'app (meme contrat que /api). */
+  synthetic?: boolean
 }
 
 export interface DemoAssignment {

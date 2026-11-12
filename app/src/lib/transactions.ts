@@ -505,13 +505,32 @@ function deleteMutationOptions(queryClient: QueryClient) {
     onError: (_err: unknown, { removal }: DeleteVars, ctx: PendingRemoval | undefined) => {
       restoreRow(queryClient, ctx ?? removal)
     },
-    onSuccess: (_data: unknown, { removal }: DeleteVars) => {
-      // Virement : le serveur supprime ou delie aussi le MIROIR (autre compte),
-      // inconnu du cache ; sans relecture il resterait affiche orphelin.
-      if (removal.tx.transferGroupId) refetchAfterWrites(queryClient, [TRANSACTIONS_KEY, BOOTSTRAP_KEY])
+    onSuccess: (data: unknown, { removal }: DeleteVars) => {
+      // Virement : le serveur supprime ou delie aussi le MIROIR (autre compte).
+      // Un serveur recent dit lequel et ce qu'il en a fait : on l'applique au
+      // cache. Sinon, relecture de la liste (sans elle il resterait orphelin).
+      if (removal.tx.transferGroupId) {
+        const res = data as { mirrorId?: string | null; mirrorRemoved?: boolean } | undefined
+        if (res && res.mirrorId !== undefined) applyMirrorOutcome(queryClient, res.mirrorId, res.mirrorRemoved === true)
+        else refetchAfterWrites(queryClient, [TRANSACTIONS_KEY, BOOTSTRAP_KEY])
+      }
       scheduleBudgetRefetch(queryClient)
     },
   }
+}
+
+/** Applique au cache le sort du miroir d'un virement supprime : retire ou delie. */
+function applyMirrorOutcome(queryClient: QueryClient, mirrorId: string | null, removed: boolean): void {
+  if (!mirrorId) return
+  const mirror = findTx(queryClient, mirrorId)
+  if (!mirror) return
+  if (removed) {
+    removeRow(queryClient, removalOf(queryClient, mirror))
+    return
+  }
+  const before = uncatCountOf(queryClient, [mirrorId])
+  writeTxs(queryClient, (old) => old.map((t) => (t.id === mirrorId ? { ...t, transferGroupId: null, synthetic: undefined } : t)))
+  patchUncategorizedCount(queryClient, uncatCountOf(queryClient, [mirrorId]) - before)
 }
 
 /**
@@ -591,7 +610,7 @@ export function useConvertToTransfer() {
     mutationFn: ({ txId, targetAccountId }: ConvertVars) =>
       enqueue(
         () =>
-          apiCall<{ ok: true; transferGroupId?: string }>('convertToTransfer', {
+          apiCall<{ ok: true; transferGroupId?: string; mirrorId?: string | null }>('convertToTransfer', {
             transactionId: resolveId(txId),
             targetAccountId,
           }),
@@ -618,6 +637,7 @@ export function useConvertToTransfer() {
         amount: -before.amount,
         transferGroupId: groupId,
         counterparty: null,
+        synthetic: true,
       }
       writeTxs(queryClient, (old) => insertTx(old.map((t) => (t.id === txId ? origin : t)), mirror, txId))
       const count = uncatCountOf(queryClient, [txId, mirrorId]) - countBefore
@@ -634,11 +654,25 @@ export function useConvertToTransfer() {
       )
       reverseDeltas(queryClient, ctx.balances, ctx.count)
     },
-    // Ids du miroir et du groupe connus du seul serveur : relecture de la
-    // liste et des soldes (action rare et explicite), apres les ecritures en
+    // Ids du miroir et du groupe connus du seul serveur. Un serveur recent les
+    // renvoie : ils remplacent les ids temporaires en place (aucune relecture de
+    // tout l'historique). Sinon, relecture de la liste apres les ecritures en
     // file (une annulation immediate ne doit pas etre effacee).
-    onSuccess: () => {
-      refetchAfterWrites(queryClient, [TRANSACTIONS_KEY, BOOTSTRAP_KEY])
+    onSuccess: (res, _vars, ctx) => {
+      if (ctx && res?.mirrorId && res.transferGroupId) {
+        const { mirrorId, transferGroupId } = res
+        registerRealId(ctx.mirrorId, mirrorId)
+        registerConfirmedTx(ctx.mirrorId, mirrorId)
+        writeTxs(queryClient, (old) =>
+          old.map((t) => {
+            if (t.id === ctx.mirrorId) return { ...t, id: mirrorId, transferGroupId }
+            if (t.transferGroupId === ctx.groupId) return { ...t, transferGroupId }
+            return t
+          }),
+        )
+      } else {
+        refetchAfterWrites(queryClient, [TRANSACTIONS_KEY, BOOTSTRAP_KEY])
+      }
       scheduleBudgetRefetch(queryClient)
     },
   })
@@ -647,24 +681,45 @@ export function useConvertToTransfer() {
 interface RevertContext {
   kept: Transaction
   mirror: Transaction | null
-  mirrorRemoved: boolean
-  mirrorBeforeId: string | null
+  /** Moitie retiree en optimiste (miroir systeme), null si les deux sont deliees. */
+  removed: Transaction | null
+  removedBeforeId: string | null
   balances: BalanceDelta[]
   count: number
 }
 
 /**
+ * Moitie « miroir systeme » d'une paire, d'apres le marqueur `synthetic` : meme
+ * regle que le serveur (convertTransferToNormal) pour les virements recents.
+ * Les virements anterieurs au marqueur ne sont pas devines ici : le serveur
+ * tranche et la reponse corrige le cache.
+ */
+function syntheticHalf(a: Transaction, b: Transaction | null): Transaction | null {
+  if (!b) return null
+  if (a.synthetic && !b.synthetic) return a
+  if (b.synthetic && !a.synthetic) return b
+  return null
+}
+
+/**
  * « Annuler le virement » optimiste : la ligne redevient ordinaire. Le miroir
- * cree par une conversion (meme libelle, sans contrepartie) est supprime par
- * le serveur, un import bancaire lie est seulement delie : on anticipe, puis
- * la liste est relue au succes.
+ * systeme est retire QUEL QUE SOIT le cote d'ou l'on annule ; toute autre
+ * moitie (saisie, import bancaire, YNAB) est seulement deliee. La reponse du
+ * serveur dit ce qu'il a fait ; on ne relit la liste que si elle differe de
+ * l'anticipation (virements anterieurs au marqueur) ou si le serveur est ancien.
  */
 export function useRevertTransfer() {
   const queryClient = useQueryClient()
   ensureTxOverlay(queryClient)
   return useMutation({
     mutationFn: ({ txId }: { txId: string }) =>
-      enqueue(() => apiCall('convertTransferToNormal', { transactionId: resolveId(txId) }), { deps: [txId] }),
+      enqueue(
+        () =>
+          apiCall<{ ok: true; removedId?: string | null }>('convertTransferToNormal', {
+            transactionId: resolveId(txId),
+          }),
+        { deps: [txId] },
+      ),
     onMutate: async ({ txId }): Promise<RevertContext | undefined> => {
       await Promise.all([
         pauseReads(queryClient, TRANSACTIONS_KEY),
@@ -673,26 +728,25 @@ export function useRevertTransfer() {
       const list = readTxs(queryClient) ?? []
       const kept = list.find((t) => t.id === txId)
       if (!kept?.transferGroupId) return undefined
-      const at = list.findIndex((t) => t.transferGroupId === kept.transferGroupId && t.id !== kept.id)
-      const mirror = at >= 0 ? list[at] : null
-      const mirrorRemoved = Boolean(
-        mirror && !mirror.counterparty && mirror.label === kept.label && mirror.amount === -kept.amount,
-      )
+      const mirror = list.find((t) => t.transferGroupId === kept.transferGroupId && t.id !== kept.id) ?? null
+      const removed = syntheticHalf(kept, mirror)
+      const removedAt = removed ? list.findIndex((t) => t.id === removed.id) : -1
       const ids = mirror ? [kept.id, mirror.id] : [kept.id]
+      const unlinkIds = ids.filter((id) => id !== removed?.id)
       const countBefore = uncatCountOf(queryClient, ids)
       writeTxs(queryClient, (old) =>
         old
-          .filter((t) => !(mirrorRemoved && mirror && t.id === mirror.id))
-          .map((t) => (ids.includes(t.id) ? { ...t, transferGroupId: null } : t)),
+          .filter((t) => t.id !== removed?.id)
+          .map((t) => (unlinkIds.includes(t.id) ? { ...t, transferGroupId: null, synthetic: undefined } : t)),
       )
       const count = uncatCountOf(queryClient, ids) - countBefore
-      const balances = mirrorRemoved && mirror ? [{ accountId: mirror.accountId, delta: -mirror.amount }] : []
+      const balances = removed ? [{ accountId: removed.accountId, delta: -removed.amount }] : []
       applyDeltas(queryClient, balances, count)
       return {
         kept,
         mirror,
-        mirrorRemoved,
-        mirrorBeforeId: mirror ? (list[at + 1]?.id ?? null) : null,
+        removed,
+        removedBeforeId: removedAt >= 0 ? (list[removedAt + 1]?.id ?? null) : null,
         balances,
         count,
       }
@@ -701,19 +755,20 @@ export function useRevertTransfer() {
       if (!ctx) return
       writeTxs(queryClient, (old) => {
         let next = old.map((t) => {
-          if (t.id === ctx.kept.id) return { ...t, transferGroupId: ctx.kept.transferGroupId }
-          if (ctx.mirror && t.id === ctx.mirror.id) return { ...t, transferGroupId: ctx.mirror.transferGroupId }
+          if (t.id === ctx.kept.id) return ctx.kept
+          if (ctx.mirror && t.id === ctx.mirror.id) return ctx.mirror
           return t
         })
-        if (ctx.mirrorRemoved && ctx.mirror && !next.some((t) => t.id === ctx.mirror!.id)) {
-          next = insertTx(next, ctx.mirror, ctx.mirrorBeforeId)
+        if (ctx.removed && !next.some((t) => t.id === ctx.removed!.id)) {
+          next = insertTx(next, ctx.removed, ctx.removedBeforeId)
         }
         return next
       })
       reverseDeltas(queryClient, ctx.balances, ctx.count)
     },
-    onSuccess: () => {
-      refetchAfterWrites(queryClient, [TRANSACTIONS_KEY, BOOTSTRAP_KEY])
+    onSuccess: (res, _vars, ctx) => {
+      const exact = res?.removedId !== undefined && ctx && res.removedId === (ctx.removed?.id ?? null)
+      if (!exact) refetchAfterWrites(queryClient, [TRANSACTIONS_KEY, BOOTSTRAP_KEY])
       scheduleBudgetRefetch(queryClient)
     },
   })

@@ -177,6 +177,7 @@ function txOut(t: DemoTransaction) {
     label: t.label,
     counterparty: t.counterparty,
     notes: t.notes,
+    ...(t.synthetic && t.transferGroupId ? { synthetic: true } : {}),
   }
 }
 
@@ -205,12 +206,16 @@ function budgetOf(db: DemoDb, month: string) {
   return computeBudget(engineInput(db, month, crossBudget()))
 }
 
-/** Miroir d'une moitie de virement : supprime s'il est synthetique, delie s'il est importe. */
-function releaseMirror(db: DemoDb, tx: DemoTransaction): void {
+/** Miroir d'une moitie supprimee : supprime s'il n'est pas importe, delie sinon (comme /api). */
+function releaseMirror(db: DemoDb, tx: DemoTransaction): { mirrorId: string | null; mirrorRemoved: boolean } {
   const mirror = db.transactions.find((t) => t.transferGroupId === tx.transferGroupId && t.id !== tx.id)
-  if (!mirror) return
-  if (mirror.txHash === null) db.transactions = db.transactions.filter((t) => t.id !== mirror.id)
-  else mirror.transferGroupId = null
+  if (!mirror) return { mirrorId: null, mirrorRemoved: false }
+  if (mirror.txHash === null) {
+    db.transactions = db.transactions.filter((t) => t.id !== mirror.id)
+    return { mirrorId: mirror.id, mirrorRemoved: true }
+  }
+  mirror.transferGroupId = null
+  return { mirrorId: mirror.id, mirrorRemoved: false }
 }
 
 function nextSortOrder(rows: { sortOrder: number }[]): number {
@@ -409,8 +414,9 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
     // Virement croise : la moitie cote budget (l'origine) garde sa categorie.
     const keepCategory = crossBudget() && originOnBudget && !target.onBudget
     const transferGroupId = randomUuid()
+    const mirrorId = randomUuid()
     db.transactions.push({
-      id: randomUuid(),
+      id: mirrorId,
       accountId: targetAccountId,
       categoryId: null,
       bookingDate: tx.bookingDate,
@@ -421,27 +427,38 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
       transferGroupId,
       notes: null,
       txHash: null,
+      synthetic: true,
     })
     tx.categoryId = keepCategory ? tx.categoryId : null
     tx.transferGroupId = transferGroupId
-    return { ok: true, transferGroupId }
+    return { ok: true, transferGroupId, mirrorId }
   },
 
   convertTransferToNormal: (db, p) => {
     const transactionId = requireUuid(p.transactionId, 'transactionId')
-    const kept = findTx(db, transactionId)
-    if (!kept.transferGroupId) throw new ApiError(400, 'la transaction n est pas un transfert')
-    releaseMirror(db, kept)
-    kept.transferGroupId = null
-    return { ok: true }
+    const clicked = findTx(db, transactionId)
+    if (!clicked.transferGroupId) throw new ApiError(400, 'la transaction n est pas un transfert')
+    const mirror = db.transactions.find((t) => t.transferGroupId === clicked.transferGroupId && t.id !== clicked.id)
+    // Meme regle que /api (syntheticHalfId), marqueur seulement : le miroir
+    // systeme est supprime quel que soit le cote clique, l'autre moitie deliee.
+    const marked = (t: DemoTransaction | undefined) => Boolean(t && t.txHash === null && t.synthetic)
+    const removed = mirror && marked(mirror) !== marked(clicked) ? (marked(mirror) ? mirror : clicked) : null
+    const halves = [clicked, mirror].filter((t): t is DemoTransaction => Boolean(t))
+    db.transactions = db.transactions.filter((t) => t.id !== removed?.id)
+    for (const t of halves) {
+      if (t.id === removed?.id) continue
+      t.transferGroupId = null
+      t.synthetic = undefined
+    }
+    return { ok: true, removedId: removed?.id ?? null, unlinkedIds: halves.filter((t) => t.id !== removed?.id).map((t) => t.id) }
   },
 
   deleteTransaction: (db, p) => {
     const transactionId = requireUuid(p.transactionId, 'transactionId')
     const tx = findTx(db, transactionId)
-    if (tx.transferGroupId) releaseMirror(db, tx)
+    const outcome = tx.transferGroupId ? releaseMirror(db, tx) : { mirrorId: null, mirrorRemoved: false }
     db.transactions = db.transactions.filter((t) => t.id !== transactionId)
-    return { ok: true }
+    return { ok: true, ...outcome }
   },
 
   // --- Budget ---------------------------------------------------------------

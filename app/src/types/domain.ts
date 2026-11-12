@@ -51,4 +51,10 @@ export interface Transaction {
   note?: string
   /** Contrepartie bancaire (nom du tiers fourni par la banque), si connue. */
   counterparty?: string | null
+  /**
+   * Moitie de virement creee par l'app (miroir d'une conversion, miroir de
+   * carte differee) : c'est elle qu'« Annuler le virement » supprime, quel que
+   * soit le cote d'ou l'on annule. Absent sur les virements anterieurs.
+   */
+  synthetic?: boolean
 }
