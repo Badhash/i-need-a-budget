@@ -1162,7 +1162,12 @@ async function loadManualTwinsWindow(
   return twins
 }
 
-// Consomme le jumeau le plus proche en date (± toleranceDays) s'il existe.
+// Consomme le jumeau le plus ANCIEN de la fenetre [date - tolerance, date +
+// tolerance] s'il existe. Appele sur des imports tries par date croissante
+// (absorbTwins), ce choix maximise le nombre d'appariements ; « le plus
+// proche, dans l'ordre de la reponse » en ratait (SYNC-10) : jumeaux le 10 et
+// le 12, imports le 11 puis le 9 -> le 11 prenait le 10 et le 9 etait importe
+// en double.
 function consumeTwin(
   twins: TwinIndex,
   accountId: string,
@@ -1174,17 +1179,38 @@ function consumeTwin(
   if (!dates || dates.length === 0) return false
   const target = dayNumber(date)
   let bestIdx = -1
-  let bestDiff = toleranceDays + 1
+  let bestDay = Infinity
   for (let i = 0; i < dates.length; i++) {
-    const diff = Math.abs(dayNumber(dates[i]) - target)
-    if (diff < bestDiff) {
-      bestDiff = diff
+    const day = dayNumber(dates[i])
+    if (Math.abs(day - target) > toleranceDays) continue
+    if (day < bestDay) {
+      bestDay = day
       bestIdx = i
     }
   }
-  if (bestIdx === -1 || bestDiff > toleranceDays) return false
+  if (bestIdx === -1) return false
   dates.splice(bestIdx, 1)
   return true
+}
+
+// Imports d'un compte absorbes par un jumeau sans hash (hash -> vrai), en
+// appariement optimal : parcours par date croissante (voir consumeTwin).
+function absorbTwins(
+  twins: TwinIndex,
+  accountId: string,
+  items: { mapped: { amount: number; bookingDate: string }; hash: string }[],
+  toleranceDays: number,
+): Set<string> {
+  const absorbed = new Set<string>()
+  const sorted = [...items].sort((a, b) =>
+    a.mapped.bookingDate < b.mapped.bookingDate ? -1 : a.mapped.bookingDate > b.mapped.bookingDate ? 1 : 0,
+  )
+  for (const item of sorted) {
+    if (consumeTwin(twins, accountId, item.mapped.amount, item.mapped.bookingDate, toleranceDays)) {
+      absorbed.add(item.hash)
+    }
+  }
+  return absorbed
 }
 
 // ---------------------------------------------------------------------------
@@ -1533,18 +1559,24 @@ async function syncUser(
           fresh.push(item)
         }
 
-        // 3. Insertion des operations nouvelles.
+        // 3. Jumeau sans hash (YNAB / manuel) au meme compte, meme montant,
+        //    date proche : la copie existante fait foi, on n'insere pas.
+        //    Appariement calcule sur toute la reponse du compte (optimal).
+        const twinTolerance =
+          localAccount.kind === 'card_deferred' ? CARD_TWIN_DAY_TOLERANCE : TWIN_DAY_TOLERANCE
+        const twinAbsorbed = absorbTwins(
+          manualTwins,
+          localAccount.id,
+          fresh.filter((item) => !seenHashes.has(item.hash)),
+          twinTolerance,
+        )
+
+        // 4. Insertion des operations nouvelles.
         for (const { mapped, hash } of fresh) {
           // Dedup : deja inseree dans ce run (seenHashes est mis a jour au fur
           // et a mesure).
           if (seenHashes.has(hash)) continue
-          // Jumeau sans hash (YNAB / manuel) au meme compte, meme montant,
-          // date proche : la copie existante fait foi, on n'insere pas.
-          const twinTolerance =
-            localAccount.kind === 'card_deferred' ? CARD_TWIN_DAY_TOLERANCE : TWIN_DAY_TOLERANCE
-          if (
-            consumeTwin(manualTwins, localAccount.id, mapped.amount, mapped.bookingDate, twinTolerance)
-          ) {
+          if (twinAbsorbed.has(hash)) {
             seenHashes.add(hash)
             continue
           }
