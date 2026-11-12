@@ -895,6 +895,9 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
 
   // --- Export, import, maintenance ------------------------------------------
   exportData: (db) => ({
+    // Meme signature que /api (format et version verifies a la restauration).
+    format: 'inab-backup',
+    version: 1,
     exportedAt: new Date().toISOString(),
     budgetStartMonth: db.budgetStartMonth,
     accounts: db.accounts,
