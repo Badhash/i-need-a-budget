@@ -90,7 +90,6 @@ Une correction = un commit. `git log --oneline` les liste, regroupées par port�
 | CORE-03 | Un virement entre deux comptes budget à cheval sur le mois de départ fausse le Prêt à assigner de son montant, définitivement (prouvé : 280 000 ou 320 000 au lieu de 300 000) | Dans `computeBudget`, compter en inflow la moitié postérieure d'un groupe dont une moitié budget est antérieure au départ ; répliquer dans `aggRecompute` |
 | CORE-02 | La maintenance des agrégats a lieu après l'écriture métier : un recompute concurrent (synchro pendant une catégorisation) peut compter un lot deux fois | Poser la fence avant la première écriture, ou passer le marqueur à `dirty` pendant l'écriture |
 | SYNC-08 | Une ligne importée puis supprimée, renommée ou déplacée d'un mois peut être réimportée (la dédup lit l'état courant) | Conserver un `bankLabel` immuable, ajouter le hash des variantes aux tombstones |
-| SET-IMP-01 | Import avec remplacement : après l'effacement, « Abandonner » libère la sauvegarde de sécurité sans confirmation ; aucun signal d'import incomplet après un rechargement | Confirmation, conserver la sauvegarde, drapeau persistant et bannière |
 
 ### Priorité 2 — egress (la contrainte d'exploitation)
 
@@ -255,19 +254,19 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 
 | ID | Sév. | Constat | Statut |
 |---|---|---|---|
-| SET-IMP-01 | H | Sauvegarde de sécurité perdue après « Abandonner » | ouvert |
-| SET-IMP-02 | M | Reprise d'import : un lot non écrit peut être déclaré écrit | ouvert |
-| SET-IMP-03 | M | Refus d'un lot après l'effacement : impasse | ouvert |
+| SET-IMP-01 | H | Sauvegarde de sécurité perdue après « Abandonner » | corrigé (abandon confirmé, sauvegarde gardée et restaurable en un geste, garde de fermeture tant que l'import échoué attend, drapeau `inab-import-incomplete` et bandeau au démarrage) |
+| SET-IMP-02 | M | Reprise d'import : un lot non écrit peut être déclaré écrit | corrigé (comparaison par signature compte, date, montant, libellé) |
+| SET-IMP-03 | M | Refus d'un lot après l'effacement : impasse | corrigé (404 : relance unique sans les catégories disparues, pertes comptées ; autre refus : « Ignorer ce lot » ; Réglages > Catégories en lecture seule pendant l'import, les autres écrans restent modifiables) |
 | SET-AGG-01 | M | Aucune reconstruction des agrégats en fin d'import | corrigé |
 | SET-BNK-01 | M | Échec de « Reconnecter » jamais affiché | corrigé |
 | SET-BNK-02 | M | Consentement refusé par la banque ignoré | corrigé |
 | SET-IMP-04 | M | Registre sans colonne de montant importé à 0 € | corrigé |
-| SET-BAK-01 | M | Confirmation destructive réentrante (double tap) | ouvert |
-| SET-IMP-05 | B | Dates `2024/03/15` non reconnues, ambiguïté jour/mois sans recours | ouvert |
+| SET-BAK-01 | M | Confirmation destructive réentrante (double tap) | corrigé (prouvé : trois feuilles de partage avant, une après) |
+| SET-IMP-05 | B | Dates `2024/03/15` non reconnues, ambiguïté jour/mois sans recours | corrigé (date invalide ou hors bornes du serveur ignorée et comptée, choix JJ/MM ou MM/JJ dans l'aperçu) |
 | SET-IMP-06 | B | Enveloppes YNAB vides non importées | corrigé |
-| SET-IMP-07, SET-IMP-08 | B | Compte alimenté par virements proposé en suivi ; ancienne taxonomie affichée en fin d'import | ouvert |
-| SET-BNK-03 | B | « Créer un compte pour ce compte bancaire » non atomique | ouvert |
-| SET-BAK-02, SET-BAK-03 | B | Sauvegarde sans version de format ; liens bancaires déclarés perdus si les connexions ne sont pas chargées | ouvert |
+| SET-IMP-07, SET-IMP-08 | B | Compte alimenté par virements proposé en suivi ; ancienne taxonomie affichée en fin d'import | corrigé (07 : compte signalé « À vérifier » dans l'aperçu, sans bascule automatique ; 08 : bootstrap relu d'abord, mois observés relus avec la nouvelle taxonomie, ce qui contourne FRONT-INF-03 pour l'import seulement) |
+| SET-BNK-03 | B | « Créer un compte pour ce compte bancaire » non atomique | corrigé (création et association séparées, compte relu si l'association échoue, liste bloquée pendant la création) |
+| SET-BAK-02, SET-BAK-03 | B | Sauvegarde sans version de format ; liens bancaires déclarés perdus si les connexions ne sont pas chargées | partiel (03 corrigé : restauration bloquée pendant la lecture des connexions, échec de lecture signalé comme tel ; 02 côté lecture seulement : format autre que `inab-backup` ou version > 1 refusés, fichiers sans ces champs acceptés, reste à les écrire dans `exportData`) |
 | SET-UI-01 | B | « Budget chiffré de bout en bout » : inexact, le serveur déchiffre | corrigé |
 
 ### Rapports et kit UI
