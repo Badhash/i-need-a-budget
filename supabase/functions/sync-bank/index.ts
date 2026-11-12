@@ -411,7 +411,7 @@ async function insertImportedTransaction(
   payload: TxPayload,
   monthIdx: string,
   txHash: string,
-): Promise<void> {
+): Promise<boolean> {
   const keys = await getKeys()
   const cols = await encodeTxColumns(keys, userId, payload)
   const { error } = await admin.rpc('enc_insert', {
@@ -427,9 +427,12 @@ async function insertImportedTransaction(
   })
   // Violation d'unicite (course concurrente cron/manuel sur l'index partiel
   // tx_hash) : le SQLSTATE 23505 remonte tel quel depuis la RPC, on l'ignore.
+  // Renvoie false dans ce cas : la ligne existait deja, elle n'est pas comptee
+  // comme importee (journal, compteur, liaison carte differee).
   if (error && error.code !== '23505') {
     throw new ApiError(500, 'ecriture transactions impossible')
   }
+  return !error
 }
 
 // Journalisation d'une sync : ne throw jamais (best-effort). Un echec de log ne
@@ -1588,13 +1591,13 @@ async function syncUser(
           // aggStaleBeforeWrite) : un crash/echec partiel apres ce point
           // laisse un etat non-pret, jamais un 'ready' faux.
           await aggStaleBeforeWrite(userId, aggWrites)
-          await insertImportedTransaction(
+          const inserted = await insertImportedTransaction(
             userId,
             payload,
             await txMonthIdx(keys, userId, mapped.bookingMonth),
             hash,
           )
-          importedForConn += 1
+          if (inserted) importedForConn += 1
         }
         polledAccounts += 1
       } catch (err) {
