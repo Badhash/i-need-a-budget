@@ -55,6 +55,6 @@ export function useCategorizeMany() {
       if (contexts) revertCategorizeOptimistic(queryClient, contexts)
     },
     // Liste et badge deja exacts ; refetch cible et coalesce du budget.
-    onSuccess: () => scheduleBudgetRefetch(queryClient),
+    onSuccess: () => scheduleBudgetRefetch(queryClient, { bootstrap: false }),
   })
 }

@@ -27,28 +27,33 @@ import { pauseReads } from '@/lib/pauseReads'
 
 export { payeeKey }
 
-// Une categorisation deplace de l'activite entre enveloppes (et peut toucher
-// le Pret a assigner : revenus, depassement d'un mois passe). Le cache budget
-// n'est pas patchable en optimiste sans rejouer le moteur, on refetch donc la
-// SEULE cle budget (agregats, quelques Ko) apres un court debounce : une rafale
-// de tris (mode Tri rapide) ne coute qu'un appel. Le signal Realtime, lui, est
-// coalesce sur 30 s et peut ne jamais arriver sur iOS (websocket coupee en
-// arriere-plan) : sans ce refetch cible, le Pret a assigner restait fige.
-const BUDGET_REFETCH_DEBOUNCE_MS = 1200
+// Relecture de securite du budget apres une action sur des transactions. Le
+// cache budget est deja patche en optimiste et exact (patchBudgetForTransactions) :
+// cette relecture ne sert qu'a converger vers la verite serveur (cas que le
+// patch ne couvre pas : mois hors cache, report au-dela). Debounce de 4 s :
+// une rafale de tris (mode Tri rapide, une carte toutes les 2 a 3 s) ne coute
+// qu'un appel (UI-TRI-03). Le signal Realtime, lui, est coalesce sur 30 s et
+// peut ne jamais arriver sur iOS (websocket coupee en arriere-plan).
+// `bootstrap` (soldes, compteur « À catégoriser ») n'est relu que si une action
+// de la rafale l'a demande : une categorisation pure ne change aucun solde et
+// le compteur est deja patche.
+const BUDGET_REFETCH_DEBOUNCE_MS = 4000
 let budgetRefetchTimer: ReturnType<typeof setTimeout> | null = null
+let bootstrapWanted = false
 
-export function scheduleBudgetRefetch(queryClient: QueryClient): void {
+export function scheduleBudgetRefetch(queryClient: QueryClient, options: { bootstrap?: boolean } = {}): void {
+  if (options.bootstrap !== false) bootstrapWanted = true
   if (budgetRefetchTimer) clearTimeout(budgetRefetchTimer)
   budgetRefetchTimer = setTimeout(() => {
     budgetRefetchTimer = null
+    const withBootstrap = bootstrapWanted
+    bootstrapWanted = false
     // Serialise derriere les ecritures encore en file : la lecture part apres
     // leur commit. Sinon une reponse anterieure a une assignation en vol
     // ecraserait sa valeur optimiste (« valeur qui saute »).
     void enqueue(async () => {
       void queryClient.invalidateQueries({ queryKey: ['budget'] })
-      // Soldes de comptes et compteur « À catégoriser » vivent dans bootstrap
-      // (agregats, quelques Ko).
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+      if (withBootstrap) void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     })
   }, BUDGET_REFETCH_DEBOUNCE_MS)
 }
@@ -267,9 +272,9 @@ export function useCategorize() {
     onError: (_err, _vars, ctx) => {
       if (ctx) revertCategorizeOptimistic(queryClient, [ctx])
     },
-    // Liste et badge sont deja exacts (optimiste) ; seul le budget du mois est
-    // refetche, de facon ciblee et coalescee (cf. scheduleBudgetRefetch).
-    onSuccess: () => scheduleBudgetRefetch(queryClient),
+    // Liste, badge et budget sont deja exacts (optimiste) ; relecture de
+    // securite du budget seul, ciblee et coalescee (cf. scheduleBudgetRefetch).
+    onSuccess: () => scheduleBudgetRefetch(queryClient, { bootstrap: false }),
   })
 }
 
