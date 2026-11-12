@@ -29,7 +29,11 @@ function question(reference: string, currentMonth: string): string {
 export function TopMerchants({ a, currentMonth }: { a: Analytics; currentMonth: string }) {
   const top = a.merchants.slice(0, TOP)
   const max = top[0]?.total ?? 1
-  const share = a.spending > 0 ? top.reduce((s, m) => s + m.total, 0) / a.spending : 0
+  // Part rapportee aux achats bruts du mois (somme des marchands) et non a la
+  // depense nette : les remboursements ne reduisent pas les marchands, la part
+  // depasserait sinon 100 %.
+  const purchases = a.merchants.reduce((s, m) => s + m.total, 0)
+  const share = purchases > 0 ? top.reduce((s, m) => s + m.total, 0) / purchases : 0
   const count = a.merchants.length
 
   return (

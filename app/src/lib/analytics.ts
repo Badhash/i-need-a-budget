@@ -1,12 +1,14 @@
 // Analyse de depenses cote client, calculee sur l'historique complet en cache
 // (useTransactions) : AUCUN appel reseau, meme au changement de mois ou de
-// periode. On reprend EXACTEMENT les definitions du serveur (computeReports de
-// l'Edge Function /api) pour rester coherent avec lui :
+// periode. Definitions (le perimetre reprend celui du serveur, computeReports
+// de l'Edge Function /api ; les remboursements s'en ecartent, voir plus bas) :
 //  - perimetre budget : compte budget, hors virement entre comptes budget. Avec
 //    un serveur qui annonce crossBudgetTransfers, la moitie cote budget d'un
 //    virement budget <-> suivi compte comme une transaction ordinaire (regle
 //    YNAB) ; sans le drapeau (serveur ancien), tout virement reste neutre ;
-//  - depense : montant < 0, categorie non-revenu (ou sans categorie) ;
+//  - depense : montant < 0, categorie non-revenu (ou sans categorie), nette des
+//    remboursements (entree sur une categorie de depense), plancher a 0 par
+//    categorie et par mois ;
 //  - revenu : categorie de revenus (quel que soit le signe) ;
 //  - marchand : cle de tiers payeeKey (mots stables du libelle), repli sur le
 //    libelle brut quand la cle est vide ; nom affiche = libelle brut le plus
@@ -342,18 +344,18 @@ export function computeAnalytics(
   const windowMonths = monthRange(periodStart, reference)
 
   let firstDate: string | null = null
-  const spendByMonth = new Map<string, number>()
   const incomeByMonth = new Map<string, number>()
-  // Mouvements par jour (index 1..31) des mois de la periode : cumuls « a date ».
-  const dailySpend = new Map<string, number[]>()
+  // Depense nette (sorties moins remboursements) avant plancher : mois ->
+  // categorie -> montant, et son detail par jour (index 1..31) pour les mois
+  // de la periode (cumuls « a date »).
+  const netByMonth = new Map<string, Map<string, number>>()
+  const dailyByCategory = new Map<string, Map<string, number[]>>()
   const dailyIncome = new Map<string, number[]>()
-  const catByMonth = new Map<string, Map<string, number>>() // mois -> categorie -> depense
   const labelsByMerchant = new Map<string, Map<string, number>>() // marchand -> libelle brut -> occurrences
   const groupsByMerchant = new Map<string, Map<string, number>>() // marchand -> groupe -> depense
   const chargesByMerchant = new Map<string, Map<string, Charge[]>>() // marchand -> mois -> passages
   const merchantsByCategory = new Map<string, Map<string, number>>() // categorie -> marchand -> depense
   const monthMerchants = new Map<string, { total: number; count: number }>()
-  const monthGroups = new Map<string, number>()
   const weekdayCandidates: { date: string; spent: number; key: string }[] = []
   const bigCandidates: Transaction[] = []
   // Valeur nette : tout ce qui precede la fenetre + deltas mensuels ; soldes par
@@ -390,15 +392,29 @@ export function computeAnalytics(
       if (inPeriod) nested(dailyIncome, m, newDays)[day]! += t.amount
       continue
     }
-    // Remboursement sur une categorie de depense : ignore, comme le serveur.
-    if (t.amount >= 0) continue
+    const catKey = t.categoryId ?? UNCAT_KEY
+    const addNet = (delta: number) => {
+      bump(nested(netByMonth, m, () => new Map()), catKey, delta)
+      if (inPeriod) nested(nested(dailyByCategory, m, () => new Map()), catKey, newDays)[day]! += delta
+    }
+    // Remboursement (entree sur une categorie de depense : la CPAM apres le
+    // dentiste, un article retourne) : il vient en deduction de la categorie,
+    // donc de son groupe et de la depense du mois. Il etait ignore : Sante a
+    // 300 EUR au lieu de 90. Le plancher a 0 (par categorie et par mois, apres
+    // la boucle) evite qu'un remboursement d'un achat du mois precedent rende
+    // une categorie negative. Une entree SANS categorie n'est pas un
+    // remboursement (revenu pas encore categorise) : ignoree. Marchands,
+    // prelevements, jours et plus grosses depenses restent des sorties brutes.
+    if (t.amount >= 0) {
+      if (t.categoryId !== null && t.amount > 0) addNet(-t.amount)
+      continue
+    }
 
     const spent = -t.amount
-    bump(spendByMonth, m, spent)
+    addNet(spent)
     if (m < scanStart || m > reference) continue
 
     const key = merchantKey(t.label)
-    const catKey = t.categoryId ?? UNCAT_KEY
     const group = groupOfCategory(t.categoryId)
     bump(nested(labelsByMerchant, key, () => new Map()), t.label, 1)
     bump(nested(groupsByMerchant, key, () => new Map()), group?.id ?? UNCAT_KEY, spent)
@@ -406,18 +422,49 @@ export function computeAnalytics(
       nested(nested(chargesByMerchant, key, () => new Map<string, Charge[]>()), m, () => []).push({ spent, day })
       bump(nested(merchantsByCategory, catKey, () => new Map()), key, spent)
     }
-    if (inPeriod) {
-      bump(nested(catByMonth, m, () => new Map()), catKey, spent)
-      nested(dailySpend, m, newDays)[day]! += spent
-      weekdayCandidates.push({ date: t.date, spent, key })
-    }
+    if (inPeriod) weekdayCandidates.push({ date: t.date, spent, key })
     if (m === reference) {
       const merchant = nested(monthMerchants, key, () => ({ total: 0, count: 0 }))
       merchant.total += spent
       merchant.count += 1
-      bump(monthGroups, t.categoryId ? (group?.id ?? UNKNOWN_KEY) : UNCAT_KEY, spent)
       bigCandidates.push(t)
     }
+  }
+
+  // --- Depense nette, plancher a 0 par categorie et par mois -----------------
+  const spendByMonth = new Map<string, number>()
+  const catByMonth = new Map<string, Map<string, number>>() // mois -> categorie -> depense
+  for (const [m, byCategory] of netByMonth) {
+    const floored = new Map<string, number>()
+    let total = 0
+    for (const [catKey, value] of byCategory) {
+      if (value <= 0) continue
+      floored.set(catKey, value)
+      total += value
+    }
+    spendByMonth.set(m, total)
+    catByMonth.set(m, floored)
+  }
+  // Cumul journalier : chaque jour, somme des cumuls par categorie planches a
+  // 0, si bien que la fin du mois retombe exactement sur la depense du mois
+  // (un remboursement fait redescendre la courbe). Stocke en increments par
+  // jour, lus par `cumulative`.
+  const dailySpend = new Map<string, number[]>()
+  for (const [m, byCategory] of dailyByCategory) {
+    const series = [...byCategory.values()]
+    const running = series.map(() => 0)
+    const increments = newDays()
+    let previous = 0
+    for (let d = 1; d <= 31; d++) {
+      let total = 0
+      series.forEach((days, i) => {
+        running[i]! += days[d]!
+        total += Math.max(0, running[i]!)
+      })
+      increments[d] = total - previous
+      previous = total
+    }
+    dailySpend.set(m, increments)
   }
 
   const firstMonth = firstDate ? monthOf(firstDate) : reference
@@ -520,6 +567,10 @@ export function computeAnalytics(
     previous < firstMonth ? null : isCurrentMonth ? cumulative(dailySpend, previous, refLastDay) : spendOf(previous)
 
   // --- Repartition par groupe (donut) ----------------------------------------
+  const monthGroups = new Map<string, number>()
+  for (const [catKey, total] of catByMonth.get(reference) ?? []) {
+    bump(monthGroups, catKey === UNCAT_KEY ? UNCAT_KEY : (groupOfCategory(catKey)?.id ?? UNKNOWN_KEY), total)
+  }
   const slices: GroupSlice[] = []
   let uncatSlice: GroupSlice | null = null
   for (const [key, total] of monthGroups) {
