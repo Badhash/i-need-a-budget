@@ -827,3 +827,50 @@ describe('RTA des mois passes (currentMonth)', () => {
     expect(() => computeBudget(base({ month: '2026-01', currentMonth: '2026-13' }))).toThrow()
   })
 })
+
+describe('virement a cheval sur le mois de depart', () => {
+  const accounts = [
+    { id: 'chk', onBudget: true },
+    { id: 'sav', onBudget: true },
+    { id: 'pea', onBudget: false },
+  ]
+  const categories = [
+    { id: 'income', isIncome: true },
+    { id: 'food', isIncome: false },
+  ]
+  const salary = { id: 's', accountId: 'chk', categoryId: 'income', month: '2026-01', amount: 300_000, transferGroupId: null }
+  const half = (id: string, accountId: string, month: string, amount: number, group = 'g') => ({
+    id, accountId, categoryId: null, month, amount, transferGroupId: group,
+  })
+  const rta = (transactions: Parameters<typeof computeBudget>[0]['transactions'], month = '2026-03') =>
+    computeBudget({ month, startMonth: '2026-03', accounts, categories, transactions, assignments: [] }).readyToAssign
+
+  it('sortie avant le depart, arrivee apres : RTA = solde reel des comptes budget', () => {
+    expect(rta([salary, half('a', 'chk', '2026-02', -20_000), half('b', 'sav', '2026-03', 20_000)])).toBe(300_000)
+  })
+
+  it('arrivee avant le depart, sortie apres', () => {
+    expect(rta([salary, half('a', 'sav', '2026-02', 20_000), half('b', 'chk', '2026-03', -20_000)])).toBe(300_000)
+  })
+
+  it('argent en transit : la moitie posterieure ne compte qu a partir de son mois', () => {
+    const txs = [salary, half('a', 'chk', '2026-02', -20_000), half('b', 'sav', '2026-04', 20_000)]
+    expect(rta(txs, '2026-03')).toBe(280_000)
+    expect(rta(txs, '2026-04')).toBe(300_000)
+  })
+
+  it('virement entierement apres le depart : toujours neutre', () => {
+    expect(rta([salary, half('a', 'chk', '2026-03', -20_000), half('b', 'sav', '2026-03', 20_000)])).toBe(300_000)
+  })
+
+  it('virement entierement avant le depart : dans le solde de depart, neutre', () => {
+    expect(rta([salary, half('a', 'chk', '2026-02', -20_000), half('b', 'sav', '2026-02', 20_000)])).toBe(300_000)
+  })
+
+  it('moitie croisee posterieure (vers un compte de suivi) : comptee comme transaction ordinaire, pas en double', () => {
+    // budget -> PEA en mars, moitie PEA en fevrier (anterieure, hors budget) : la moitie budget
+    // de mars reste a categoriser (aucun effet sur le RTA), comme sans mois de depart.
+    expect(rta([salary, half('a', 'pea', '2026-02', 20_000), half('b', 'chk', '2026-03', -20_000)])).toBe(300_000)
+  })
+})
+

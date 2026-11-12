@@ -252,6 +252,21 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
   const countedAssignments =
     startMonth === null ? assignments : assignments.filter((a) => a.month >= startMonth)
 
+  // Virement entre comptes budget A CHEVAL sur le mois de depart : sa moitie
+  // anterieure est dans le solde de depart (somme brute), la posterieure doit
+  // donc compter comme un mouvement d'argent, sinon le RTA reste faux du
+  // montant pour toujours (300 000 de revenus, -20 000 en fevrier puis +20 000
+  // en mars, depart en mars : RTA 280 000 au lieu de 300 000). Une moitie
+  // croisee (budget <-> suivi) est deja comptee comme transaction ordinaire.
+  const straddlingGroups = new Set<string>()
+  if (startMonth !== null) {
+    for (const t of transactions) {
+      if (t.transferGroupId && t.month < startMonth && onBudgetAccounts.has(t.accountId)) {
+        straddlingGroups.add(t.transferGroupId)
+      }
+    }
+  }
+
   // Bornes de la fenetre de calcul : du premier mois observe (ou du depart du
   // budget) au mois cible.
   let firstMonth = startMonth ?? month
@@ -267,6 +282,14 @@ export function computeBudget(input: BudgetInput): BudgetMonth {
   // Agregats par mois.
   const activityByMonth = new Map<string, Map<string, number>>()
   let inflows = openingBalance
+  if (straddlingGroups.size > 0) {
+    for (const t of transactions) {
+      if (!t.transferGroupId || !straddlingGroups.has(t.transferGroupId)) continue
+      if (!onBudgetAccounts.has(t.accountId) || offBudgetGroups.has(t.transferGroupId)) continue
+      if (t.month < (startMonth as string) || t.month > month) continue
+      inflows += t.amount
+    }
+  }
   for (const t of counted) {
     if (t.month > month) continue
     if (t.categoryId !== null && incomeCategories.has(t.categoryId)) {

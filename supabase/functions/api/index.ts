@@ -44,6 +44,7 @@ import {
   aggReadUncatCount,
   aggRecompute,
   OPENING_CATEGORY,
+  STRADDLE_CATEGORY,
   type AggBatch,
   type AggSession,
   type AggSourceData,
@@ -1300,6 +1301,9 @@ function rollupsToEngineInput(
     id: c.id,
     isIncome: c.isIncome,
   }))
+  // Categorie synthetique de revenus portant les lignes STRADDLE_CATEGORY :
+  // le moteur les compte en entree d'argent a leur mois.
+  engineCategories.push({ id: STRADDLE_CATEGORY, isIncome: true })
   const transactions: EngineTransaction[] = []
   const assignments: EngineAssignment[] = []
   let i = 0
@@ -2081,6 +2085,17 @@ async function loadTransferPeers(
   return peers.filter((p) => p.payload.transferGroupId === groupId)
 }
 
+// Vrai si les deux moities tombent de part et d'autre du mois de depart du budget.
+async function straddlesStartMonth(
+  userId: string,
+  keys: CryptoKeys,
+  a: Pick<TxPayload, 'bookingMonth'>,
+  b: Pick<TxPayload, 'bookingMonth'>,
+): Promise<boolean> {
+  const start = (await loadUserSettings(admin, keys, userId)).budgetStartMonth
+  return start !== null && a.bookingMonth < start !== b.bookingMonth < start
+}
+
 // Moitie « miroir systeme » d'une paire, la seule qu'« Annuler le virement »
 // peut supprimer. Un import bancaire (tx_hash) ne l'est jamais.
 //   1. Marqueur `synthetic` (miroirs crees depuis son introduction).
@@ -2138,6 +2153,10 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
   const cross =
     mirror !== null &&
     onBudget.has(clicked.payload.accountId) !== onBudget.has(mirror.payload.accountId)
+  // Paire A CHEVAL sur le mois de depart : sa moitie posterieure compte comme
+  // un mouvement d'argent (moteur), ce que la maintenance incrementale ne sait
+  // pas defaire sans voir l'autre moitie.
+  const straddles = mirror !== null && (await straddlesStartMonth(userId, keys, clicked.payload, mirror.payload))
 
   const writes = async () => {
     let written = 0
@@ -2165,7 +2184,7 @@ async function actionConvertTransferToNormal(userId: string, params: Params) {
     }
   }
   const result = { ok: true, removedId, unlinkedIds: unlinked.map((h) => h.id) }
-  if (cross) {
+  if (cross || straddles) {
     await withAggregatesStale(userId, writes)
     return result
   }
@@ -2224,6 +2243,8 @@ async function actionDeleteTransaction(userId: string, params: Params) {
   if (mirror) {
     const onBudget = onBudgetIds(await loadAll<AccountPayload>('accounts', userId))
     cross = onBudget.has(payload.accountId) !== onBudget.has(mirror.payload.accountId)
+    // Paire a cheval sur le mois de depart : meme raison que dans convertTransferToNormal.
+    if (!cross) cross = await straddlesStartMonth(userId, keys, payload, mirror.payload)
   }
   // Contribution du miroir a repercuter sur les agregats, appliquee seulement
   // apres la suppression reussie.

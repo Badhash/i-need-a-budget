@@ -90,10 +90,15 @@ import { loadUserSettings } from './settings.ts'
 // marqueur d'une version anterieure est traite comme "non pret" (fallback).
 // v3 : moities de transferts croises (budget <-> suivi) comptees comme des
 // transactions ordinaires dans les rollups et uncat_counts.
-const AGG_VERSION = 3
+// 4 : lignes STRADDLE_CATEGORY (virements a cheval sur le mois de depart).
+const AGG_VERSION = 4
 
 /** Pseudo-categorie du rollup « solde de depart » (jamais un UUID de categorie). */
 export const OPENING_CATEGORY = '__opening__'
+// Moities posterieures au mois de depart d'un virement entre comptes budget
+// dont l'autre moitie est anterieure (donc dans le solde de depart) : comptees
+// comme un mouvement d'argent a leur mois, comme le moteur (computeBudget).
+export const STRADDLE_CATEGORY = '__straddle__'
 const READ_PAGE = 1000
 const INSERT_CHUNK = 500
 const MAX_CAS_ATTEMPTS = 5
@@ -814,11 +819,21 @@ export async function aggRecompute(
   }
   const start = data.startMonth
   const frozen = (t: AggTx) => start !== null && t.bookingMonth < start
+  const straddling = new Set<string>()
+  for (const t of data.transactions) {
+    if (t.transferGroupId && frozen(t) && onBudget.has(t.accountId)) straddling.add(t.transferGroupId)
+  }
   for (const t of data.transactions) {
     if (!onBudget.has(t.accountId)) continue
     if (frozen(t)) {
       // Solde de depart : somme brute, transferts et non categorisees compris.
       bump(OPENING_CATEGORY, start as string).activity += t.amount
+      continue
+    }
+    // Moitie posterieure d'un virement budget <-> budget a cheval sur le depart
+    // (meme regle que le moteur) : mouvement d'argent a son mois.
+    if (t.transferGroupId && straddling.has(t.transferGroupId) && !offGroups.has(t.transferGroupId)) {
+      bump(STRADDLE_CATEGORY, t.bookingMonth).activity += t.amount
       continue
     }
     // Transfert entre comptes budget : neutre (categorie residuelle ignoree).
