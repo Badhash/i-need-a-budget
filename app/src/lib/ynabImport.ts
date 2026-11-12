@@ -24,6 +24,7 @@
 import { create } from 'zustand'
 import type { QueryClient } from '@tanstack/react-query'
 import { ApiError, apiCall } from '@/lib/api'
+import { BOOTSTRAP_KEY, budgetKey, fetchBudgetMonth, type Bootstrap } from '@/lib/data'
 import { currentMonth, addMonths } from '@/lib/format'
 import type { AccountKind, GroupIcon } from '@/types/domain'
 import type { CatColor } from '@/styles/themes'
@@ -1723,11 +1724,40 @@ useImportStore.subscribe((state) => {
 })
 
 // Requetes touchees par un remplacement complet (tout sauf la liste des
-// banques Enable Banking et l'historique de synchronisation, inchanges).
-const REPLACED_KEYS = ['bootstrap', 'transactions', 'budget', 'reports', 'targets', 'rules', 'bankConnections']
+// banques Enable Banking et l'historique de synchronisation, inchanges), en
+// plus de bootstrap et des mois du budget.
+const REPLACED_KEYS = ['transactions', 'reports', 'targets', 'rules', 'bankConnections']
 
-function invalidateReplaced(queryClient: QueryClient): Promise<unknown> {
-  return Promise.all(REPLACED_KEYS.map((key) => queryClient.invalidateQueries({ queryKey: [key] })))
+/**
+ * Bootstrap D'ABORD : chaque mois du budget est adapte avec la taxonomie du
+ * bootstrap (fetchBudgetMonth). Relus en parallele, les mois etaient groupes
+ * selon l'ancienne taxonomie : la grille montrait les categories effacees, a
+ * zero. Attendre ne suffit pas pour un mois observe : son queryFn garde la
+ * taxonomie de son dernier rendu (closure de useBudgetMonth) jusqu'au rendu
+ * suivant. Il est donc relu explicitement avec la nouvelle ; un mois sans
+ * observateur est seulement invalide (relu a son prochain affichage).
+ */
+async function invalidateReplaced(queryClient: QueryClient): Promise<void> {
+  await queryClient.invalidateQueries({ queryKey: BOOTSTRAP_KEY })
+  const taxo = queryClient.getQueryData<Bootstrap>(BOOTSTRAP_KEY)
+  const budgets = queryClient
+    .getQueryCache()
+    .findAll({ queryKey: ['budget'] })
+    .map((query) => {
+      const month = query.queryKey[1]
+      if (taxo && query.queryKey.length === 2 && typeof month === 'string' && query.getObserversCount() > 0) {
+        return queryClient.fetchQuery({
+          queryKey: budgetKey(month),
+          queryFn: () => fetchBudgetMonth(month, taxo),
+          staleTime: 0,
+        })
+      }
+      return queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true })
+    })
+  await Promise.allSettled([
+    ...REPLACED_KEYS.map((key) => queryClient.invalidateQueries({ queryKey: [key] })),
+    ...budgets,
+  ])
 }
 
 async function loop(queryClient: QueryClient): Promise<void> {
