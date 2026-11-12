@@ -475,6 +475,11 @@ interface AggContext {
   startMonth: string | null
 }
 
+// Tout ce dont depend la contribution d'une transaction aux agregats.
+function contributionKey(tx: AggTx): string {
+  return [tx.accountId, tx.amount, tx.bookingMonth, tx.categoryId ?? '', tx.transferGroupId ?? ''].join('|')
+}
+
 async function applyContribution(
   admin: Db,
   keys: CryptoKeys,
@@ -482,9 +487,10 @@ async function applyContribution(
   ctx: AggContext,
   sign: number,
   tx: AggTx,
+  includeBalance = true,
 ): Promise<void> {
   // Solde : TOUTES les transactions (transferts, hors-budget, a categoriser).
-  await adjustBalance(admin, keys, userId, tx.accountId, sign * tx.amount)
+  if (includeBalance) await adjustBalance(admin, keys, userId, tx.accountId, sign * tx.amount)
 
   // Comptes de suivi : solde uniquement (ni enveloppes, ni badge).
   if (!ctx.onBudget.has(tx.accountId)) return
@@ -579,8 +585,13 @@ export async function aggOpen(admin: Db, keys: CryptoKeys, userId: string): Prom
       batch: {
         applyTx: (sign, tx) => applyContribution(admin, keys, userId, ctx, sign, tx),
         replaceTx: async (oldTx, newTx) => {
-          await applyContribution(admin, keys, userId, ctx, -1, oldTx)
-          await applyContribution(admin, keys, userId, ctx, +1, newTx)
+          // Contribution identique (libelle ou note seuls) : rien a faire.
+          if (contributionKey(oldTx) === contributionKey(newTx)) return
+          // Meme compte, meme montant (cas d'une categorisation) : le solde ne
+          // bouge pas, on epargne ses deux ajustements CAS (4 requetes).
+          const balanceMoves = oldTx.accountId !== newTx.accountId || oldTx.amount !== newTx.amount
+          await applyContribution(admin, keys, userId, ctx, -1, oldTx, balanceMoves)
+          await applyContribution(admin, keys, userId, ctx, +1, newTx, balanceMoves)
         },
         setAssigned: (categoryId, month) =>
           adjustRollup(admin, keys, userId, categoryId, month, 0, () =>
