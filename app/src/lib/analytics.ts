@@ -6,6 +6,9 @@
 //    un serveur qui annonce crossBudgetTransfers, la moitie cote budget d'un
 //    virement budget <-> suivi compte comme une transaction ordinaire (regle
 //    YNAB) ; sans le drapeau (serveur ancien), tout virement reste neutre ;
+//  - epargne : la moitie cote budget d'un virement budget -> suivi (versement
+//    sur un PEA) n'est pas une depense, quelle que soit sa categorie (voir
+//    computeAnalytics) ;
 //  - depense : montant < 0, categorie non-revenu (ou sans categorie), nette des
 //    remboursements (entree sur une categorie de depense), plancher a 0 par
 //    categorie et par mois ;
@@ -321,8 +324,9 @@ export function computeAnalytics(
   { period, crossBudget }: AnalyticsOptions,
 ): Analytics {
   const onBudget = (accountId: string) => taxo.onBudget.has(accountId)
-  const counted = (t: Transaction) =>
-    onBudget(t.accountId) && (!t.transferGroupId || (crossBudget && isCrossBudgetHalf(t, onBudget, txs)))
+  // Moitie cote budget d'un virement budget <-> suivi (serveur recent).
+  const crossHalf = (t: Transaction) => crossBudget && isCrossBudgetHalf(t, onBudget, txs)
+  const counted = (t: Transaction) => onBudget(t.accountId) && (!t.transferGroupId || crossHalf(t))
   const groupOfCategory = (categoryId: string | null): CategoryGroup | null => {
     if (!categoryId) return null
     const groupId = taxo.categories.get(categoryId)?.groupId
@@ -379,6 +383,19 @@ export function computeAnalytics(
     }
 
     if (!counted(t)) continue
+    // Versement vers l'epargne (decision produit) : la moitie cote budget d'un
+    // virement CROISE sortant (compte budget -> compte de suivi : PEA,
+    // assurance vie, capital d'un credit suivi hors budget) n'est pas une
+    // depense, QUELLE QUE SOIT sa categorie (Epargne, une enveloppe, voire les
+    // revenus). Elle est exclue de « Depense », des repartitions par
+    // categorie et des classements (marchands, prelevements, jours, plus
+    // grosses depenses) ; l'argent reste donc dans « Epargne » (revenus moins
+    // depenses) et dans le taux d'epargne. Comptee en depense, elle faisait
+    // tomber le taux a 0 % le mois d'un versement. Le sens inverse (retrait
+    // d'un compte de suivi vers le budget) reste une transaction ordinaire
+    // (regle YNAB) : revenu en categorie de revenus, remboursement en
+    // categorie de depense, ignore sans categorie.
+    if (t.amount < 0 && crossHalf(t)) continue
     const inPeriod = m >= periodStart && m <= reference
     const day = Number(t.date.slice(8, 10))
 
