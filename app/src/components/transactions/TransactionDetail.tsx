@@ -34,17 +34,17 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { CategoryPicker } from './CategoryPicker'
-import { AccountChip, accountIcon } from './AccountChip'
+import { AccountChip } from './AccountChip'
 import { TxBubble } from './rowParts'
 import { canCategorize, toRow, transferLabel, type TxRow } from './txRow'
 import { useTxList } from './listContext'
 import { useTxRowActions } from './useTxRowActions'
+import { TransferTargetItems } from './TransferTargetItems'
 import { keepSheetOnFieldEscape } from './TransactionForm'
 
 function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
@@ -323,18 +323,7 @@ function DetailBody({ row, onClose }: { row: TxRow; onClose: () => void }) {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-72">
                 <DropdownMenuLabel>Convertir en virement {tx.amount < 0 ? 'vers' : 'depuis'}</DropdownMenuLabel>
-                {targets.map(({ account, hint }) => {
-                  const Icon = accountIcon(account)
-                  return (
-                    <DropdownMenuItem key={account.id} className="items-start" onSelect={() => actions.convert(row, account)}>
-                      <Icon className="mt-0.5 h-4 w-4 text-soft" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate">{account.name}</span>
-                        {hint && <span className="block text-[12px] leading-snug text-soft">{hint}</span>}
-                      </span>
-                    </DropdownMenuItem>
-                  )
-                })}
+                <TransferTargetItems row={row} targets={targets} actions={actions} />
               </DropdownMenuContent>
             </DropdownMenu>
           )}

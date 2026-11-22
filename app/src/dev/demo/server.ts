@@ -16,6 +16,7 @@ import {
   jsonClone,
   randomUuid,
   type AccountKind,
+  type DemoAccount,
   type DemoDb,
   type DemoRule,
   type DemoTransaction,
@@ -178,6 +179,7 @@ function txOut(t: DemoTransaction) {
     counterparty: t.counterparty,
     notes: t.notes,
     ...(t.synthetic && t.transferGroupId ? { synthetic: true } : {}),
+    ...(t.linked && t.transferGroupId ? { linked: true } : {}),
   }
 }
 
@@ -215,12 +217,38 @@ function budgetOf(db: DemoDb, month: string) {
 function releaseMirror(db: DemoDb, tx: DemoTransaction): { mirrorId: string | null; mirrorRemoved: boolean } {
   const mirror = db.transactions.find((t) => t.transferGroupId === tx.transferGroupId && t.id !== tx.id)
   if (!mirror) return { mirrorId: null, mirrorRemoved: false }
-  if (mirror.txHash === null) {
+  // Meme regle que /api : ni un import bancaire, ni l'autre moitie d'une paire reliee.
+  if (mirror.txHash === null && !tx.linked && !mirror.linked) {
     db.transactions = db.transactions.filter((t) => t.id !== mirror.id)
     return { mirrorId: mirror.id, mirrorRemoved: true }
   }
   mirror.transferGroupId = null
+  mirror.synthetic = undefined
+  mirror.linked = undefined
   return { mirrorId: mirror.id, mirrorRemoved: false }
+}
+
+// Meme regle que /api (linkTransferCounterpart) : deux operations existantes
+// deviennent les moities d'un virement, sans ligne creee ni supprimee (soldes
+// inchanges). Categories retirees entre deux comptes du meme type, gardees par
+// la moitie cote budget d'un virement croise.
+function linkTransferCounterpart(db: DemoDb, tx: DemoTransaction, counterpartId: string, target: DemoAccount) {
+  if (counterpartId === tx.id) throw new ApiError(400, 'une operation ne se relie pas a elle-meme')
+  const other = findTx(db, counterpartId)
+  if (other.accountId !== target.id) throw new ApiError(400, 'l operation a relier n est pas sur le compte cible')
+  if (other.transferGroupId) throw new ApiError(400, 'operation a relier deja liee a un transfert')
+  if (other.amount !== -tx.amount) {
+    throw new ApiError(400, 'les montants des deux operations doivent etre exactement opposes')
+  }
+  const onBudget = new Set(db.accounts.filter((a) => a.onBudget).map((a) => a.id))
+  const cross = crossBudget() && onBudget.has(tx.accountId) !== onBudget.has(other.accountId)
+  const transferGroupId = randomUuid()
+  for (const half of [tx, other]) {
+    half.categoryId = cross && onBudget.has(half.accountId) ? half.categoryId : null
+    half.transferGroupId = transferGroupId
+    half.linked = true
+  }
+  return { ok: true, transferGroupId, mirrorId: null, counterpartId }
 }
 
 function nextSortOrder(rows: { sortOrder: number }[]): number {
@@ -455,6 +483,9 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
     }
     const target = db.accounts.find((a) => a.id === targetAccountId)
     if (!target) throw new ApiError(400, 'compte cible inconnu')
+    // Un serveur sans linkTransfers ignore counterpartId (parametre inconnu).
+    const counterpartId = hasFeature(SERVER_FEATURES.linkTransfers) ? optionalUuid(p.counterpartId, 'counterpartId') : null
+    if (counterpartId) return linkTransferCounterpart(db, tx, counterpartId, target)
     if (target.closed) throw new ApiError(400, 'compte cible cloture')
     const originOnBudget = db.accounts.some((a) => a.id === tx.accountId && a.onBudget)
     // Virement croise : la moitie cote budget (l'origine) garde sa categorie.
@@ -487,14 +518,18 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
     const mirror = db.transactions.find((t) => t.transferGroupId === clicked.transferGroupId && t.id !== clicked.id)
     // Meme regle que /api (syntheticHalfId), marqueur seulement : le miroir
     // systeme est supprime quel que soit le cote clique, l'autre moitie deliee.
+    // Paire reliee par l'utilisateur : les deux sont deliees, aucune supprimee.
     const marked = (t: DemoTransaction | undefined) => Boolean(t && t.txHash === null && t.synthetic)
-    const removed = mirror && marked(mirror) !== marked(clicked) ? (marked(mirror) ? mirror : clicked) : null
+    const linked = Boolean(clicked.linked || mirror?.linked)
+    const removed =
+      mirror && !linked && marked(mirror) !== marked(clicked) ? (marked(mirror) ? mirror : clicked) : null
     const halves = [clicked, mirror].filter((t): t is DemoTransaction => Boolean(t))
     db.transactions = db.transactions.filter((t) => t.id !== removed?.id)
     for (const t of halves) {
       if (t.id === removed?.id) continue
       t.transferGroupId = null
       t.synthetic = undefined
+      t.linked = undefined
     }
     return { ok: true, removedId: removed?.id ?? null, unlinkedIds: halves.filter((t) => t.id !== removed?.id).map((t) => t.id) }
   },

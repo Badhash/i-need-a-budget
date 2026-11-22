@@ -24,6 +24,10 @@ export const SERVER_FEATURES = {
   /** setReportSettings + bootstrap.reportSettings : perimetre des rapports
    * (categories hors depenses, operations ecartees ou gardees a la main). */
   reportSettings: 'reportSettings',
+  /** convertToTransfer accepte counterpartId : relie une operation existante du
+   * compte cible (virement importe des deux cotes) au lieu de creer un miroir ;
+   * « Annuler le virement » delie alors les deux sans en supprimer aucune. */
+  linkTransfers: 'linkTransfers',
 } as const
 
 export type ServerFeature = (typeof SERVER_FEATURES)[keyof typeof SERVER_FEATURES]

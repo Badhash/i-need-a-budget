@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { canCategorize, type TxRow } from '@/components/transactions/txRow'
-import { accountIcon } from '@/components/transactions/AccountChip'
+import { TransferTargetItems } from '@/components/transactions/TransferTargetItems'
 import { useTxRowActions } from '@/components/transactions/useTxRowActions'
 
 /**
@@ -59,23 +59,7 @@ export function RowMenu({ row, className }: { row: TxRow; className?: string }) 
                 <ArrowLeftRight className="h-3 w-3" />
                 Convertir en virement {row.tx.amount < 0 ? 'vers' : 'depuis'}
               </DropdownMenuLabel>
-              {targets.map(({ account, hint }) => {
-                const Icon = accountIcon(account)
-                return (
-                  <DropdownMenuItem
-                    key={account.id}
-                    disabled={row.pending}
-                    onSelect={() => actions.convert(row, account)}
-                    className="items-start"
-                  >
-                    <Icon className="mt-0.5 h-4 w-4 text-soft" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate">{account.name}</span>
-                      {hint && <span className="block text-[12px] leading-snug text-soft">{hint}</span>}
-                    </span>
-                  </DropdownMenuItem>
-                )
-              })}
+              <TransferTargetItems row={row} targets={targets} actions={actions} disabled={row.pending} />
             </>
           ) : null}
           <DropdownMenuSeparator />

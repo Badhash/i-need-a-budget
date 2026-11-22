@@ -696,6 +696,107 @@ export function useConvertToTransfer() {
   })
 }
 
+interface LinkVars {
+  txId: string
+  /** Operation existante du compte cible (montant oppose), cf. findTransferCounterpart. */
+  counterpartId: string
+  targetAccountId: string
+}
+
+interface LinkContext {
+  before: Transaction
+  counterpartBefore: Transaction
+  origin: Transaction
+  counterpart: Transaction
+  groupId: string
+  count: number
+}
+
+/**
+ * « Relier à l'opération du … » optimiste (fonctionnalite linkTransfers) : la
+ * ligne et l'operation de montant oppose deja presente sur le compte cible
+ * (virement importe des deux cotes) deviennent les deux moities d'un meme
+ * virement. Aucune ligne creee : les soldes ne bougent pas. Les categories
+ * suivent la regle d'une conversion (retirees entre deux comptes du meme type,
+ * gardees par la moitie cote budget d'un virement croise) : budget et badge
+ * sont corriges sur-le-champ.
+ */
+export function useLinkTransfer() {
+  const queryClient = useQueryClient()
+  ensureTxOverlay(queryClient)
+  return useMutation({
+    mutationFn: ({ txId, counterpartId, targetAccountId }: LinkVars) =>
+      enqueue(
+        () =>
+          apiCall<{ ok: true; transferGroupId?: string }>('convertToTransfer', {
+            transactionId: resolveId(txId),
+            targetAccountId,
+            counterpartId: resolveId(counterpartId),
+          }),
+        { deps: [txId, counterpartId] },
+      ),
+    onMutate: async ({ txId, counterpartId }): Promise<LinkContext | undefined> => {
+      await Promise.all([
+        pauseReads(queryClient, TRANSACTIONS_KEY),
+        pauseReads(queryClient, BOOTSTRAP_KEY),
+      ])
+      const before = findTx(queryClient, txId)
+      const counterpartBefore = findTx(queryClient, counterpartId)
+      if (!before || !counterpartBefore || before.transferGroupId || counterpartBefore.transferGroupId) return undefined
+      const groupId = newTempId()
+      const ids = [txId, counterpartId]
+      const countBefore = uncatCountOf(queryClient, ids)
+      const link = (t: Transaction, otherAccountId: string): Transaction => ({
+        ...t,
+        transferGroupId: groupId,
+        categoryId: conversionKeepsCategory(queryClient, t, otherAccountId) ? t.categoryId : null,
+      })
+      const origin = link(before, counterpartBefore.accountId)
+      const counterpart = link(counterpartBefore, before.accountId)
+      writeTxs(queryClient, (old) =>
+        old.map((t) => (t.id === txId ? origin : t.id === counterpartId ? counterpart : t)),
+      )
+      const count = uncatCountOf(queryClient, ids) - countBefore
+      patchUncategorizedCount(queryClient, count)
+      // Apres l'ecriture : une moitie croisee se reconnait a sa paire en cache.
+      patchBudgetForTransactions(queryClient, [
+        { before, after: origin },
+        { before: counterpartBefore, after: counterpart },
+      ])
+      return { before, counterpartBefore, origin, counterpart, groupId, count }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return
+      // Budget corrige AVANT de delier : la paire doit encore etre en cache.
+      patchBudgetForTransactions(queryClient, [
+        { before: ctx.origin, after: ctx.before },
+        { before: ctx.counterpart, after: ctx.counterpartBefore },
+      ])
+      writeTxs(queryClient, (old) =>
+        old.map((t) => {
+          if (t.transferGroupId !== ctx.groupId) return t
+          if (t.id === ctx.before.id) return ctx.before
+          if (t.id === ctx.counterpartBefore.id) return ctx.counterpartBefore
+          return t
+        }),
+      )
+      patchUncategorizedCount(queryClient, -ctx.count)
+    },
+    // Id du groupe connu du seul serveur : il remplace l'id temporaire en place.
+    onSuccess: (res, _vars, ctx) => {
+      if (ctx && res?.transferGroupId) {
+        const { transferGroupId } = res
+        writeTxs(queryClient, (old) =>
+          old.map((t) => (t.transferGroupId === ctx.groupId ? { ...t, transferGroupId } : t)),
+        )
+      } else {
+        refetchAfterWrites(queryClient, [TRANSACTIONS_KEY, BOOTSTRAP_KEY])
+      }
+      scheduleBudgetRefetch(queryClient)
+    },
+  })
+}
+
 interface RevertContext {
   kept: Transaction
   mirror: Transaction | null

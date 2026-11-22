@@ -123,6 +123,15 @@ interface TxPayload {
    * que la ligne est une moitie de virement, efface quand elle est deliee.
    */
   synthetic?: boolean
+  /**
+   * Moitie d'un virement RELIE par l'utilisateur (convertToTransfer avec
+   * counterpartId) : les deux operations existaient avant la liaison (virement
+   * importe des deux cotes, saisies), aucune n'est un miroir systeme.
+   * « Annuler le virement » et la suppression d'une moitie delient l'autre sans
+   * jamais la supprimer. Ecrit dans enc_core tant que la ligne est une moitie
+   * de virement, efface quand elle est deliee.
+   */
+  linked?: boolean
   /** Reference client d'une saisie (id temporaire du front) : idempotence des rejeux. */
   clientRef?: string | null
 }
@@ -145,6 +154,7 @@ type TxCore = Pick<
   | 'amount'
   | 'transferGroupId'
   | 'synthetic'
+  | 'linked'
   | 'clientRef'
 >
 type TxText = Pick<TxPayload, 'label' | 'counterparty' | 'notes'>
@@ -684,6 +694,7 @@ async function encodeTxColumns(
     // Marqueur porte seulement par une moitie de virement : delier la ligne
     // (transferGroupId null) l'efface, elle redevient une ecriture ordinaire.
     ...(payload.synthetic && payload.transferGroupId ? { synthetic: true } : {}),
+    ...(payload.linked && payload.transferGroupId ? { linked: true } : {}),
     ...(payload.clientRef ? { clientRef: payload.clientRef } : {}),
   }
   const text: TxText = {
@@ -2085,6 +2096,10 @@ async function updateCrossBudgetHalf(
 async function actionConvertToTransfer(userId: string, params: Params) {
   const transactionId = requireUuid(params.transactionId, 'transactionId')
   const targetAccountId = requireUuid(params.targetAccountId, 'targetAccountId')
+  // Fonctionnalite linkTransfers : operation EXISTANTE du compte cible a relier
+  // (virement importe des deux cotes) au lieu de creer un miroir.
+  const counterpartId =
+    params.counterpartId == null ? null : requireUuid(params.counterpartId, 'counterpartId')
 
   const { data, error } = await admin
     .from('transactions')
@@ -2104,6 +2119,9 @@ async function actionConvertToTransfer(userId: string, params: Params) {
   const accounts = await loadAll<AccountPayload>('accounts', userId)
   const targetAccount = accounts.find((a) => a.id === targetAccountId)
   if (!targetAccount) throw new ApiError(400, 'compte cible inconnu')
+  if (counterpartId) {
+    return linkTransferCounterpart(userId, keys, transactionId, payload, counterpartId, targetAccountId, accounts)
+  }
   // Un compte clos ne recoit plus d'activite : meme regle que sync-bank.
   if (targetAccount.closed) throw new ApiError(400, 'compte cible cloture')
 
@@ -2170,6 +2188,79 @@ async function actionConvertToTransfer(userId: string, params: Params) {
   })
   // mirrorId : le front remplace son id temporaire sans relire tout l'historique.
   return { ok: true, transferGroupId, mirrorId }
+}
+
+// Liaison de deux operations EXISTANTES en virement (convertToTransfer avec
+// counterpartId). Cas type : un virement entre ses propres comptes importe des
+// DEUX cotes par la synchro bancaire (sortie sur l'un, entree du meme montant
+// sur l'autre) ; un miroir doublerait le solde du compte d'arrivee. Aucune
+// ligne n'est creee ni supprimee, les soldes ne bougent pas : les deux moities
+// recoivent le meme transferGroupId et le marqueur `linked` (aucune n'est un
+// miroir systeme). Categories : memes regles qu'une conversion (virement neutre
+// entre deux comptes du meme type ; virement croise budget <-> suivi : la
+// moitie cote budget garde la sienne, la moitie cote suivi n'en porte pas). Les
+// dates peuvent differer (delai bancaire) : la proximite est l'affaire du front.
+async function linkTransferCounterpart(
+  userId: string,
+  keys: CryptoKeys,
+  transactionId: string,
+  payload: TxPayload,
+  counterpartId: string,
+  targetAccountId: string,
+  accounts: WithId<AccountPayload>[],
+) {
+  if (counterpartId === transactionId) {
+    throw new ApiError(400, 'une operation ne se relie pas a elle-meme')
+  }
+  // Lecture bornee a l'utilisateur : l'operation d'un autre utilisateur est
+  // inconnue (404), comme toute transaction.
+  const other = (await loadTransferHalf(userId, keys, counterpartId)).payload
+  // Compte cible verifie par l'appelant (existant, different de l'origine) :
+  // l'operation reliee doit y etre.
+  if (other.accountId !== targetAccountId) {
+    throw new ApiError(400, 'l operation a relier n est pas sur le compte cible')
+  }
+  if (other.transferGroupId) throw new ApiError(400, 'operation a relier deja liee a un transfert')
+  if (other.amount !== -payload.amount) {
+    throw new ApiError(400, 'les montants des deux operations doivent etre exactement opposes')
+  }
+
+  const onBudget = onBudgetIds(accounts)
+  const cross = onBudget.has(payload.accountId) !== onBudget.has(other.accountId)
+  const keepCategory = (half: TxPayload) => (cross && onBudget.has(half.accountId) ? half.categoryId : null)
+  const transferGroupId = crypto.randomUUID()
+  const origin: TxPayload = { ...payload, categoryId: keepCategory(payload), transferGroupId, linked: true }
+  const counterpart: TxPayload = { ...other, categoryId: keepCategory(other), transferGroupId, linked: true }
+
+  // month_idx et tx_hash intacts (dates et montants inchanges). Ordre et
+  // rollback comme une conversion : une origine liee sans moitie reste visible
+  // et annulable par convertTransferToNormal.
+  const writePair = async () => {
+    await updateTx(userId, transactionId, origin)
+    try {
+      await updateTx(userId, counterpartId, counterpart)
+    } catch (err) {
+      try {
+        await updateTx(userId, transactionId, payload)
+      } catch {
+        await aggMarkStale(admin, userId).catch(() => {})
+      }
+      throw err
+    }
+  }
+  const result = { ok: true, transferGroupId, mirrorId: null, counterpartId }
+  // Paire CROISEE (sa moitie cote budget reste une transaction ordinaire) ou A
+  // CHEVAL sur le mois de depart (moitie posterieure comptee comme mouvement
+  // d'argent par le moteur) : hors maintenance incrementale.
+  if (cross || (await straddlesStartMonth(userId, keys, payload, other))) {
+    await withAggregatesStale(userId, writePair)
+    return result
+  }
+  await withAggMaintenance(userId, keys, writePair, async (b) => {
+    await b.replaceTx(payload, origin)
+    await b.replaceTx(other, counterpart)
+  })
+  return result
 }
 
 // Moitie de virement lue en entier, avec tx_hash (import bancaire ou non) et
@@ -2250,6 +2341,8 @@ async function straddlesStartMonth(
 
 // Moitie « miroir systeme » d'une paire, la seule qu'« Annuler le virement »
 // peut supprimer. Un import bancaire (tx_hash) ne l'est jamais.
+//   0. Paire reliee par l'utilisateur (marqueur `linked`) : aucune, les deux
+//      operations existaient avant la liaison.
 //   1. Marqueur `synthetic` (miroirs crees depuis son introduction).
 //   2. Paires plus anciennes : un miroir systeme n'a ni tx_hash ni
 //      contrepartie et reprend la date, le libelle et le montant oppose de
@@ -2261,6 +2354,7 @@ async function straddlesStartMonth(
 // la saisie d'origine quand on annulait depuis la ligne miroir, et la vraie
 // moitie d'un virement importe de YNAB.
 function syntheticHalfId(a: TransferHalf, b: TransferHalf): string | null {
+  if (a.payload.linked === true || b.payload.linked === true) return null
   const markedA = a.txHash === null && a.payload.synthetic === true
   const markedB = b.txHash === null && b.payload.synthetic === true
   if (markedA !== markedB) return markedA ? a.id : b.id
@@ -2382,9 +2476,9 @@ async function actionDeleteTransaction(userId: string, params: Params) {
   // Transfert : le miroir est supprime s'il n'est pas un import bancaire
   // (tx_hash NULL : miroir systeme, saisie, import YNAB — supprimer un virement
   // le supprime entier, comme dans YNAB), simplement delie s'il s'agit d'un
-  // vrai import bancaire (jamais de perte de donnees bancaires implicite). Il
-  // est d'abord RECHERCHE (lecture bornee, sans ecrire) pour savoir si la paire
-  // est croisee.
+  // vrai import bancaire (jamais de perte de donnees bancaires implicite) ou de
+  // l'autre moitie d'une paire reliee par l'utilisateur. Il est d'abord
+  // RECHERCHE (lecture bornee, sans ecrire) pour savoir si la paire est croisee.
   const mirror = payload.transferGroupId
     ? ((await loadTransferPeers(userId, keys, self))[0] ?? null)
     : null
@@ -2398,11 +2492,16 @@ async function actionDeleteTransaction(userId: string, params: Params) {
     // Paire a cheval sur le mois de depart : meme raison que dans convertTransferToNormal.
     if (!cross) cross = await straddlesStartMonth(userId, keys, payload, mirror.payload)
   }
+  // Miroir supprime avec la ligne : jamais un import bancaire, ni l'autre moitie
+  // d'une paire reliee par l'utilisateur (marqueur `linked` : une operation qui
+  // existait avant la liaison, simplement deliee).
+  const removeMirror =
+    mirror !== null && mirror.txHash === null && payload.linked !== true && mirror.payload.linked !== true
   // Contribution du miroir a repercuter sur les agregats, appliquee seulement
   // apres la suppression reussie.
   const mirrorAgg: ((b: AggBatch) => Promise<void>) | null = !mirror
     ? null
-    : mirror.txHash === null
+    : removeMirror
       ? (b) => b.applyTx(-1, mirror.payload)
       : (b) => b.replaceTx(mirror.payload, { ...mirror.payload, transferGroupId: null })
 
@@ -2414,7 +2513,7 @@ async function actionDeleteTransaction(userId: string, params: Params) {
     if (ownHash !== null) await recordDeletedHashes(userId, [ownHash])
 
     if (mirror) {
-      if (mirror.txHash === null) {
+      if (removeMirror) {
         const { error: delErr } = await admin
           .from('transactions')
           .delete()
@@ -2442,12 +2541,13 @@ async function actionDeleteTransaction(userId: string, params: Params) {
     }
   }
   // Issue pour le miroir (front) : supprime s'il n'est pas un import bancaire
-  // (une paire saisie ou importee de YNAB disparait entiere, comme dans YNAB),
-  // simplement delie sinon. Le front l'applique sans relire tout l'historique.
+  // (une paire saisie ou importee de YNAB disparait entiere, comme dans YNAB)
+  // ni une operation reliee, simplement delie sinon. Le front l'applique sans
+  // relire tout l'historique.
   const result = {
     ok: true,
     mirrorId: mirror?.id ?? null,
-    mirrorRemoved: mirror ? mirror.txHash === null : false,
+    mirrorRemoved: removeMirror,
   }
   if (cross) {
     await withAggregatesStale(userId, writes)

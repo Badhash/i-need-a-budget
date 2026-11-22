@@ -622,6 +622,12 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
     const date = addDays(today, -r.offset)
     push({ account: r.account, cat: null, date, amount: r.amount, label: r.label(date), counterparty: r.counterparty })
   }
+  // Virement vers le Livret A pas encore relie : la sortie importee du compte
+  // courant et l'entree du livret, le lendemain. « Convertir en virement »
+  // propose de relier l'operation existante (lib/transferPairs.ts) plutot que
+  // de creer un miroir qui doublerait le solde du livret.
+  push({ account: courant, cat: null, date: addDays(today, -7), amount: -150_000, label: 'VIR SEPA VERS LIVRET A PROJET TRAVAUX' })
+  push({ account: livret, cat: null, date: addDays(today, -6), amount: 150_000, label: 'VIR SEPA RECU DU COMPTE COURANT' })
 
   // Releves mensuels de la carte a debit differe (mois termines) : virement
   // du compte courant vers la carte, qui remet son solde a zero.

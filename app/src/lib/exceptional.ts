@@ -32,6 +32,7 @@
 import type { Transaction } from '@/types/domain'
 import type { ReportSettings } from '@/lib/data'
 import { payeeKey } from '../../../packages/crypto/src/payee'
+import { TRANSFER_PAIR_MAX_DAYS, dayGap } from '@/lib/transferPairs'
 
 export type ExclusionReason = 'large' | 'internal' | 'manual'
 export type FlowKind = 'spending' | 'income'
@@ -71,9 +72,8 @@ export interface ScopeInput {
 export const EMPTY_SCOPE: ReportScope = { excludedIds: new Set(), excludedCategories: new Set(), items: [] }
 
 // Virements internes : montant minimal (les petites coincidences n'ont aucun
-// effet visible) et ecart de dates maximal entre les deux moities.
+// effet visible). Ecart de dates maximal : TRANSFER_PAIR_MAX_DAYS (lib/transferPairs).
 const INTERNAL_MIN = 1_000
-const INTERNAL_DAYS = 3
 // Operations exceptionnelles.
 const LARGE_FLOOR = 50_000 // jamais en dessous de 500 EUR
 const SHARE: Record<FlowKind, number> = { spending: 0.5, income: 1.5 }
@@ -88,11 +88,6 @@ export function merchantKey(label: string): string {
 }
 
 const monthIndex = (date: string) => Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1
-
-function dayNumber(date: string): number {
-  const [y, m, d] = date.split('-').map(Number)
-  return Date.UTC(y, m - 1, d) / 86_400_000
-}
 
 function median(values: number[]): number {
   const s = [...values].sort((a, b) => a - b)
@@ -157,8 +152,8 @@ export function detectReportScope(txs: readonly Transaction[], input: ScopeInput
     let bestGap = Infinity
     for (const candidate of inflows.get(-out.amount) ?? []) {
       if (seen.has(candidate.id) || candidate.accountId === out.accountId) continue
-      const gap = Math.abs(dayNumber(candidate.date) - dayNumber(out.date))
-      if (gap <= INTERNAL_DAYS && gap < bestGap) {
+      const gap = dayGap(candidate.date, out.date)
+      if (gap <= TRANSFER_PAIR_MAX_DAYS && gap < bestGap) {
         best = candidate
         bestGap = gap
       }

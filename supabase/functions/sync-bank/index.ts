@@ -86,6 +86,9 @@ interface TxPayload {
   // Moitie de virement creee par l'app (miroir de carte differee) : meme contrat
   // que /api (TxPayload.synthetic), seule supprimable par « Annuler le virement ».
   synthetic?: boolean
+  // Moitie d'un virement relie par l'utilisateur (/api, TxPayload.linked) :
+  // conserve a la reecriture, jamais pose par sync-bank.
+  linked?: boolean
 }
 
 // REF H : payload transaction scinde en enc_core (leger) et enc_text (lourd),
@@ -94,7 +97,14 @@ interface TxPayload {
 // ecrites via enc_insert/enc_update (decode(...,'base64')).
 type TxCore = Pick<
   TxPayload,
-  'accountId' | 'categoryId' | 'bookingDate' | 'bookingMonth' | 'amount' | 'transferGroupId' | 'synthetic'
+  | 'accountId'
+  | 'categoryId'
+  | 'bookingDate'
+  | 'bookingMonth'
+  | 'amount'
+  | 'transferGroupId'
+  | 'synthetic'
+  | 'linked'
 >
 type TxText = Pick<TxPayload, 'label' | 'counterparty' | 'notes'>
 
@@ -321,6 +331,7 @@ async function encodeTxColumns(
     amount: payload.amount,
     transferGroupId: payload.transferGroupId ?? null,
     ...(payload.synthetic && payload.transferGroupId ? { synthetic: true } : {}),
+    ...(payload.linked && payload.transferGroupId ? { linked: true } : {}),
   }
   const text: TxText = {
     label: payload.label,

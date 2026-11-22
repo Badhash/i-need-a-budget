@@ -50,6 +50,8 @@ export interface DemoTransaction {
   txHash: string | null
   /** Miroir de virement cree par l'app (meme contrat que /api). */
   synthetic?: boolean
+  /** Moitie d'un virement relie par l'utilisateur (meme contrat que /api) : jamais supprimee avec l'autre. */
+  linked?: boolean
 }
 
 export interface DemoAssignment {
