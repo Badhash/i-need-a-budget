@@ -1,6 +1,7 @@
 import { memo, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector } from 'recharts'
-import { PieChart as PieIcon } from 'lucide-react'
+import { ChevronRight, PieChart as PieIcon } from 'lucide-react'
 import { REST_KEY, type Analytics, type GroupSlice } from '@/lib/analytics'
 import { addMonths, fmtEUR, fmtMonthLong, fmtMonthShort, fmtMonthTitle, fmtPercent } from '@/lib/format'
 import { useChartPalette } from '@/hooks/useTheme'
@@ -38,6 +39,19 @@ function question(reference: string, currentMonth: string): string {
 // Le mois est deja dans la question : la legende dit seulement le decoupage.
 const CAPTION = 'Par groupe de catégories'
 
+/**
+ * Detail d'une part dans Transactions : les operations comptees par le rapport
+ * pour le mois (meme classement, perimetre compris), pour un groupe ou toutes
+ * (« Autres » regroupe plusieurs groupes : detail complet).
+ */
+function detailSearch(reference: string, key?: string) {
+  return {
+    mois: reference,
+    rapport: 'depenses' as const,
+    ...(key && key !== REST_KEY ? { groupe: key } : {}),
+  }
+}
+
 /** Repartition des depenses du mois par groupe de categories (donut + legende chiffree). */
 export const SpendingDonut = memo(function SpendingDonut({ a, currentMonth }: { a: Analytics; currentMonth: string }) {
   const palette = useChartPalette()
@@ -53,7 +67,23 @@ export const SpendingDonut = memo(function SpendingDonut({ a, currentMonth }: { 
   const previousMonth = addMonths(a.reference, -1)
 
   return (
-    <WidgetCard icon={PieIcon} question={question(a.reference, currentMonth)} caption={CAPTION}>
+    <WidgetCard
+      icon={PieIcon}
+      question={question(a.reference, currentMonth)}
+      caption={CAPTION}
+      action={
+        slices.length > 0 ? (
+          <Link
+            to="/transactions"
+            search={detailSearch(a.reference)}
+            className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-[13px] font-semibold text-accent-ink transition-colors hover:bg-accent/10 dark:text-accent"
+          >
+            Détail
+            <ChevronRight aria-hidden className="h-3.5 w-3.5" />
+          </Link>
+        ) : undefined
+      }
+    >
       <div className={cn('flex items-center', BODY)}>
         <div className={cn('relative shrink-0', RING)}>
           {slices.length > 0 ? (
@@ -120,22 +150,26 @@ export const SpendingDonut = memo(function SpendingDonut({ a, currentMonth }: { 
         {slices.length > 0 ? (
           <ul className={cn('flex min-w-0 flex-1 flex-col', ROWS_GAP)}>
             {slices.map((s, i) => (
-              <li
-                key={s.key}
-                onMouseEnter={() => setActive(i)}
-                onMouseLeave={() => setActive(null)}
-                className={cn(
-                  'flex items-center gap-2 rounded-lg px-1.5 text-[13px] transition-opacity duration-200 lg:gap-2.5 lg:px-2 lg:text-[13.5px]',
-                  ROW,
-                  active !== null && active !== i && 'opacity-45',
-                )}
-              >
-                <SeriesKey color={sliceColor(s, palette)} className={cn('h-2.5 w-2.5', s.key === REST_KEY && 'opacity-50')} />
-                <span className="min-w-0 flex-1 truncate text-ink">{s.label}</span>
-                <span className="shrink-0 text-soft tnum">{fmtPercent(s.share)}</span>
-                <span className="hidden w-[4.75rem] shrink-0 text-right font-semibold text-ink tnum sm:inline">
-                  {fmtEUR(s.total)}
-                </span>
+              <li key={s.key} onMouseEnter={() => setActive(i)} onMouseLeave={() => setActive(null)}>
+                {/* Une ligne = un lien vers ses operations dans Transactions. */}
+                <Link
+                  to="/transactions"
+                  search={detailSearch(a.reference, s.key)}
+                  aria-label={`${s.label} : ${fmtEUR(s.total)}, voir les opérations`}
+                  className={cn(
+                    "relative flex items-center gap-2 rounded-lg px-1.5 text-[13px] transition-[opacity,background-color] duration-200 after:absolute after:inset-x-0 after:-inset-y-1 after:content-[''] hover:bg-surface2/70 lg:gap-2.5 lg:px-2 lg:text-[13.5px]",
+                    ROW,
+                    active !== null && active !== i && 'opacity-45',
+                  )}
+                >
+                  <SeriesKey color={sliceColor(s, palette)} className={cn('h-2.5 w-2.5', s.key === REST_KEY && 'opacity-50')} />
+                  <span className="min-w-0 flex-1 truncate text-ink">{s.label}</span>
+                  <span className="shrink-0 text-soft tnum">{fmtPercent(s.share)}</span>
+                  <span className="hidden w-[4.75rem] shrink-0 text-right font-semibold text-ink tnum sm:inline">
+                    {fmtEUR(s.total)}
+                  </span>
+                  <ChevronRight aria-hidden className="h-3.5 w-3.5 shrink-0 text-soft/60" />
+                </Link>
               </li>
             ))}
           </ul>

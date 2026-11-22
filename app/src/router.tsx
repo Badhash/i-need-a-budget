@@ -167,14 +167,20 @@ const transactionsRoute = createRoute({
   //   ?compte=<id>     (navigation depuis Comptes)
   //   ?categorie=<id>  (clic sur une activite du Budget)
   //   ?mois=YYYY-MM    (clic sur une activite du Budget)
+  //   ?rapport=depenses (detail d'une depense des Rapports : seules les
+  //                      operations comptees par le rapport)
+  //   ?groupe=<part>   (avec rapport : une part du donut, id de groupe,
+  //                      __uncat__ ou __card__)
   // Les valeurs vides sont ignorees (cle absente = pas de filtre).
   validateSearch: (
     search: Record<string, unknown>,
-  ): { compte?: string; categorie?: string; mois?: string } => {
-    const out: { compte?: string; categorie?: string; mois?: string } = {}
+  ): { compte?: string; categorie?: string; mois?: string; rapport?: 'depenses'; groupe?: string } => {
+    const out: { compte?: string; categorie?: string; mois?: string; rapport?: 'depenses'; groupe?: string } = {}
     if (typeof search.compte === 'string' && search.compte) out.compte = search.compte
     if (typeof search.categorie === 'string' && search.categorie) out.categorie = search.categorie
     if (typeof search.mois === 'string' && search.mois) out.mois = search.mois
+    if (search.rapport === 'depenses') out.rapport = 'depenses'
+    if (typeof search.groupe === 'string' && search.groupe) out.groupe = search.groupe
     return out
   },
 })

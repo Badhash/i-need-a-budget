@@ -18,7 +18,13 @@ import {
   type ReportSettings,
 } from '@/lib/data'
 import { SERVER_FEATURES } from '@/lib/features'
-import { buildReportScope, taxonomyFrom } from '@/lib/analytics'
+import {
+  buildReportScope,
+  reportFlowClassifier,
+  spendingSliceKey,
+  taxonomyFrom,
+  type ReportFlow,
+} from '@/lib/analytics'
 import type { ReportScope, ScopeItem } from '@/lib/exceptional'
 import { enqueue, isTempId, resolveId } from '@/lib/mutationQueue'
 import { pauseReads } from '@/lib/pauseReads'
@@ -53,6 +59,29 @@ export function useReportScope(): ReportScopeState {
   const editable = features.has(SERVER_FEATURES.reportSettings)
   const scope = useMemo(() => (txs && boot ? scopeOf(txs, boot, crossBudget) : null), [txs, boot, crossBudget])
   return { scope, settings: editable && boot ? boot.reportSettings : EMPTY_REPORT_SETTINGS, editable }
+}
+
+export interface ReportFlowState {
+  /** Role d'une transaction dans les rapports (meme regle que computeAnalytics). */
+  classify: (t: Transaction) => ReportFlow
+  /** Part du donut d'une cle de depense (groupe, a categoriser, achats carte). */
+  sliceOf: (key: string) => string
+}
+
+/** Classement des transactions par les rapports ; null tant que les donnees manquent. */
+export function useReportFlow(): ReportFlowState | null {
+  const { scope } = useReportScope()
+  const txs = useTransactions().data
+  const boot = useBootstrap().data
+  const crossBudget = useServerFeatures().has(SERVER_FEATURES.crossBudgetTransfers)
+  return useMemo(() => {
+    if (!txs || !boot || !scope) return null
+    const taxo = taxonomyFrom(boot)
+    return {
+      classify: reportFlowClassifier(txs, taxo, { crossBudget, scope }),
+      sliceOf: (key: string) => spendingSliceKey(key, taxo),
+    }
+  }, [txs, boot, scope, crossBudget])
 }
 
 /** Element du perimetre pour une transaction (detectee ou ecartee a la main), sinon null. */

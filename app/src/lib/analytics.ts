@@ -367,6 +367,69 @@ export function buildReportScope(
 }
 
 // ---------------------------------------------------------------------------
+// Classement d'une transaction (partage avec la page Transactions)
+// ---------------------------------------------------------------------------
+
+/**
+ * Role d'une transaction dans les rapports : revenu, depense (cle de
+ * categorie, UNCAT_KEY ou CARD_KEY ; un montant positif est un remboursement
+ * qui vient en deduction) ou rien. Source UNIQUE : computeAnalytics et le
+ * filtre « Dépenses du rapport » de la page Transactions l'utilisent tous
+ * deux, le detail affiche retombe donc sur le chiffre du rapport.
+ */
+export type ReportFlow = { kind: 'income' } | { kind: 'spending'; key: string; card: boolean } | null
+
+export function reportFlowClassifier(
+  txs: Transaction[],
+  taxo: TaxonomyLite,
+  { crossBudget, scope = EMPTY_SCOPE }: { crossBudget: boolean; scope?: ReportScope },
+): (t: Transaction) => ReportFlow {
+  const onBudget = (accountId: string) => taxo.onBudget.has(accountId)
+  // Moitie cote budget d'un virement budget <-> suivi (serveur recent).
+  const crossHalf = (t: Transaction) => crossBudget && isCrossBudgetHalf(t, onBudget, txs)
+  return (t) => {
+    if (!onBudget(t.accountId) || (t.transferGroupId && !crossHalf(t))) return null
+    // Versement vers l'epargne (decision produit) : la moitie cote budget d'un
+    // virement CROISE sortant (compte budget -> compte de suivi : PEA,
+    // assurance vie, capital d'un credit suivi hors budget) n'est pas une
+    // depense, QUELLE QUE SOIT sa categorie. L'argent reste donc dans
+    // « Epargne » (revenus moins depenses) et dans le taux d'epargne. Le sens
+    // inverse (retrait d'un compte de suivi) reste une transaction ordinaire
+    // (regle YNAB) : revenu en categorie de revenus, remboursement en
+    // categorie de depense, ignore sans categorie.
+    if (t.amount < 0 && crossHalf(t)) return null
+    // Perimetre : operation ecartee (exceptionnelle, virement interne non
+    // relie, choix manuel) ou categorie hors depenses (epargne, argent mis de
+    // cote) : ignoree partout. Le patrimoine la compte toujours.
+    if (scope.excludedIds.has(t.id)) return null
+    const isIncome = t.categoryId !== null && taxo.incomeCats.has(t.categoryId)
+    if (!isIncome && t.categoryId !== null && scope.excludedCategories.has(t.categoryId)) return null
+    // Achats carte non detailles (CARD_KEY, cf. sa definition).
+    if (isIncome && t.label === ADJUSTMENT_LABEL && taxo.cardAccounts?.has(t.accountId)) {
+      return { kind: 'spending', key: CARD_KEY, card: true }
+    }
+    if (isIncome) {
+      // Solde d'ouverture ou ajustement de solde : de l'argent deja la (ou une
+      // correction), range en revenus pour le Pret a assigner, pas un revenu.
+      return BALANCE_LABELS.has(t.label) ? null : { kind: 'income' }
+    }
+    // Remboursement (entree sur une categorie de depense) : en deduction de la
+    // categorie. Une entree SANS categorie n'est pas un remboursement (revenu
+    // pas encore categorise) : ignoree.
+    if (t.amount > 0) return t.categoryId !== null ? { kind: 'spending', key: t.categoryId, card: false } : null
+    if (t.amount === 0) return null
+    return { kind: 'spending', key: t.categoryId ?? UNCAT_KEY, card: false }
+  }
+}
+
+/** Part du donut d'une cle de depense : groupe de la categorie, UNCAT_KEY, CARD_KEY ou « Autre ». */
+export function spendingSliceKey(key: string, taxo: TaxonomyLite): string {
+  if (key === UNCAT_KEY || key === CARD_KEY) return key
+  const groupId = taxo.categories.get(key)?.groupId
+  return groupId && taxo.groups.has(groupId) ? groupId : UNKNOWN_KEY
+}
+
+// ---------------------------------------------------------------------------
 // Analyse
 // ---------------------------------------------------------------------------
 
@@ -378,9 +441,7 @@ export function computeAnalytics(
   { period, crossBudget, scope = EMPTY_SCOPE }: AnalyticsOptions,
 ): Analytics {
   const onBudget = (accountId: string) => taxo.onBudget.has(accountId)
-  // Moitie cote budget d'un virement budget <-> suivi (serveur recent).
-  const crossHalf = (t: Transaction) => crossBudget && isCrossBudgetHalf(t, onBudget, txs)
-  const counted = (t: Transaction) => onBudget(t.accountId) && (!t.transferGroupId || crossHalf(t))
+  const classify = reportFlowClassifier(txs, taxo, { crossBudget, scope })
   const groupOfCategory = (categoryId: string | null): CategoryGroup | null => {
     if (!categoryId) return null
     const groupId = taxo.categories.get(categoryId)?.groupId
@@ -438,27 +499,8 @@ export function computeAnalytics(
       else bump(netDelta, m, t.amount)
     }
 
-    if (!counted(t)) continue
-    // Versement vers l'epargne (decision produit) : la moitie cote budget d'un
-    // virement CROISE sortant (compte budget -> compte de suivi : PEA,
-    // assurance vie, capital d'un credit suivi hors budget) n'est pas une
-    // depense, QUELLE QUE SOIT sa categorie (Epargne, une enveloppe, voire les
-    // revenus). Elle est exclue de « Depense », des repartitions par
-    // categorie et des classements (marchands, prelevements, jours, plus
-    // grosses depenses) ; l'argent reste donc dans « Epargne » (revenus moins
-    // depenses) et dans le taux d'epargne. Comptee en depense, elle faisait
-    // tomber le taux a 0 % le mois d'un versement. Le sens inverse (retrait
-    // d'un compte de suivi vers le budget) reste une transaction ordinaire
-    // (regle YNAB) : revenu en categorie de revenus, remboursement en
-    // categorie de depense, ignore sans categorie.
-    if (t.amount < 0 && crossHalf(t)) continue
-    // Perimetre : operation ecartee (exceptionnelle, virement interne non
-    // relie, choix manuel) ou categorie hors depenses (epargne, argent mis de
-    // cote) : ignoree partout, comme un versement vers l'epargne. Le
-    // patrimoine (plus haut) la compte toujours.
-    if (scope.excludedIds.has(t.id)) continue
-    const isIncome = t.categoryId !== null && taxo.incomeCats.has(t.categoryId)
-    if (!isIncome && t.categoryId !== null && scope.excludedCategories.has(t.categoryId)) continue
+    const flow = classify(t)
+    if (!flow) continue
     const inPeriod = m >= periodStart && m <= reference
     const day = Number(t.date.slice(8, 10))
     const addNetTo = (catKey: string, delta: number) => {
@@ -466,37 +508,27 @@ export function computeAnalytics(
       if (inPeriod) nested(nested(dailyByCategory, m, () => new Map()), catKey, newDays)[day]! += delta
     }
 
-    // Achats carte non detailles (CARD_KEY) : seulement dans les totaux nets
-    // (jamais dans marchands, prelevements, jours ni plus grosses operations :
-    // un ajustement n'est pas un achat).
-    if (isIncome && t.label === ADJUSTMENT_LABEL && taxo.cardAccounts?.has(t.accountId)) {
-      addNetTo(CARD_KEY, -t.amount)
-      continue
-    }
-
-    if (isIncome) {
-      // Solde d'ouverture ou ajustement de solde d'un compte : de l'argent deja
-      // la (ou une correction), range dans une categorie de revenus pour
-      // alimenter le Pret a assigner, mais pas un revenu du mois. Compte comme
-      // tel, il gonflait revenus, epargne et taux d'epargne du mois et de
-      // toutes les moyennes.
-      if (BALANCE_LABELS.has(t.label)) continue
+    if (flow.kind === 'income') {
       bump(incomeByMonth, m, t.amount)
       if (inPeriod) nested(dailyIncome, m, newDays)[day]! += t.amount
       continue
     }
-    const catKey = t.categoryId ?? UNCAT_KEY
+    // Achats carte non detailles : seulement dans les totaux nets (jamais dans
+    // marchands, prelevements, jours ni plus grosses operations : un
+    // ajustement n'est pas un achat).
+    if (flow.card) {
+      addNetTo(CARD_KEY, -t.amount)
+      continue
+    }
+    const catKey = flow.key
     const addNet = (delta: number) => addNetTo(catKey, delta)
-    // Remboursement (entree sur une categorie de depense : la CPAM apres le
-    // dentiste, un article retourne) : il vient en deduction de la categorie,
-    // donc de son groupe et de la depense du mois. Il etait ignore : Sante a
-    // 300 EUR au lieu de 90. Le plancher a 0 (par categorie et par mois, apres
-    // la boucle) evite qu'un remboursement d'un achat du mois precedent rende
-    // une categorie negative. Une entree SANS categorie n'est pas un
-    // remboursement (revenu pas encore categorise) : ignoree. Marchands,
-    // prelevements, jours et plus grosses depenses restent des sorties brutes.
-    if (t.amount >= 0) {
-      if (t.categoryId !== null && t.amount > 0) addNet(-t.amount)
+    // Remboursement : en deduction de la categorie, donc de son groupe et de
+    // la depense du mois. Le plancher a 0 (par categorie et par mois, apres la
+    // boucle) evite qu'un remboursement d'un achat du mois precedent rende une
+    // categorie negative. Marchands, prelevements, jours et plus grosses
+    // depenses restent des sorties brutes.
+    if (t.amount > 0) {
+      addNet(-t.amount)
       continue
     }
 
@@ -686,11 +718,7 @@ export function computeAnalytics(
   // --- Repartition par groupe (donut) ----------------------------------------
   const monthGroups = new Map<string, number>()
   for (const [catKey, total] of catByMonth.get(reference) ?? []) {
-    bump(
-      monthGroups,
-      catKey === UNCAT_KEY || catKey === CARD_KEY ? catKey : (groupOfCategory(catKey)?.id ?? UNKNOWN_KEY),
-      total,
-    )
+    bump(monthGroups, spendingSliceKey(catKey, taxo), total)
   }
   const slices: GroupSlice[] = []
   let uncatSlice: GroupSlice | null = null

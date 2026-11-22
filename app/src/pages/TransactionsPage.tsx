@@ -31,7 +31,9 @@ import { haptic } from '@/lib/haptics'
 import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { useTransactions } from '@/lib/queries'
 import { ruleValueFromLabel, useApplyRules, useRules } from '@/lib/rules'
-import { currentMonth, monthOf } from '@/lib/format'
+import { CARD_KEY, UNCAT_KEY } from '@/lib/analytics'
+import { useReportFlow } from '@/lib/reportScope'
+import { currentMonth, fmtMonthLong, monthOf } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import { CreateRuleDialog } from '@/components/transactions/CreateRuleDialog'
 import { MobileFiltersSheet } from '@/components/transactions/MobileFiltersSheet'
@@ -92,6 +94,21 @@ function SearchField({ value, onChange, className }: { value: string; onChange: 
 }
 
 /** Totaux de la liste filtree : sorties et entrees (virements neutres exclus). */
+/** Total retenu par le rapport : depenses moins remboursements des lignes affichees. */
+function ReportSummary({ rows, label, className }: { rows: TxRow[]; label: string; className?: string }) {
+  const total = rows.reduce((s, r) => s - r.tx.amount, 0)
+  return (
+    <p className={cn('flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px] text-soft tnum', className)}>
+      <span className="font-medium text-ink">
+        {rows.length} {plural(rows.length, 'opération', 'opérations')}
+      </span>
+      <span>
+        · {label} : <Amount cents={total} className="font-semibold text-ink" />
+      </span>
+    </p>
+  )
+}
+
 function FilteredSummary({ rows, className }: { rows: TxRow[]; className?: string }) {
   const { outflow, inflow } = useMemo(() => {
     let out = 0
@@ -142,12 +159,16 @@ export function TransactionsPage() {
   //   ?compte=<id>     (depuis Comptes)
   //   ?categorie=<id>  (clic sur une activite du Budget)
   //   ?mois=YYYY-MM    (clic sur une activite du Budget)
-  const { compte, categorie, mois } = useSearch({ from: '/_app/transactions' })
+  //   ?rapport=depenses&groupe=<part> (detail d'une depense des Rapports)
+  const { compte, categorie, mois, rapport, groupe } = useSearch({ from: '/_app/transactions' })
   const [search, setSearch] = useState('')
   const [accountFilter, setAccountFilter] = useState(compte ?? 'all')
   const [categoryFilter, setCategoryFilter] = useState(categorie ?? 'all')
   const [monthFilter, setMonthFilter] = useState(mois ?? 'all')
   const [onlyUncat, setOnlyUncat] = useState(false)
+  const [reportOnly, setReportOnly] = useState(rapport === 'depenses')
+  const [groupFilter, setGroupFilter] = useState(groupe ?? 'all')
+  const reportFlow = useReportFlow()
   // Synchronise les filtres quand les search params changent (ex. nouveau clic
   // sur une activite alors qu'on est deja sur la page). Ne touche qu'aux filtres
   // reellement fournis pour laisser l'utilisateur ajuster les autres a la main.
@@ -160,6 +181,12 @@ export function TransactionsPage() {
   useEffect(() => {
     if (mois) setMonthFilter(mois)
   }, [mois])
+  useEffect(() => {
+    if (rapport === 'depenses') {
+      setReportOnly(true)
+      setGroupFilter(groupe ?? 'all')
+    }
+  }, [rapport, groupe])
 
   // Bornes de mois : premier / dernier mois comptable reellement present, pour
   // borner la navigation du selecteur de mois (le filtre reste libre via 'all').
@@ -219,7 +246,17 @@ export function TransactionsPage() {
   )
 
   const hasFilters =
-    Boolean(search) || accountFilter !== 'all' || categoryFilter !== 'all' || monthFilter !== 'all' || onlyUncat
+    Boolean(search) ||
+    accountFilter !== 'all' ||
+    categoryFilter !== 'all' ||
+    monthFilter !== 'all' ||
+    onlyUncat ||
+    reportOnly
+
+  const clearReport = () => {
+    setReportOnly(false)
+    setGroupFilter('all')
+  }
 
   const clearFilters = () => {
     setSearch('')
@@ -227,7 +264,24 @@ export function TransactionsPage() {
     setCategoryFilter('all')
     setMonthFilter('all')
     setOnlyUncat(false)
+    clearReport()
   }
+
+  // Filtre « Dépenses du rapport » : seules les operations que la page
+  // Rapports compte en depense (meme classement, perimetre compris), pour une
+  // part du donut si `groupFilter` est pose.
+  const reportLabel = useMemo(() => {
+    if (!reportOnly) return null
+    const part =
+      groupFilter === 'all'
+        ? null
+        : groupFilter === UNCAT_KEY
+          ? 'À catégoriser'
+          : groupFilter === CARD_KEY
+            ? 'Achats carte'
+            : (groupById.get(groupFilter)?.name ?? 'Autre')
+    return part ? `Dépenses du rapport · ${part}` : 'Dépenses du rapport'
+  }, [reportOnly, groupFilter, groupById])
 
   // Non categorisee au sens du badge : compte budget, hors transfert neutre,
   // pas dans le futur ni avant le mois de depart (meme regle que le compteur
@@ -272,6 +326,11 @@ export function TransactionsPage() {
       .filter((t) => categoryFilter === 'all' || t.categoryId === categoryFilter)
       .filter((t) => monthFilter === 'all' || monthOf(t.date) === monthFilter)
       .filter((t) => !onlyUncat || isUncat(t))
+      .filter((t) => {
+        if (!reportOnly) return true
+        const flow = reportFlow?.classify(t)
+        return flow?.kind === 'spending' && (groupFilter === 'all' || reportFlow!.sliceOf(flow.key) === groupFilter)
+      })
       .map((t) => toRow(t, maps, { isCross, peerOf, isUncat }))
       .filter((r): r is TxRow => r !== null)
       .filter(
@@ -297,6 +356,9 @@ export function TransactionsPage() {
     categoryFilter,
     monthFilter,
     onlyUncat,
+    reportOnly,
+    groupFilter,
+    reportFlow,
     isUncat,
     isCross,
     peerOf,
@@ -501,8 +563,15 @@ export function TransactionsPage() {
   const [page, setPage] = useState(0)
   useEffect(() => {
     setPage(0)
-  }, [search, accountFilter, categoryFilter, monthFilter, onlyUncat])
-  const filtersKey = [search, accountFilter, categoryFilter, monthFilter, onlyUncat ? '1' : '0'].join('|')
+  }, [search, accountFilter, categoryFilter, monthFilter, onlyUncat, reportOnly, groupFilter])
+  const filtersKey = [
+    search,
+    accountFilter,
+    categoryFilter,
+    monthFilter,
+    onlyUncat ? '1' : '0',
+    reportOnly ? groupFilter : '-',
+  ].join('|')
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount - 1)
 
@@ -524,6 +593,30 @@ export function TransactionsPage() {
     </Link>
   )
 
+  const reportChip = reportLabel && (
+    <button
+      type="button"
+      onClick={clearReport}
+      aria-label={`Retirer le filtre ${reportLabel}`}
+      className={cn(chipClass(true), 'lg:h-10 lg:rounded-xl')}
+    >
+      {reportLabel}
+      <X className="h-3.5 w-3.5" />
+    </button>
+  )
+  const summary =
+    hasFilters && rows.length > 0 ? (
+      reportLabel ? (
+        <ReportSummary
+          rows={rows}
+          label={monthFilter !== 'all' ? `total retenu en ${fmtMonthLong(monthFilter)}` : 'total retenu'}
+          className="px-1"
+        />
+      ) : (
+        <FilteredSummary rows={rows} className="px-1" />
+      )
+    ) : null
+
   const uncatBadge = uncatCount > 0 && (
     <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[11px] font-bold leading-none text-warning tnum">
       {uncatCount}
@@ -544,12 +637,14 @@ export function TransactionsPage() {
                 setAccountFilter('all')
                 setCategoryFilter('all')
                 setMonthFilter('all')
+                clearReport()
               }}
               className={chipClass(isAllChip)}
               aria-pressed={isAllChip}
             >
               Tout
             </button>
+            {reportChip}
             <button
               type="button"
               onClick={() => setOnlyUncat((v) => !v)}
@@ -589,7 +684,7 @@ export function TransactionsPage() {
               </button>
             )}
           </div>
-          {hasFilters && rows.length > 0 && <FilteredSummary rows={rows} className="px-1" />}
+          {summary}
           <MobileFiltersSheet
             open={filtersOpen}
             onOpenChange={setFiltersOpen}
@@ -619,6 +714,7 @@ export function TransactionsPage() {
             </Button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {reportChip}
             <Combobox
               options={categoryOptions}
               value={categoryFilter}
@@ -667,7 +763,7 @@ export function TransactionsPage() {
               </button>
             )}
           </div>
-          {hasFilters && rows.length > 0 && <FilteredSummary rows={rows} className="px-1" />}
+          {summary}
         </div>
 
         <TriageBanner
