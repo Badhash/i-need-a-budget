@@ -29,15 +29,16 @@ const thisMonthLabel = (reference: string, currentMonth: string) =>
   reference === currentMonth ? 'Ce mois-ci' : monthTitle(reference)
 
 /**
- * Ton d'une ligne : ambre au-dessus de la moyenne (au-dela de 10 % et 10 €),
- * vert en dessous (mois termine seulement : un mois en cours n'est pas encore
- * « sous la moyenne »), accent sinon, neutre sans historique.
+ * Ton d'une ligne (choix de l'utilisateur) : rouge quand je depense plus que
+ * d'habitude, vert quand je depense moins, mois en cours compris. Ecart
+ * negligeable (sous 10 € et 10 % de la moyenne) : accent ; sans historique :
+ * neutre.
  */
-function toneOf(c: CategoryStat, inProgress: boolean): ProgressTone {
+function toneOf(c: CategoryStat): ProgressTone {
   if (c.average <= 0) return 'neutral'
   const margin = Math.max(1_000, c.average * 0.1)
-  if (c.delta > margin) return 'warning'
-  if (!inProgress && c.delta < -margin) return 'success'
+  if (c.delta > margin) return 'danger'
+  if (c.delta < -margin) return 'success'
   return 'accent'
 }
 
@@ -112,7 +113,6 @@ export const CategoryBreakdown = memo(function CategoryBreakdown({
   const rows = a.byCategory
   const visible = isDesktop ? VISIBLE_DESKTOP : VISIBLE_MOBILE
   const shown = expanded ? rows : rows.slice(0, visible)
-  const inProgress = a.reference >= currentMonth
   const thisLabel = thisMonthLabel(a.reference, currentMonth)
   const caption =
     a.averageMonths.length > 0
@@ -128,7 +128,7 @@ export const CategoryBreakdown = memo(function CategoryBreakdown({
           <HeaderRow thisLabel={thisLabel} />
           <div className="stagger divide-y divide-line/50">
             {shown.map((c) => {
-              const tone = toneOf(c, inProgress)
+              const tone = toneOf(c)
               return (
                 <div key={c.id} role="row" className={cn(GRID, 'h-12')}>
                   <span role="cell" className="flex min-w-0 items-center gap-2.5">
@@ -155,7 +155,7 @@ export const CategoryBreakdown = memo(function CategoryBreakdown({
       ) : (
         <ul className="stagger -my-1 divide-y divide-line/50">
           {shown.map((c) => {
-            const tone = toneOf(c, inProgress)
+            const tone = toneOf(c)
             return (
               <li key={c.id} className="py-3">
                 <div className="flex items-center gap-3">
