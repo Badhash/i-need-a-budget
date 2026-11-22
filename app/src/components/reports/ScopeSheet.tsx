@@ -214,8 +214,8 @@ function ScopeBody({ months }: { months: string[] }) {
                 <div>
                   <p className="px-1 text-[13px] font-semibold text-ink">Virements entre tes comptes</p>
                   <p className="px-1 pb-1.5 text-[12px] leading-snug text-soft">
-                    Importés des deux côtés sans être reliés : relie-les en virement depuis Transactions pour qu’ils
-                    soient neutres partout, budget compris.
+                    Le même montant sort d’un compte et entre sur l’autre : c’est ton argent qui change de compte, ni
+                    une dépense ni un revenu.
                   </p>
                   <ul className="divide-y divide-edge overflow-hidden rounded-2xl border border-edge bg-surface">
                     {visibleInternal.map((item) => {
