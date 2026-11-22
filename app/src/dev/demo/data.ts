@@ -422,6 +422,19 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
       label: 'VIR SEPA SALAIRE ACME SAS',
       counterparty: 'ACME SAS',
     })
+    if (back === 4) {
+      // Rentree exceptionnelle (vente de l'ancienne voiture) : ecartee des
+      // moyennes par la page Rapports (lib/exceptional.ts).
+      push({
+        account: courant,
+        cat: 'salaire',
+        date: d(19),
+        amount: 650_000,
+        label: 'VIR SEPA RECU AUTO1 VENTE VEHICULE',
+        counterparty: 'AUTO1 GROUP',
+        notes: 'Vente de l’ancienne voiture',
+      })
+    }
     if (back === 3) {
       push({
         account: courant,
@@ -563,6 +576,8 @@ export function createDemoDb(features: ReadonlySet<string>, now: Date = new Date
       push({ account: carte, cat: 'shopping', date, amount: -eur(29, 79), label: cb('ZARA', date) })
     }
     if (back === 2) {
+      // Achat exceptionnel (un canape) : ecarte des moyennes des rapports.
+      push({ account: courant, cat: 'shopping', date: d(8), amount: -189_000, label: 'VIR SEPA MAISON DU CANAPE', counterparty: 'MAISON DU CANAPE', notes: 'Canapé du salon' })
       // Achat rendu puis rembourse : montant positif sur Shopping.
       push({ account: carte, cat: 'shopping', date: d(6), amount: -3_999, label: cb('DECATHLON', d(6)) })
       push({ account: carte, cat: 'shopping', date: d(18), amount: 3_999, label: `REMBOURSEMENT CB DECATHLON ${ddmm(d(17))}`, notes: 'Article retourné' })

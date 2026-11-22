@@ -158,6 +158,10 @@ export const ReportsHero = memo(function ReportsHero({ a, currentMonth, classNam
           : 'Pas encore de moyenne'
         : 'Pas de comparaison'
   const vsAverage = a.toDate ? 'vs moyenne à date' : 'vs moyenne'
+  // Mois en cours sans revenu encore arrive (salaire de fin de mois) : le
+  // solde du mois n'est qu'une depense, l'afficher en « Épargné −1 997 € »
+  // rouge alarmait a tort chaque debut de mois.
+  const awaitingIncome = a.isCurrentMonth && a.income <= 0
 
 
   const overPace =
@@ -205,17 +209,25 @@ export const ReportsHero = memo(function ReportsHero({ a, currentMonth, classNam
         legend: <CumulativeLegend a={a} />,
         saved: {
           label: `Épargné ${when}`,
-          value: <RevealAmount cents={a.net} signed colored className={KPI_VALUE} />,
+          value: awaitingIncome ? (
+            <span className={cn(KPI_VALUE, 'text-soft')}>—</span>
+          ) : (
+            <RevealAmount cents={a.net} signed colored className={KPI_VALUE} />
+          ),
           badge: (
             <TrendBadge
-              delta={netAvg === null ? null : netRef - netAvg}
+              delta={awaitingIncome || netAvg === null ? null : netRef - netAvg}
               format="amount"
               label={vsAverage}
-              emptyLabel="Pas encore de moyenne"
+              emptyLabel={awaitingIncome ? 'En attente de revenus' : 'Pas encore de moyenne'}
             />
           ),
           caption:
-            a.income > 0 ? (
+            awaitingIncome && avg && avg.income > 0 ? (
+              <>
+                revenus habituels <span className="tnum">{fmtEUR(avg.income)}</span> par mois
+              </>
+            ) : a.income > 0 ? (
               <>
                 sur <span className="tnum">{fmtEUR(a.income)}</span> de revenus
               </>
@@ -251,7 +263,11 @@ export const ReportsHero = memo(function ReportsHero({ a, currentMonth, classNam
           ),
           badge: <TrendBadge delta={rateDelta} format="points" label={vsAverage} emptyLabel={rateEmpty} />,
           caption:
-            rateAvg !== null && rateAvg >= RATE_FLOOR ? (
+            awaitingIncome && avg?.savingsRate != null ? (
+              <>
+                moyenne de fin de mois <span className="tnum">{fmtPercent(avg.savingsRate)}</span>
+              </>
+            ) : rateAvg !== null && rateAvg >= RATE_FLOOR ? (
               <>
                 moyenne{a.toDate ? ' à date' : ''} <span className="tnum">{fmtPercent(rateAvg)}</span> sur{' '}
                 {a.averageMonths.length} mois

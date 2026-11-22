@@ -18,4 +18,7 @@ export const SERVER_FEATURES = [
   // deleteCategory accepte reassignTo : transactions, montants assignes et
   // regles passent a la categorie cible (regle YNAB).
   'categoryReassign',
+  // setReportSettings + bootstrap.reportSettings : perimetre des rapports
+  // (categories hors depenses, operations ecartees ou gardees a la main).
+  'reportSettings',
 ] as const

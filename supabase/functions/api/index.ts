@@ -50,7 +50,13 @@ import {
   type AggSourceData,
   type AggTx,
 } from './aggregates.ts'
-import { clearUserSettings, loadUserSettings, saveUserSettings } from './settings.ts'
+import {
+  clearUserSettings,
+  loadUserSettings,
+  saveUserSettings,
+  type ReportOverride,
+  type ReportSettings,
+} from './settings.ts'
 import { clearPayees, forgetPayeeCategory, learnPayee, loadPayeeDefaults, setPayeeDefault } from './payees.ts'
 import { jwtClaims, mfaLevelSatisfied } from './mfa.ts'
 import { SERVER_FEATURES } from './features.ts'
@@ -1224,7 +1230,11 @@ async function loadPayeeList(
 // bootstrapFull (un seul loadBudgetData pour les deux). `features` annonce les
 // comportements serveur recents (voir features.ts) : il accompagne TOUTE
 // reponse bootstrap, chemin agrege comme chemin complet.
-function buildBootstrap(data: DecryptedData, payees: { key: string; categoryId: string }[]) {
+function buildBootstrap(
+  data: DecryptedData,
+  payees: { key: string; categoryId: string }[],
+  reportSettings: ReportSettings,
+) {
   const balances = new Map<string, number>()
   for (const t of data.transactions) {
     balances.set(t.accountId, (balances.get(t.accountId) ?? 0) + t.amount)
@@ -1241,6 +1251,7 @@ function buildBootstrap(data: DecryptedData, payees: { key: string; categoryId: 
     ).length,
     budgetStartMonth: data.startMonth,
     payees,
+    reportSettings,
     features: [...SERVER_FEATURES],
   }
 }
@@ -1279,6 +1290,7 @@ async function actionBootstrap(userId: string) {
         uncategorizedCount,
         budgetStartMonth: settings.budgetStartMonth,
         payees,
+        reportSettings: settings.reports,
         features: [...SERVER_FEATURES],
       }
     } catch {
@@ -1293,8 +1305,12 @@ async function actionBootstrap(userId: string) {
   // planifiee, sinon chaque lecture relit l'historique jusqu'au prochain
   // lancement de l'app.
   await scheduleAggRebuildSafe(userId, keys)
-  const [data, payees] = await Promise.all([loadBudgetData(userId), loadPayeeList(keys, userId)])
-  return buildBootstrap(data, payees)
+  const [data, payees, settings] = await Promise.all([
+    loadBudgetData(userId),
+    loadPayeeList(keys, userId),
+    loadUserSettings(admin, keys, userId),
+  ])
+  return buildBootstrap(data, payees, settings.reports)
 }
 
 // Reconstitue une entree moteur depuis les rollups agreges : chaque cellule
@@ -1496,9 +1512,10 @@ async function actionBootstrapFull(userId: string, params: Params) {
   // Transactions COMPLETES : la reponse porte la liste des transactions (libelle)
   // et les top-marchands des rapports. Un seul chargement sert les 4 blocs.
   const keys = await getKeys()
-  const [data, payees] = await Promise.all([
+  const [data, payees, settings] = await Promise.all([
     loadFullBudgetData(userId),
     loadPayeeList(keys, userId),
+    loadUserSettings(admin, keys, userId),
   ])
 
   // Auto-reconstruction des agregats (REF I) : si le marqueur est absent,
@@ -1512,7 +1529,7 @@ async function actionBootstrapFull(userId: string, params: Params) {
   }
 
   return {
-    bootstrap: buildBootstrap(data, payees),
+    bootstrap: buildBootstrap(data, payees, settings.reports),
     budget: computeBudget(toEngineInput(data, month)),
     transactions: buildTransactionList(data).transactions,
     // Plus de `reports` : aucun ecran ne lisait ces agregats (la page Rapports
@@ -1845,6 +1862,89 @@ async function actionSetPayeeCategory(userId: string, params: Params) {
   } catch (err) {
     throw new ApiError(500, err instanceof Error ? err.message : 'ecriture payee_memory impossible')
   }
+}
+
+// ---------------------------------------------------------------------------
+// Perimetre des rapports (user_settings.reports, lu par le front seul)
+// ---------------------------------------------------------------------------
+
+const MAX_REPORT_CATEGORIES = 200
+const MAX_REPORT_OVERRIDES = 1000
+const MAX_OVERRIDES_PER_CALL = 100
+
+// Patch du perimetre des rapports :
+// - excludedCategories (optionnel) : liste COMPLETE des categories hors
+//   depenses (remplace la precedente) ; categories existantes, hors revenus ;
+// - overrides (optionnel) : choix manuels par transaction a poser
+//   ('exclude' | 'include') ou a retirer (null). Transactions existantes.
+// Rien ne touche aux transactions, aux assignations ni aux agregats : le
+// moteur et les soldes ignorent ce reglage.
+async function actionSetReportSettings(userId: string, params: Params) {
+  const keys = await getKeys()
+  const current = await loadUserSettings(admin, keys, userId)
+  const next: ReportSettings = {
+    excludedCategories: current.reports.excludedCategories,
+    overrides: { ...current.reports.overrides },
+  }
+
+  if (params.excludedCategories != null) {
+    if (!Array.isArray(params.excludedCategories) || params.excludedCategories.length > MAX_REPORT_CATEGORIES) {
+      throw new ApiError(400, `excludedCategories : ${MAX_REPORT_CATEGORIES} categories au plus`)
+    }
+    const ids = [...new Set(params.excludedCategories.map((id) => requireUuid(id, 'excludedCategories')))]
+    if (ids.length > 0) {
+      const categories = await loadAll<CategoryPayload>('categories', userId)
+      for (const id of ids) {
+        const category = categories.find((c) => c.id === id)
+        if (!category) throw new ApiError(404, 'categorie inconnue')
+        if (category.isIncome) throw new ApiError(400, 'une categorie de revenus ne peut pas etre exclue des depenses')
+      }
+    }
+    next.excludedCategories = ids
+  }
+
+  if (params.overrides != null) {
+    if (!Array.isArray(params.overrides) || params.overrides.length > MAX_OVERRIDES_PER_CALL) {
+      throw new ApiError(400, `overrides : ${MAX_OVERRIDES_PER_CALL} transactions au plus par appel`)
+    }
+    const patch = new Map<string, ReportOverride | null>()
+    for (const raw of params.overrides) {
+      const item = (raw ?? {}) as { transactionId?: unknown; flag?: unknown }
+      const id = requireUuid(item.transactionId, 'transactionId')
+      if (item.flag !== null && item.flag !== 'exclude' && item.flag !== 'include') {
+        throw new ApiError(400, 'champ flag invalide')
+      }
+      patch.set(id, item.flag)
+    }
+    const posed = [...patch].filter(([, flag]) => flag !== null).map(([id]) => id)
+    if (posed.length > 0) {
+      const { data, error } = await admin
+        .from('transactions')
+        .select('id')
+        .eq('user_id', userId)
+        .in('id', posed)
+      if (error) throw new ApiError(500, 'lecture transactions impossible')
+      if ((data ?? []).length !== posed.length) throw new ApiError(404, 'transaction inconnue')
+    }
+    for (const [id, flag] of patch) {
+      if (flag === null) delete next.overrides[id]
+      else next.overrides[id] = flag
+    }
+    if (Object.keys(next.overrides).length > MAX_REPORT_OVERRIDES) {
+      throw new ApiError(400, `${MAX_REPORT_OVERRIDES} choix manuels au plus`)
+    }
+  }
+
+  try {
+    await saveUserSettings(admin, keys, userId, { ...current, reports: next })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : ''
+    if (msg.includes('user_settings absente')) {
+      throw new ApiError(503, 'table user_settings absente : appliquer M-user-settings.sql')
+    }
+    throw new ApiError(500, 'ecriture user_settings impossible')
+  }
+  return { ok: true, reportSettings: next }
 }
 
 async function actionUpdateTransaction(userId: string, params: Params) {
@@ -3491,6 +3591,7 @@ async function actionExportData(userId: string) {
     version: 1,
     exportedAt: new Date().toISOString(),
     budgetStartMonth: await loadStartMonth(userId),
+    reportSettings: (await loadUserSettings(admin, await getKeys(), userId)).reports,
     accounts,
     groups,
     categories,
@@ -3917,7 +4018,9 @@ async function actionNewBudget(userId: string, params: Params) {
     // absente, erreur transitoire), rien n'a encore ete efface. L'ordre inverse
     // supprimait toutes les assignations puis repondait en erreur.
     try {
-      await saveUserSettings(admin, keys, userId, { budgetStartMonth: month })
+      // Les autres reglages (perimetre des rapports) sont conserves.
+      const settings = await loadUserSettings(admin, keys, userId)
+      await saveUserSettings(admin, keys, userId, { ...settings, budgetStartMonth: month })
     } catch (err) {
       const msg = err instanceof Error ? err.message : ''
       if (msg.includes('user_settings absente')) {
@@ -3962,6 +4065,7 @@ const ACTIONS: Record<string, (userId: string, params: Params) => Promise<unknow
   categorizeTransaction: actionCategorizeTransaction,
   categorizeMany: actionCategorizeMany,
   setPayeeCategory: actionSetPayeeCategory,
+  setReportSettings: actionSetReportSettings,
   setAssigned: actionSetAssigned,
   createAccount: actionCreateAccount,
   updateAccount: actionUpdateAccount,

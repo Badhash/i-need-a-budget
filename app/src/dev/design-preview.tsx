@@ -138,6 +138,7 @@ const BOOTSTRAP: Bootstrap = {
   uncategorizedCount: 7,
   budgetStartMonth: null,
   payees: [],
+  reportSettings: { excludedCategories: [], overrides: {} },
   features: [],
 }
 

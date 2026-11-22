@@ -116,6 +116,11 @@ export interface DemoDb {
   bankConnections: DemoBankConnection[]
   syncLogs: DemoSyncLog[]
   budgetStartMonth: string | null
+  /** Perimetre des rapports (user_settings.reports) ; absent = vide. */
+  reportSettings?: {
+    excludedCategories: string[]
+    overrides: Record<string, 'exclude' | 'include'>
+  }
 }
 
 // ---------------------------------------------------------------------------

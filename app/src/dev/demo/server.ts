@@ -198,8 +198,13 @@ function buildBootstrap(db: DemoDb) {
     uncategorizedCount: uncategorizedCount(db, currentMonth(), crossBudget()),
     budgetStartMonth: db.budgetStartMonth,
     payees: db.payees.map((p) => ({ key: p.key, categoryId: p.categoryId })),
+    reportSettings: reportSettingsOf(db),
     features: [...demoConfig.features],
   }
+}
+
+function reportSettingsOf(db: DemoDb) {
+  return db.reportSettings ?? { excludedCategories: [], overrides: {} }
 }
 
 function budgetOf(db: DemoDb, month: string) {
@@ -251,6 +256,7 @@ function wipeBudget(db: DemoDb): void {
   db.accounts = []
   db.budgetStartMonth = null
   db.payees = []
+  db.reportSettings = undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +363,39 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
     for (const t of targets) t.categoryId = categoryId
     for (const t of targets) if (!t.transferGroupId) learnPayeeSafe(db, t, categoryId)
     return { ok: true, updated: targets.length }
+  },
+
+  // Perimetre des rapports : memes regles que /api actionSetReportSettings.
+  setReportSettings: (db, p) => {
+    const current = reportSettingsOf(db)
+    const next = { excludedCategories: current.excludedCategories, overrides: { ...current.overrides } }
+    if (p.excludedCategories != null) {
+      if (!Array.isArray(p.excludedCategories) || p.excludedCategories.length > 200) {
+        throw new ApiError(400, 'excludedCategories : 200 categories au plus')
+      }
+      const ids = [...new Set(p.excludedCategories.map((id) => requireUuid(id, 'excludedCategories')))]
+      for (const id of ids) requireNonIncomeCategory(db, id)
+      next.excludedCategories = ids
+    }
+    if (p.overrides != null) {
+      if (!Array.isArray(p.overrides) || p.overrides.length > 100) {
+        throw new ApiError(400, 'overrides : 100 transactions au plus par appel')
+      }
+      for (const raw of p.overrides) {
+        const item = (raw ?? {}) as { transactionId?: unknown; flag?: unknown }
+        const id = requireUuid(item.transactionId, 'transactionId')
+        if (item.flag === null) {
+          delete next.overrides[id]
+          continue
+        }
+        if (item.flag !== 'exclude' && item.flag !== 'include') throw new ApiError(400, 'champ flag invalide')
+        findTx(db, id)
+        next.overrides[id] = item.flag
+      }
+      if (Object.keys(next.overrides).length > 1000) throw new ApiError(400, '1000 choix manuels au plus')
+    }
+    db.reportSettings = next
+    return { ok: true, reportSettings: next }
   },
 
   setPayeeCategory: (db, p) => {
@@ -900,6 +939,7 @@ const ACTIONS: Record<string, (db: DemoDb, p: Params) => unknown> = {
     version: 1,
     exportedAt: new Date().toISOString(),
     budgetStartMonth: db.budgetStartMonth,
+    reportSettings: reportSettingsOf(db),
     accounts: db.accounts,
     groups: db.groups,
     categories: db.categories,

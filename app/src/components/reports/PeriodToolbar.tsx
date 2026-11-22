@@ -52,18 +52,22 @@ export function PeriodToolbar({
   period,
   onChange,
   caption,
+  scope,
   className,
 }: {
   period: ReportPeriod
   onChange: (period: ReportPeriod) => void
   caption: ReactNode
+  /** Acces au perimetre (operations ecartees, categories hors depenses). */
+  scope?: ReactNode
   className?: string
 }) {
   return (
     <div className={cn('flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between lg:gap-6', className)}>
-      <div className="order-2 min-w-0 px-1 lg:order-1">
+      <div className="order-2 flex min-w-0 flex-col items-center px-1 lg:order-1 lg:items-start">
         <p className="hidden text-[15px] font-semibold tracking-tight text-ink lg:block">Moyennes et tendances</p>
         <p className="text-center text-[12.5px] leading-snug text-soft lg:mt-0.5 lg:text-left lg:text-[13.5px]">{caption}</p>
+        {scope}
       </div>
       <SegmentedControl
         aria-label="Période de comparaison"

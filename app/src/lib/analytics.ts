@@ -24,16 +24,20 @@
 // Module pur (aucune dependance React) : entree = transactions + taxonomie +
 // mois de reference + periode, sortie = un objet d'analyse memoise par la page.
 
-import { isCrossBudgetHalf, type Bootstrap } from '@/lib/data'
+import { isCrossBudgetHalf, type Bootstrap, type ReportSettings } from '@/lib/data'
 import type { CategoryGroup, Transaction } from '@/types/domain'
 import { addMonths, fmtEUR, fmtMonthLong, monthOf, monthRange } from '@/lib/format'
 import { parseBankLabel } from '@/lib/bankLabel'
-import { payeeKey } from '../../../packages/crypto/src/payee'
+import { detectReportScope, EMPTY_SCOPE, merchantKey, type ReportScope } from '@/lib/exceptional'
 
-// Libelle de la transaction de solde d'ouverture (contrat partage avec /api
-// createAccount et lib/accounts OPENING_LABEL ; duplique ici pour garder ce
-// module pur, sans dependance aux mutations).
-const OPENING_LABEL = "Solde d'ouverture"
+export { merchantKey }
+
+// Libelles des mouvements de solde (contrat partage avec /api createAccount et
+// lib/accounts OPENING_LABEL / ADJUSTMENT_LABEL ; dupliques ici pour garder ce
+// module pur, sans dependance aux mutations). Ranges dans une categorie de
+// revenus pour alimenter le Pret a assigner, ce ne sont pas des revenus : de
+// l'argent deja la, ou une correction de solde (doublon, oubli d'import).
+const BALANCE_LABELS: ReadonlySet<string> = new Set(["Solde d'ouverture", 'Ajustement de solde'])
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +59,8 @@ export interface AnalyticsOptions {
   period: ReportPeriod
   /** Serveur recent (crossBudgetTransfers) : moitie budget d'un virement budget <-> suivi comptee. */
   crossBudget: boolean
+  /** Perimetre (buildReportScope) : operations ecartees, categories hors depenses. */
+  scope?: ReportScope
 }
 
 export interface MonthPoint {
@@ -180,6 +186,16 @@ export interface Analytics {
   netWorth: { month: string; value: number }[] // un point par mois de `months`
   /** Solde de chaque compte a la fin du mois de reference. */
   balances: ReadonlyMap<string, number>
+  /**
+   * Autonomie : argent disponible sur les comptes budget a la fin du mois de
+   * reference, rapporte a la depense moyenne des mois clos (operations
+   * exceptionnelles et categories hors depenses exclues).
+   */
+  runway: {
+    cash: number
+    monthlySpending: number | null
+    months: number | null // null sans moyenne
+  }
 }
 
 export const UNCAT_KEY = '__uncat__'
@@ -254,12 +270,6 @@ export function merchantLabel(raw: string): string {
   return trimmed ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : short
 }
 
-/** Cle de marchand : cle de tiers (payeeKey) ou, a defaut, le libelle brut (prefixes distincts). */
-export function merchantKey(label: string): string {
-  const key = payeeKey(label)
-  return key ? `payee:${key}` : `label:${label}`
-}
-
 // Libelle le plus frequent (egalite : ordre lexical, resultat stable), meme
 // regle que le serveur.
 function mostFrequent(labels: Map<string, number> | undefined): string {
@@ -320,6 +330,30 @@ export function taxonomyFrom(boot: Bootstrap): TaxonomyLite {
 }
 
 // ---------------------------------------------------------------------------
+// Perimetre (operations ecartees, categories hors depenses)
+// ---------------------------------------------------------------------------
+
+/**
+ * Perimetre des rapports sur l'historique complet (independant du mois et de
+ * la periode affiches : une operation est ecartee partout ou nulle part).
+ */
+export function buildReportScope(
+  txs: Transaction[],
+  taxo: TaxonomyLite,
+  { crossBudget, settings }: { crossBudget: boolean; settings: ReportSettings },
+): ReportScope {
+  const onBudget = (accountId: string) => taxo.onBudget.has(accountId)
+  const crossHalf = (t: Transaction) => crossBudget && isCrossBudgetHalf(t, onBudget, txs)
+  return detectReportScope(txs, {
+    counted: (t) => onBudget(t.accountId) && (!t.transferGroupId || crossHalf(t)),
+    savingsOut: (t) => t.amount < 0 && crossHalf(t),
+    isIncomeCategory: (id) => taxo.incomeCats.has(id),
+    isBalanceEntry: (t) => t.categoryId !== null && taxo.incomeCats.has(t.categoryId) && BALANCE_LABELS.has(t.label),
+    settings,
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Analyse
 // ---------------------------------------------------------------------------
 
@@ -328,7 +362,7 @@ export function computeAnalytics(
   taxo: TaxonomyLite,
   reference: string,
   today: string,
-  { period, crossBudget }: AnalyticsOptions,
+  { period, crossBudget, scope = EMPTY_SCOPE }: AnalyticsOptions,
 ): Analytics {
   const onBudget = (accountId: string) => taxo.onBudget.has(accountId)
   // Moitie cote budget d'un virement budget <-> suivi (serveur recent).
@@ -405,15 +439,23 @@ export function computeAnalytics(
     // (regle YNAB) : revenu en categorie de revenus, remboursement en
     // categorie de depense, ignore sans categorie.
     if (t.amount < 0 && crossHalf(t)) continue
+    // Perimetre : operation ecartee (exceptionnelle, virement interne non
+    // relie, choix manuel) ou categorie hors depenses (epargne, argent mis de
+    // cote) : ignoree partout, comme un versement vers l'epargne. Le
+    // patrimoine (plus haut) la compte toujours.
+    if (scope.excludedIds.has(t.id)) continue
+    const isIncome = t.categoryId !== null && taxo.incomeCats.has(t.categoryId)
+    if (!isIncome && t.categoryId !== null && scope.excludedCategories.has(t.categoryId)) continue
     const inPeriod = m >= periodStart && m <= reference
     const day = Number(t.date.slice(8, 10))
 
-    if (t.categoryId !== null && taxo.incomeCats.has(t.categoryId)) {
-      // Solde d'ouverture d'un compte : de l'argent deja la, range dans une
-      // categorie de revenus pour alimenter le Pret a assigner, mais pas un
-      // revenu du mois. Compte comme tel, il gonflait revenus, epargne et taux
-      // d'epargne du mois d'ouverture et de toutes les moyennes.
-      if (t.label === OPENING_LABEL) continue
+    if (isIncome) {
+      // Solde d'ouverture ou ajustement de solde d'un compte : de l'argent deja
+      // la (ou une correction), range dans une categorie de revenus pour
+      // alimenter le Pret a assigner, mais pas un revenu du mois. Compte comme
+      // tel, il gonflait revenus, epargne et taux d'epargne du mois et de
+      // toutes les moyennes.
+      if (BALANCE_LABELS.has(t.label)) continue
       bump(incomeByMonth, m, t.amount)
       if (inPeriod) nested(dailyIncome, m, newDays)[day]! += t.amount
       continue
@@ -738,6 +780,11 @@ export function computeAnalytics(
   }
   const netWorth = months.map((m) => ({ month: m, value: wealthByMonth.get(m) ?? baseline }))
 
+  let cash = 0
+  for (const [accountId, balance] of balances) if (onBudget(accountId)) cash += balance
+  const monthlySpending = average && average.spending > 0 ? average.spending : null
+  const runway = { cash, monthlySpending, months: monthlySpending ? cash / monthlySpending : null }
+
   const suggestions = buildSuggestions({
     reference,
     currentMonth,
@@ -776,6 +823,7 @@ export function computeAnalytics(
     suggestions,
     netWorth,
     balances,
+    runway,
   }
 }
 

@@ -76,6 +76,8 @@ interface BootstrapResponse {
   uncategorizedCount: number
   budgetStartMonth?: string | null
   payees?: { key: string; categoryId: string }[]
+  /** Perimetre des rapports (serveur annoncant reportSettings) ; absent = vide. */
+  reportSettings?: unknown
   /** Fonctionnalites serveur optionnelles (cf. lib/features.ts) ; absent = aucune. */
   features?: string[]
 }
@@ -90,6 +92,8 @@ export interface Bootstrap {
   budgetStartMonth: string | null
   /** Memoire de tiers (cle payeeKey -> categorie par defaut), calculee serveur. */
   payees: PayeeDefault[]
+  /** Perimetre des rapports (user_settings.reports) ; vide sur un serveur ancien. */
+  reportSettings: ReportSettings
   /** Fonctionnalites annoncees par le serveur deploye (cf. lib/features.ts). */
   features: string[]
 }
@@ -97,6 +101,38 @@ export interface Bootstrap {
 export interface PayeeDefault {
   key: string
   categoryId: string
+}
+
+/** Choix manuel sur une transaction : ecartee des rapports, ou gardee malgre la detection. */
+export type ReportOverride = 'exclude' | 'include'
+
+/**
+ * Perimetre des rapports, lu par la page Rapports seule (le moteur et les
+ * soldes l'ignorent) : categories dont les sorties ne comptent pas comme des
+ * depenses, et choix manuels par transaction (prioritaires sur la detection
+ * automatique des operations exceptionnelles, lib/exceptional.ts).
+ */
+export interface ReportSettings {
+  excludedCategories: string[]
+  overrides: Record<string, ReportOverride>
+}
+
+export const EMPTY_REPORT_SETTINGS: ReportSettings = { excludedCategories: [], overrides: {} }
+
+/** Relecture tolerante (serveur ancien : champ absent ; forme partielle). */
+export function readReportSettings(raw: unknown): ReportSettings {
+  if (!raw || typeof raw !== 'object') return EMPTY_REPORT_SETTINGS
+  const r = raw as { excludedCategories?: unknown; overrides?: unknown }
+  const excludedCategories = Array.isArray(r.excludedCategories)
+    ? r.excludedCategories.filter((id): id is string => typeof id === 'string')
+    : []
+  const overrides: Record<string, ReportOverride> = {}
+  if (r.overrides && typeof r.overrides === 'object') {
+    for (const [id, flag] of Object.entries(r.overrides as Record<string, unknown>)) {
+      if (flag === 'exclude' || flag === 'include') overrides[id] = flag
+    }
+  }
+  return { excludedCategories, overrides }
 }
 
 // Forme plate renvoyee par getBudgetMonth (sortie du moteur).
@@ -164,6 +200,7 @@ function hydrateBootstrap(raw: BootstrapResponse): Bootstrap {
     uncategorizedCount: raw.uncategorizedCount,
     budgetStartMonth: raw.budgetStartMonth ?? null,
     payees: raw.payees ?? [],
+    reportSettings: readReportSettings(raw.reportSettings),
     features: Array.isArray(raw.features) ? raw.features.filter((f): f is string => typeof f === 'string') : [],
   }
 }
@@ -407,6 +444,18 @@ export async function apiSetPayeeCategory(
   categoryId: string | null,
 ): Promise<{ ok: true; key: string }> {
   return apiCall<{ ok: true; key: string }>('setPayeeCategory', { label, categoryId })
+}
+
+/**
+ * Patch du perimetre des rapports : liste COMPLETE des categories hors
+ * depenses (si fournie) et choix manuels a poser ou retirer (flag null).
+ */
+export async function apiSetReportSettings(input: {
+  excludedCategories?: string[]
+  overrides?: { transactionId: string; flag: ReportOverride | null }[]
+}): Promise<{ ok: true; reportSettings: ReportSettings }> {
+  const res = await apiCall<{ ok: true; reportSettings: unknown }>('setReportSettings', input)
+  return { ok: true, reportSettings: readReportSettings(res.reportSettings) }
 }
 
 export async function apiAddTransaction(input: NewTransactionInput): Promise<{ id: string }> {

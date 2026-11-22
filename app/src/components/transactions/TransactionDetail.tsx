@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeftRight,
+  ChartNoAxesColumn,
   ChevronRight,
   CircleDashed,
   Info,
@@ -22,11 +23,13 @@ import {
   useTransactions,
 } from '@/lib/data'
 import { payeeKey } from '@/lib/categorize'
+import { scopeItemOf, scopeToggle, useReportScope, useSetReportSettings } from '@/lib/reportScope'
 import { followTxId } from '@/lib/transactions'
 import { fmtDayLong } from '@/lib/format'
 import { Amount } from '@/components/shared/Amount'
 import { Aura } from '@/components/shared/Aura'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -82,6 +85,45 @@ function ActionButton({
       <Icon className={cn('h-[18px] w-[18px] shrink-0', !danger && 'text-soft')} />
       <span className="min-w-0 flex-1 leading-tight">{label}</span>
     </button>
+  )
+}
+
+const SCOPE_HINT: Record<'large' | 'internal' | 'manual', string> = {
+  large: 'Opération exceptionnelle, écartée automatiquement des moyennes.',
+  internal: 'Virement probable entre tes comptes (importé des deux côtés), écarté automatiquement.',
+  manual: 'Écartée à la main : elle ne compte ni dans les dépenses ni dans les revenus.',
+}
+
+/**
+ * Perimetre des rapports pour une operation du budget : interrupteur
+ * « Écartée des rapports » (detection automatique ou choix manuel). Le
+ * patrimoine la compte toujours. Visible si le serveur enregistre le choix.
+ */
+function ReportScopeField({ row }: { row: TxRow }) {
+  const { scope, editable } = useReportScope()
+  const mutation = useSetReportSettings()
+  if (!editable || !scope) return null
+  const item = scopeItemOf(scope, row.tx.id)
+  const excluded = item?.excluded ?? false
+  const hint = item
+    ? item.excluded
+      ? SCOPE_HINT[item.reason]
+      : 'Détectée comme exceptionnelle, mais gardée dans les rapports à ta demande.'
+    : 'Active-le pour un achat hors norme (déménagement, gros équipement) : il ne faussera plus tes moyennes.'
+  return (
+    <div className="mt-4 overflow-hidden rounded-2xl border border-edge bg-surface">
+      <div className="flex min-h-[52px] items-center gap-3 px-4 py-2.5">
+        <ChartNoAxesColumn aria-hidden className="h-[18px] w-[18px] shrink-0 text-soft" />
+        <span className="min-w-0 flex-1 text-[14px] font-medium text-ink">Écartée des rapports</span>
+        <Switch
+          checked={excluded}
+          disabled={row.pending}
+          onCheckedChange={(v) => mutation.mutate({ overrides: scopeToggle(row.tx, item, !v) })}
+          label="Écartée des rapports"
+        />
+      </div>
+      <p className="border-t border-edge bg-surface2/50 px-4 py-2.5 text-[12.5px] leading-snug text-soft">{hint}</p>
+    </div>
   )
 }
 
@@ -237,6 +279,8 @@ function DetailBody({ row, onClose }: { row: TxRow; onClose: () => void }) {
             Virement vers un compte de suivi : l’argent sort du budget, il se catégorise comme une dépense.
           </p>
         )}
+
+        {row.account.onBudget && !neutralTransfer && <ReportScopeField row={row} />}
 
         <div className="mt-4 grid grid-cols-2 gap-2">
           <ActionButton
