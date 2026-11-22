@@ -38,6 +38,7 @@ export { merchantKey }
 // revenus pour alimenter le Pret a assigner, ce ne sont pas des revenus : de
 // l'argent deja la, ou une correction de solde (doublon, oubli d'import).
 const BALANCE_LABELS: ReadonlySet<string> = new Set(["Solde d'ouverture", 'Ajustement de solde'])
+const ADJUSTMENT_LABEL = 'Ajustement de solde'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +54,8 @@ export interface TaxonomyLite {
   incomeCats: ReadonlySet<string> // ids de categories de revenus
   categories: ReadonlyMap<string, { name: string; groupId: string }>
   groups: ReadonlyMap<string, CategoryGroup>
+  /** Comptes de carte a debit differe (kind card_deferred). */
+  cardAccounts?: ReadonlySet<string>
 }
 
 export interface AnalyticsOptions {
@@ -199,6 +202,15 @@ export interface Analytics {
 }
 
 export const UNCAT_KEY = '__uncat__'
+/**
+ * Achats carte non detailles : ajustements de solde d'une carte a debit
+ * differe ranges en revenus. Sans detail des achats sur la carte, son solde se
+ * tient par ajustements ; le prelevement mensuel, relie en virement, est
+ * neutre. Ces ajustements sont donc la seule trace des achats par carte : ils
+ * comptent en depense (nets par mois, plancher a 0 comme toute categorie).
+ */
+export const CARD_KEY = '__card__'
+const CARD_LABEL = 'Achats carte'
 export const REST_KEY = '__rest__'
 // Categorie inconnue de la taxonomie (groupe supprime) : part nommee « Autre ».
 const UNKNOWN_KEY = '__unknown__'
@@ -323,6 +335,7 @@ export function monthsRangePhrase(first: string, last: string): string {
 export function taxonomyFrom(boot: Bootstrap): TaxonomyLite {
   return {
     onBudget: new Set(boot.accounts.filter((a) => a.onBudget).map((a) => a.id)),
+    cardAccounts: new Set(boot.accounts.filter((a) => a.kind === 'card_deferred').map((a) => a.id)),
     incomeCats: new Set(boot.categories.filter((c) => c.isIncome).map((c) => c.id)),
     categories: new Map(boot.categories.map((c) => [c.id, { name: c.name, groupId: c.groupId }])),
     groups: new Map(boot.groups.map((g) => [g.id, g])),
@@ -448,6 +461,18 @@ export function computeAnalytics(
     if (!isIncome && t.categoryId !== null && scope.excludedCategories.has(t.categoryId)) continue
     const inPeriod = m >= periodStart && m <= reference
     const day = Number(t.date.slice(8, 10))
+    const addNetTo = (catKey: string, delta: number) => {
+      bump(nested(netByMonth, m, () => new Map()), catKey, delta)
+      if (inPeriod) nested(nested(dailyByCategory, m, () => new Map()), catKey, newDays)[day]! += delta
+    }
+
+    // Achats carte non detailles (CARD_KEY) : seulement dans les totaux nets
+    // (jamais dans marchands, prelevements, jours ni plus grosses operations :
+    // un ajustement n'est pas un achat).
+    if (isIncome && t.label === ADJUSTMENT_LABEL && taxo.cardAccounts?.has(t.accountId)) {
+      addNetTo(CARD_KEY, -t.amount)
+      continue
+    }
 
     if (isIncome) {
       // Solde d'ouverture ou ajustement de solde d'un compte : de l'argent deja
@@ -461,10 +486,7 @@ export function computeAnalytics(
       continue
     }
     const catKey = t.categoryId ?? UNCAT_KEY
-    const addNet = (delta: number) => {
-      bump(nested(netByMonth, m, () => new Map()), catKey, delta)
-      if (inPeriod) nested(nested(dailyByCategory, m, () => new Map()), catKey, newDays)[day]! += delta
-    }
+    const addNet = (delta: number) => addNetTo(catKey, delta)
     // Remboursement (entree sur une categorie de depense : la CPAM apres le
     // dentiste, un article retourne) : il vient en deduction de la categorie,
     // donc de son groupe et de la depense du mois. Il etait ignore : Sante a
@@ -664,7 +686,11 @@ export function computeAnalytics(
   // --- Repartition par groupe (donut) ----------------------------------------
   const monthGroups = new Map<string, number>()
   for (const [catKey, total] of catByMonth.get(reference) ?? []) {
-    bump(monthGroups, catKey === UNCAT_KEY ? UNCAT_KEY : (groupOfCategory(catKey)?.id ?? UNKNOWN_KEY), total)
+    bump(
+      monthGroups,
+      catKey === UNCAT_KEY || catKey === CARD_KEY ? catKey : (groupOfCategory(catKey)?.id ?? UNKNOWN_KEY),
+      total,
+    )
   }
   const slices: GroupSlice[] = []
   let uncatSlice: GroupSlice | null = null
@@ -672,7 +698,7 @@ export function computeAnalytics(
     const group = taxo.groups.get(key) ?? null
     const slice: GroupSlice = {
       key,
-      label: key === UNCAT_KEY ? 'À catégoriser' : (group?.name ?? 'Autre'),
+      label: key === UNCAT_KEY ? 'À catégoriser' : key === CARD_KEY ? CARD_LABEL : (group?.name ?? 'Autre'),
       group,
       total,
       share: spending > 0 ? total / spending : 0,
@@ -700,7 +726,7 @@ export function computeAnalytics(
       averageMonths.length > 0 ? Math.round(mean(averageMonths.map((m) => catByMonth.get(m)?.get(id) ?? 0))) : 0
     return {
       id,
-      name: id === UNCAT_KEY ? 'À catégoriser' : (taxo.categories.get(id)?.name ?? 'Autre'),
+      name: id === UNCAT_KEY ? 'À catégoriser' : id === CARD_KEY ? CARD_LABEL : (taxo.categories.get(id)?.name ?? 'Autre'),
       group: id === UNCAT_KEY ? null : groupOfCategory(id),
       thisMonth,
       average: avg,
