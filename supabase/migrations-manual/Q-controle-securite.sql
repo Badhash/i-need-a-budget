@@ -71,7 +71,10 @@ checks(ordre, controle, etat, detail) as (
          'script O'
   from pg_proc p
   where p.pronamespace = 'public'::regnamespace
-    and p.prorettype <> 'trigger'::regtype
+    -- Les fonctions de trigger et d'event trigger ne sont pas appelables
+    -- directement (ex. rls_auto_enable(), posee par Supabase pour activer la
+    -- RLS sur toute nouvelle table) : leur droit EXECUTE est sans effet.
+    and p.prorettype not in ('trigger'::regtype, 'event_trigger'::regtype)
   union all
   select 4, 'search_path fixe (security definer) : ' || p.oid::regprocedure::text,
          case when exists (select 1 from unnest(coalesce(p.proconfig, '{}')) c where c like 'search_path=%')
