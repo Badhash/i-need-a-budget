@@ -4,9 +4,6 @@ Application personnelle de budget par enveloppes (zero-based), inspirée de YNAB
 avec une exigence forte sur l'UI/UX (north star : Copilot Money).
 
 - Spécification produit et conventions : [CLAUDE.md](CLAUDE.md)
-- Backlog priorisé (fait / restant) : [BACKLOG.md](BACKLOG.md)
-- Feuille de route (reste à faire) : [PLAN.md](PLAN.md)
-- Périmètre MVP : [PLAN-MVP.md](PLAN-MVP.md)
 
 ## État
 
@@ -25,8 +22,6 @@ Le produit est livré et branché sur données réelles :
   calculateur de Zakat).
 - Synchronisation bancaire Enable Banking (Edge Function `sync-bank`), écrite,
   à activer une fois l'app Enable Banking validée.
-
-Le détail de ce qui reste est dans [BACKLOG.md](BACKLOG.md) et [PLAN.md](PLAN.md).
 
 ## Structure
 
