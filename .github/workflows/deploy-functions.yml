@@ -35,7 +35,7 @@ jobs:
     # Le jeton de compte n'est expose QU'AUX deux etapes de deploiement, pas aux
     # actions tierces du job (checkout, setup-cli).
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # Tant que les secrets ne sont pas configures, on IGNORE proprement le
       # deploiement (CI verte) au lieu de faire echouer le workflow.
       - name: Verifier la configuration
@@ -51,13 +51,16 @@ jobs:
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1.7.3
         if: steps.guard.outputs.configured == 'true'
+        # Version EPINGLEE : ce binaire recoit le jeton de compte Supabase et
+        # deploie le code qui lit ENCRYPTION_KEY. « latest » executait sans
+        # relecture toute nouvelle publication du CLI.
         with:
-          version: latest
+          version: 3.3.0
       # Deploie l'Edge Function /api (verify_jwt vient de config.toml). Le CLI
-      # (version latest) exige --yes hors terminal et --remote=<ref> remplace
-      # --project-ref (deprecie).
+      # exige --yes hors terminal et --remote=<ref> remplace --project-ref
+      # (deprecie).
       - name: Deployer la fonction api
         if: steps.guard.outputs.configured == 'true'
         env:

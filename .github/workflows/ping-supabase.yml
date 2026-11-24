@@ -9,6 +9,9 @@ on:
     - cron: '17 6 * * *'
   workflow_dispatch:
 
+# Aucun acces au depot : ce workflow ne fait qu'un appel HTTP sortant.
+permissions: {}
+
 jobs:
   ping:
     runs-on: ubuntu-latest

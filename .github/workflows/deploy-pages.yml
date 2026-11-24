@@ -8,10 +8,11 @@ on:
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
+# Moindre privilege : le build (qui execute npm ci et le code des dependances)
+# ne recoit qu'un jeton en lecture ; seul le job de deploiement peut ecrire sur
+# Pages et demander un jeton OIDC.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -21,8 +22,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -58,16 +59,19 @@ jobs:
       # (purge des anciens caches, detection de la nouvelle version).
       - name: Estampiller le service worker
         run: sed -i "s/__BUILD_ID__/${GITHUB_SHA}/" app/dist/sw.js && grep -q "$GITHUB_SHA" app/dist/sw.js
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: app/dist
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

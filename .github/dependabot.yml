@@ -1,0 +1,38 @@
+# Veille des dependances. Les actions GitHub sont epinglees par SHA de commit
+# (voir les workflows) : sans Dependabot, elles ne recevraient plus aucun
+# correctif. Mises a jour groupees pour limiter le nombre de PR ; chaque PR
+# rejoue ci.yml (tests, typecheck Deno, build) avant fusion.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: monthly
+    groups:
+      app:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /packages/engine
+    schedule:
+      interval: monthly
+    groups:
+      engine:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /packages/crypto
+    schedule:
+      interval: monthly
+    groups:
+      crypto:
+        patterns: ['*']
