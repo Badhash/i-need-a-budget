@@ -11,8 +11,10 @@ seule avec `git revert <commit>`.
   ne compte qu'une fois). Aucune faille critique : pas de contournement
   d'authentification, pas d'accès aux données d'un autre utilisateur, pas de fuite de
   données déchiffrées, primitives de chiffrement saines.
-- **89 corrigés, 6 corrigés en partie, 2 couverts par un script SQL à appliquer,
-  25 ouverts** : aucun de sévérité haute, 8 moyenne, 17 basse.
+- **92 corrigés, 5 corrigés en partie, 2 couverts par un script SQL à appliquer,
+  23 ouverts** : aucun de sévérité haute, 8 moyenne, 15 basse.
+- Un audit de sécurité dédié a suivi le 24 novembre 2026 : constats, état du
+  chiffrement et reste à faire dans `AUDIT-SECURITE.md`.
 - Les problèmes les plus lourds étaient fonctionnels, pas des failles :
   1. **Synchro bancaire** : après un re-consentement, plus rien n'était importé, en
      silence ; deux opérations identiques le même jour n'en donnaient qu'une.
@@ -56,11 +58,11 @@ par `features`).
 **Reste à faire de ton côté, quand tu auras accès à Supabase** (rien n'est bloquant) :
 
 1. **Appliquer deux scripts dans le SQL Editor** (voir `RUNBOOK.md`) :
-   `O-revoke-rpc-execute.sql` (droits des RPC), puis `P-cron-secret-vault.sql` (le
-   secret d'appel de la synchro est aujourd'hui en clair dans `cron.job`). Faire
-   tourner ce secret ensuite.
-2. **Lancer les 5 requêtes de contrôle** de la fin du script O et comparer aux valeurs
-   attendues indiquées en commentaire.
+   `O-revoke-rpc-execute.sql` (droits des RPC, révisé le 24 novembre : à rejouer),
+   puis `P-cron-secret-vault.sql` (le secret d'appel de la synchro est aujourd'hui
+   en clair dans `cron.job`). Faire tourner ce secret ensuite.
+2. **Lancer `Q-controle-securite.sql`** : une requête, une ligne par contrôle, `OK`
+   ou `A CORRIGER`.
 3. **Vérifier dans le dashboard Supabase** : inscription fermée (« Allow new users to
    sign up » désactivé), second facteur TOTP enrôlé sur ton compte, `ALLOWED_ORIGINS`
    renseigné.
@@ -85,7 +87,7 @@ par `features`).
 | Crypto | Clé de tiers (sigles, ligatures, clés génériques), garde « libellé complété » |
 | Front | Réconciliation par mois, budget optimiste exact après une action sur une transaction, délai maximal des appels, taxonomie à jour, sélecteur de catégories dans les feuilles, libellés bancaires, saisie des montants, relectures derrière la file d'écritures, tri allégé |
 | Écrans | Budget (objectifs « Recharger jusqu'à », lots d'assignations, rollback ciblé, feuilles mobiles), Rapports (remboursements, épargne, taux à date, périodicité, premier mois), Zakat (nisab), kit UI (combobox, sélecteur de mois), Réglages (import YNAB, reprise, restauration, banque) |
-| CI et SQL | Tests avant déploiement, scripts SQL de durcissement O et P (non appliqués) |
+| CI et SQL | Tests avant déploiement, scripts SQL de durcissement O et P (non appliqués), script de contrôle Q |
 
 ## 4. Reste à faire, par priorité
 
@@ -117,10 +119,8 @@ Aucun constat de sévérité haute n'est ouvert.
 | ID | Question ou constat |
 |---|---|
 | ZAK-01 | Widget Zakat : assiette, taux, nisab et date sont des hypothèses codées en dur, à exposer en réglages (décision) |
-| FRONT-INF-10 | Pas de CSP sur l'app budget (faite sur freelance-dashboard) |
 | API-SEC-04 | `enc_update` ne signale pas une mise à jour de 0 ligne (demande un changement SQL) |
-| CI-01, API-SEC-10 | Épingler les actions GitHub et la CLI Supabase |
-| Divers B | Service worker et URL de retour bancaire, messages d'erreur de connexion, `signOut()` global, identifiants temporaires en cache, règle créée en priorité 0, jour de semaine des rapports, `MIN_MONTH` en dur |
+| Divers B | Service worker (page blanche hors ligne après un déploiement), messages d'erreur de connexion, `signOut()` global, identifiants temporaires en cache, règle créée en priorité 0, jour de semaine des rapports, `MIN_MONTH` en dur |
 
 ## 5. Liste complète des constats
 
@@ -136,11 +136,11 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | API-SEC-03 | B | Second facteur non exigé sans facteur enrôlé | corrigé (secret `REQUIRE_MFA=1` à poser dans Supabase pour exiger le second facteur) |
 | API-SEC-04, API-LOG-15 | B | `enc_update` ne signale pas une mise à jour de 0 ligne (écriture sur une ligne supprimée) | ouvert (SQL) |
 | API-SEC-05 | B | La clé anon passait la vérification de la plateforme et coûtait un appel au service Auth | corrigé |
-| API-SEC-06, SQL-02 | B | `revoke ... from public` ne retire pas les droits de `anon` et `authenticated` | script O |
+| API-SEC-06, SQL-02 | B | `revoke ... from public` ne retire pas les droits de `anon` et `authenticated` | script O (révisé : les colonnes calculées restaient exécutables via `public`, à rejouer) |
 | API-SEC-07 | B | Mois, dates et montants non bornés (« 9999-12 » : 96 000 mois déroulés ; « 2025-02-31 » accepté) | corrigé |
 | API-SEC-08 | B | `linkBankAccount` ne vérifiait ni la connexion ni le compte bancaire | corrigé |
-| API-SEC-09 | B | Origine de repli CORS « null », qui est celle des iframes sandbox | corrigé (localhost reste autorisé) |
-| API-SEC-10 | B | `npm:@supabase/supabase-js@2` et CLI en version flottante | partiel (supabase-js épinglé en 2.119.0 dans les deux fonctions ; CLI du workflow à épingler) |
+| API-SEC-09 | B | Origine de repli CORS « null », qui est celle des iframes sandbox | corrigé (localhost reste autorisé ; `sync-bank` aligné lors de l'audit de sécurité) |
+| API-SEC-10 | B | `npm:@supabase/supabase-js@2` et CLI en version flottante | corrigé (supabase-js 2.119.0, CLI 3.3.0 ; reste : pas de `deno.lock`) |
 | — | B | Liste d'emails autorisés sans contrôle de `email_confirmed_at` | ouvert |
 
 ### API — logique et egress
@@ -190,9 +190,9 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | SYNC-08 | M | Dédup sur l'état courant des lignes | ouvert |
 | SYNC-09 | B | Agrégats invalidés une seule fois par run | corrigé (marqueur invalidé aussi après chaque écriture) |
 | SYNC-10 | B | Appariement des jumeaux dépendant de l'ordre de la réponse | corrigé (appariement par date croissante, jumeau le plus ancien de la fenêtre) |
-| SYNC-11, SET-BNK-04, FRONT-INF-11 | B | Paramètre `state` généré mais jamais vérifié | corrigé (`state` signé HMAC, lié à l'utilisateur, 1 h) |
+| SYNC-11, SET-BNK-04, FRONT-INF-11 | B | Paramètre `state` généré mais jamais vérifié | corrigé (`state` signé HMAC, lié à l'utilisateur, 1 h, obligatoire côté serveur) |
 | SQL-01 | B | Secret cron en clair dans `cron.job` | script P |
-| CI-01 | M | Jeton Supabase exposé à tout le job, pas de permissions ni de concurrence | partiel (reste : épingler actions et CLI) |
+| CI-01 | M | Jeton Supabase exposé à tout le job, pas de permissions ni de concurrence | corrigé (actions épinglées par SHA, CLI figée, Dependabot ; reste : protéger `main`) |
 | CI-02 | B | Aucun test avant déploiement | corrigé (`ci.yml`) |
 | EGRESS-01 | M | Relectures complètes à chaque run avec import | ouvert |
 | EGRESS-02 | B | Un signal Realtime par ligne insérée | ouvert |
@@ -212,8 +212,8 @@ Sévérité : H haute, M moyenne, B basse. Statut : **corrigé**, **partiel**,
 | FRONT-INF-07 | M | Recharts chargé au démarrage | corrigé (1 370 kB → 874 kB) |
 | FRONT-INF-08 | M | Caches préchargés jetés après 5 min | corrigé |
 | FRONT-INF-09 | B | Le rollback d'une assignation restaure tout le mois | corrigé (seules les valeurs de l'action échouée, relecture derrière la file) |
-| FRONT-INF-10 | B | Pas de CSP | ouvert |
-| FRONT-INF-12 | B | Service worker : URL de retour bancaire gardée comme clé de cache ; page blanche possible hors ligne juste après un déploiement | ouvert |
+| FRONT-INF-10 | B | Pas de CSP | corrigé (balise meta générée au build, `vite.config.ts`) |
+| FRONT-INF-12 | B | Service worker : URL de retour bancaire gardée comme clé de cache ; page blanche possible hors ligne juste après un déploiement | partiel (clé de cache corrigée ; reste la page blanche hors ligne) |
 | FRONT-INF-13 | B | Erreur réseau affichée « Identifiants invalides » ; désactivation du second facteur sans confirmation | ouvert |
 | FRONT-INF-14 | B | `signOut()` déconnecte tous les appareils | ouvert |
 | FRONT-INF-15 | B | Signal de reconnexion ignoré juste après une reprise | ouvert |
