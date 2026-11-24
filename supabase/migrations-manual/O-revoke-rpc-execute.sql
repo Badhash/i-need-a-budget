@@ -10,12 +10,21 @@
 -- donc rien n'est exploitable en l'etat, mais le filet « service_role
 -- uniquement » annonce n'etait pas garanti par les scripts.
 --
+-- Les colonnes calculees (enc_b64, enc_core_b64, enc_text_b64) n'ont JAMAIS ete
+-- revoquees de `public` : anon et authenticated en heritent, et un revoke qui
+-- ne nomme qu'eux deux ne change rien (verifie sur un Postgres local : le
+-- droit restait a `true` apres la premiere version de ce script). Elles sont
+-- donc revoquees ici de `public` ET des deux roles. Ces fonctions ne font
+-- qu'encoder la ligne qu'on leur passe (aucune lecture de table) : la fuite
+-- etait nulle, c'est le filet « service_role uniquement » qui est retabli.
+-- service_role garde son droit, accorde nommement par les scripts D, H, I, M, N.
+--
 -- Idempotent : rejouable sans effet de bord.
 
-revoke execute on function public.enc_insert(text, jsonb, text) from anon, authenticated;
-revoke execute on function public.enc_update(text, uuid, uuid, jsonb) from anon, authenticated;
-revoke execute on function public.enc_core_b64(public.transactions) from anon, authenticated;
-revoke execute on function public.enc_text_b64(public.transactions) from anon, authenticated;
+revoke execute on function public.enc_insert(text, jsonb, text) from public, anon, authenticated;
+revoke execute on function public.enc_update(text, uuid, uuid, jsonb) from public, anon, authenticated;
+revoke execute on function public.enc_core_b64(public.transactions) from public, anon, authenticated;
+revoke execute on function public.enc_text_b64(public.transactions) from public, anon, authenticated;
 
 -- Colonnes calculees enc_b64(<table>) : une par table, retirees si elles existent.
 do $$
@@ -28,14 +37,16 @@ begin
     where p.pronamespace = 'public'::regnamespace
       and p.proname = 'enc_b64'
   loop
-    execute format('revoke execute on function %s from anon, authenticated;', f.signature);
+    execute format('revoke execute on function %s from public, anon, authenticated;', f.signature);
   end loop;
 end;
 $$;
 
 -- -----------------------------------------------------------------------------
 -- Verifications (lecture seule). Le schema de base n'etant pas versionne, ces
--- requetes confirment l'etat reel de la production.
+-- requetes confirment l'etat reel de la production. Le script
+-- Q-controle-securite.sql les regroupe en UNE requete qui repond OK ou
+-- A CORRIGER ligne par ligne : le preferer aux requetes ci-dessous.
 -- -----------------------------------------------------------------------------
 
 -- 1. Attendu : false, false.

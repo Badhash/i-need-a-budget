@@ -102,17 +102,23 @@ mais ne part qu'au prochain déploiement des Edge Functions (jeton CI à renouve
 Deux scripts sans dépendance de code, à coller dans le SQL Editor. Ils ne sont
 **pas encore appliqués en production** au moment où ils entrent dans le dépôt.
 
-1. **`O-revoke-rpc-execute.sql`** — retire explicitement `EXECUTE` sur les RPC
-   `enc_insert` / `enc_update` et sur les colonnes calculées `enc_b64` aux rôles
-   `anon` et `authenticated` (les scripts D et H ne révoquaient que `public`, ce
-   qui ne retire pas les droits accordés nommément par Supabase). Idempotent. Le
-   fichier se termine par cinq requêtes de vérification en lecture seule (RLS,
-   droits des tables, index, policy Realtime, triggers) : le schéma de base
-   n'étant pas versionné, c'est le seul moyen de confirmer l'état réel.
+1. **`O-revoke-rpc-execute.sql`** — retire `EXECUTE` sur les RPC `enc_insert` /
+   `enc_update` et sur les colonnes calculées `enc_b64`, `enc_core_b64`,
+   `enc_text_b64` à `public`, `anon` et `authenticated`. Idempotent. Révisé lors
+   de l'audit de sécurité : la première version ne nommait que `anon` et
+   `authenticated`, ce qui laissait les colonnes calculées exécutables via
+   `public` (vérifié sur un Postgres local). À rejouer même s'il a déjà été
+   appliqué.
 2. **`P-cron-secret-vault.sql`** — remplace les jobs de `G-cron-2x.sql` par des
    jobs qui lisent le secret `x-cron-secret` dans Supabase Vault au lieu de le
    porter en clair dans `cron.job`. Purge aussi `cron.job_run_details`, qui
    contient l'ancien secret. Faire ensuite tourner le secret.
+3. **`Q-controle-securite.sql`** — contrôle en LECTURE SEULE, à lancer après les
+   deux scripts ci-dessus (et quand on veut) : une seule requête, une ligne par
+   contrôle, `OK` / `A CORRIGER` / `A VERIFIER` (RLS et droits de chaque table,
+   fonctions réservées à `service_role`, `search_path` des fonctions
+   `security definer`, policies Realtime, secret cron hors de `cron.job`, second
+   facteur enrôlé, nombre de comptes). Les lignes à traiter sortent en premier.
 
 Notes sur ce document :
 
