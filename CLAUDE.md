@@ -26,7 +26,7 @@ Application de budget par enveloppes (zero-based) pour usage personnel, inspiré
     /api                → lecture/écriture déchiffrée (endpoint unique, actions typées)
       aggregates.ts     → agrégats chiffrés pré-calculés (REF I, partagé avec sync-bank)
       cardSettlement.ts → libellé du prélèvement de carte à débit différé (partagé avec sync-bank)
-  /migrations-manual    → scripts SQL des optimisations egress (RUNBOOK.md) à coller dans le SQL Editor ; `Q-controle-securite.sql` = contrôle en lecture seule de la base (RLS, droits, cron, second facteur)
+  /migrations-manual    → scripts SQL déjà appliqués en production, seule trace versionnée du schéma au-delà des tables de base (RPC `enc_insert`/`enc_update`, colonnes calculées, agrégats, réglages, mémoire de tiers, droits, cron) ; `Q-controle-securite.sql` = contrôle en lecture seule de la base, rejouable (RLS, droits, cron, second facteur)
 /.github/workflows      → ci (tests moteur/crypto, typecheck Deno des fonctions, build du front), deploy pages, deploy Edge Functions (après ci), ping anti-pause quotidien ; actions épinglées par SHA de commit, CLI Supabase et Deno en version figée (mises à jour par Dependabot)
 ```
 
@@ -162,7 +162,7 @@ Tables d'agrégats (REF I, dérivées — jamais source de vérité, reconstruit
 ## Connexion bancaire (Enable Banking)
 
 * Périmètre initial : une banque française compatible Enable Banking (identifiants ASPSP configurés hors dépôt, en secret). Le modèle supporte N connexions.
-* `sync-bank` déclenchée par pg_cron à 07:30 et 19:30 Europe/Paris via pg_net (2 fois par jour, REF G ; attention au décalage heure d'été/hiver, cron en UTC).
+* `sync-bank` déclenchée par pg_cron à 06:00 et 18:00 UTC via pg_net (2 fois par jour : 08:00 et 20:00 à Paris en été, 07:00 et 19:00 en hiver). Jobs créés par `P-cron-secret-vault.sql` : le secret d'appel `x-cron-secret` est lu dans Supabase Vault à chaque exécution, jamais écrit dans `cron.job`.
 * Dédup : `tx_hash = sha256(account_id + booking_date + amount + libellé normalisé)`, complété du rang d'occurrence à partir de la deuxième opération strictement identique d'une même réponse bancaire (la première garde le hash historique) : deux achats identiques le même jour restent deux lignes. Une opération resservie deux fois avec la même référence banque ne compte qu'une fois. Garde « libellé complété » (`packages/crypto/src/labelVariant.ts`) : une opération que la banque renvoie avec un libellé complété ou tronqué autrement (Boursorama) n'est pas réimportée si un import déjà en base a le même compte, le même montant, la même date et un libellé variante (préfixe, hors suffixe carte « CB*1234 ») ; seuls les imports antérieurs au run comptent, chacun absorbe une seule variante, et un import resservi à l'identique consomme d'abord sa propre entrée (la réponse d'un compte est lue en entier avant d'écrire).
 * Transactions importées arrivent SANS catégorie → moteur de règles → sinon "À catégoriser" (badge de compteur dans la nav).
 * Carte à débit différé (compte `card_deferred` du budget) : son prélèvement mensuel sur le compte courant (libellé « CARTE DEPENSES… », `CARD_SETTLEMENT_RE`) n'est jamais catégorisé à l'import (ni règle ni mémoire de tiers) ; `linkDeferredCardSettlements` le relie aussitôt en virement compte courant → carte (transaction miroir créée sur la carte si elle n'est pas synchronisée). Les achats carte se comptent une seule fois (détail ou ajustement du solde de la carte), le relevé est neutre.
@@ -176,7 +176,7 @@ Tables d'agrégats (REF I, dérivées — jamais source de vérité, reconstruit
 * Réponses et commits en français, code/identifiants en anglais.
 * Pas d'emojis nulle part (UI, commits, docs).
 * Conventional commits (feat:, fix:, chore:).
-* Toute modif de schéma = appliquée dans le SQL Editor (source de vérité = base de production, non versionnée), et le script ajouté dans `supabase/migrations-manual/` (+ RUNBOOK.md).
+* Toute modif de schéma = appliquée dans le SQL Editor (source de vérité = base de production, non versionnée), et le script ajouté dans `supabase/migrations-manual/` (en-tête du fichier : ce qu'il fait, ses prérequis, s'il est rejouable).
 * Budget egress Supabase free tier (5 Go/mois) : c'est LA contrainte d'exploitation. Toute nouvelle lecture doit être scopée (jamais de refetch global, jamais de re-lecture de l'historique complet hors `bootstrapFull`), et TOUTE nouvelle action d'écriture qui touche transactions/assignments/accounts doit soit maintenir les agrégats (`withAggMaintenance`), soit les invalider (`aggMarkStale` / `withAggregatesStale`) — jamais écrire sous un marqueur « ready » sans maintenance.
 * Ne jamais installer de dépendance non listée dans la stack sans la proposer d'abord.
 * Avant de pousser : `npx vitest run` et `npx tsc --noEmit` dans `packages/engine` et `packages/crypto`, `npm run build` dans `app`, `deno check` sur les deux Edge Functions (le workflow `ci.yml` rejoue le tout ; le déploiement des fonctions en dépend). Pour modifier les dépendances de `packages/*` : `npx npm@11 install` (`npm install` de npm 10 plante sur vitest 4 ; `npm ci` fonctionne).

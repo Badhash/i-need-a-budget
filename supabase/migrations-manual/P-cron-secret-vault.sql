@@ -1,10 +1,10 @@
 -- =============================================================================
 -- P — Secret d'appel de sync-bank dans Supabase Vault (au lieu de cron.job)
--- A APPLIQUER dans le SQL Editor. Remplace les jobs crees par G-cron-2x.sql.
+-- Applique en production. Remplace les anciens jobs sync-bank.
 -- =============================================================================
 --
--- G-cron-2x.sql ecrit le secret partage x-cron-secret EN CLAIR dans la commande
--- du job : il est stocke dans cron.job.command et recopie dans
+-- L'ancienne planification ecrivait le secret partage x-cron-secret EN CLAIR
+-- dans la commande du job : il etait stocke dans cron.job.command et recopie dans
 -- cron.job_run_details.command a chaque execution. Toute personne qui lit la
 -- base ou une sauvegarde peut alors declencher la synchro de tous les
 -- utilisateurs (et epuiser le quota d'acces bancaires sans presence

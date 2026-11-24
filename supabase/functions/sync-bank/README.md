@@ -75,8 +75,8 @@ Deux syncs par jour (matin et soir, heure de Paris). Le script de reference est
 `supabase/migrations-manual/P-cron-secret-vault.sql` : il range le secret
 partage dans Supabase Vault et le job le lit au moment de l'appel.
 
-Ne PAS ecrire le secret en dur dans la commande du job (ancienne methode de ce
-README et de `G-cron-2x.sql`) : il resterait en clair dans `cron.job` et dans
+Ne PAS ecrire le secret en dur dans la commande du job (ancienne methode) : il
+resterait en clair dans `cron.job` et dans
 `cron.job_run_details`, lisible par quiconque lit la base ou une sauvegarde.
 
 Le secret `SYNC_CRON_SECRET` doit etre long et aleatoire (32 octets ou plus,
