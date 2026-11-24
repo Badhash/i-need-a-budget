@@ -339,6 +339,7 @@ async function casAdjust<P>(
       const { data: del, error: delErr } = await admin
         .from(table)
         .delete()
+        .eq('user_id', userId)
         .eq('id', data.id)
         .eq('rev', rev)
         .select('id')
@@ -355,6 +356,7 @@ async function casAdjust<P>(
         rev: rev + 1,
         enc_payload: bytesToPgHex(await encryptJson(keys, next, context)),
       })
+      .eq('user_id', userId)
       .eq('id', data.id)
       .eq('rev', rev)
       .select('id')

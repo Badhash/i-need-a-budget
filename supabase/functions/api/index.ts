@@ -1859,8 +1859,10 @@ async function actionSetPayeeCategory(userId: string, params: Params) {
   try {
     const key = await setPayeeDefault(admin, keys, userId, label, categoryId)
     return { ok: true, key }
-  } catch (err) {
-    throw new ApiError(500, err instanceof Error ? err.message : 'ecriture payee_memory impossible')
+  } catch {
+    // Message statique : jamais le texte d'une exception (il partirait dans la
+    // reponse et dans les journaux de la fonction).
+    throw new ApiError(500, 'ecriture payee_memory impossible')
   }
 }
 
@@ -4153,7 +4155,14 @@ async function readBoundedBody(req: Request, maxBytes: number): Promise<Uint8Arr
 }
 
 Deno.serve(async (req) => {
-  const headers = { ...corsHeaders(req), 'Content-Type': 'application/json' }
+  // no-store : les reponses portent le budget dechiffre, aucun cache
+  // intermediaire ni navigateur ne doit les conserver.
+  const headers = {
+    ...corsHeaders(req),
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  }
 
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders(req) })
