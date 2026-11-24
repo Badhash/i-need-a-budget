@@ -19,14 +19,16 @@ verifie a la main l'identite. Deux modes d'appel :
 
 ## Actions
 
-- `startAuth { redirectUrl?, aspspName? }` (utilisateur) -> `{ url }`
+- `startAuth { redirectUrl?, aspspName? }` (utilisateur) -> `{ url, state }`
   Construit le JWT RS256 EB, ouvre une session d'autorisation PSD2 et renvoie
-  l'URL de redirection vers la banque. `redirectUrl` et `aspspName` retombent sur
-  les secrets `ENABLE_BANKING_REDIRECT_URL` / `ENABLE_BANKING_ASPSP_NAME` si
-  omis.
-- `finalizeAuth { code }` (utilisateur) -> `{ ok: true, connectionId }`
-  Echange le `code` renvoye par la banque contre une session EB, puis chiffre et
-  insere la `bank_connection` (session_id, comptes EB, `valid_until`).
+  l'URL de redirection vers la banque. L'URL de retour est celle du secret
+  `ENABLE_BANKING_REDIRECT_URL` ; a defaut, le `redirectUrl` du front n'est
+  accepte que si son origine figure dans `ALLOWED_ORIGINS`. `aspspName` retombe
+  sur le secret `ENABLE_BANKING_ASPSP_NAME` s'il est omis.
+- `finalizeAuth { code, state }` (utilisateur) -> `{ ok: true, connectionId }`
+  Verifie le `state` (OBLIGATOIRE : signe HMAC, lie a l'utilisateur, valable
+  1 h), echange le `code` renvoye par la banque contre une session EB, puis
+  chiffre et insere la `bank_connection` (session_id, comptes EB, `valid_until`).
 - `sync { sinceDays? }` (utilisateur ou cron) -> `{ imported }`
   Poll des transactions depuis la derniere sync (ou la date d'activation de la
   connexion ; `sinceDays` force une fenetre plus profonde pour l'import initial,
@@ -69,75 +71,22 @@ sauvegardee hors Supabase par l'utilisateur (gestionnaire de mots de passe).
 
 ## Planification pg_cron + pg_net
 
-A coller dans le SQL Editor du dashboard. Planifie trois syncs par jour a
-07:30 / 12:30 / 19:30 Europe/Paris.
+Deux syncs par jour (matin et soir, heure de Paris). Le script de reference est
+`supabase/migrations-manual/P-cron-secret-vault.sql` : il range le secret
+partage dans Supabase Vault et le job le lit au moment de l'appel.
 
-IMPORTANT (decalage DST) : par defaut pg_cron s'execute en UTC. Les heures ci-
-dessous sont donnees pour l'heure d'ETE de Paris (UTC+2) : 07:30 -> 05:30 UTC,
-12:30 -> 10:30 UTC, 19:30 -> 17:30 UTC. En hiver (Paris UTC+1) il faut AJOUTER
-1h a chaque heure UTC (06:30 / 11:30 / 18:30 UTC), ou bien fixer une fois pour
-toutes `cron.timezone = 'Europe/Paris'` dans la configuration Postgres et
-exprimer le cron directement en heure locale.
+Ne PAS ecrire le secret en dur dans la commande du job (ancienne methode de ce
+README et de `G-cron-2x.sql`) : il resterait en clair dans `cron.job` et dans
+`cron.job_run_details`, lisible par quiconque lit la base ou une sauvegarde.
 
-```sql
--- Extensions (une seule fois par projet).
-create extension if not exists pg_cron;
-create extension if not exists pg_net;
+Le secret `SYNC_CRON_SECRET` doit etre long et aleatoire (32 octets ou plus,
+par exemple `openssl rand -base64 32`). Rotation : voir l'en-tete du script P.
 
--- Remplacer <PROJECT_REF> par la ref du projet et <SYNC_CRON_SECRET> par le
--- secret configure cote Edge Function. Ne PAS committer ce SQL rempli.
+Decalage heure d'ete / hiver : pg_cron s'execute en UTC, les horaires du script
+sont donnes pour l'heure d'ete de Paris (une heure plus tot en hiver).
 
--- 07:30 Europe/Paris (heure d'ete = 05:30 UTC ; hiver : 06:30 UTC)
-select cron.schedule(
-  'sync-bank-matin',
-  '30 5 * * *',
-  $$
-  select net.http_post(
-    url     := 'https://<PROJECT_REF>.functions.supabase.co/sync-bank',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'x-cron-secret', '<SYNC_CRON_SECRET>'
-    ),
-    body    := jsonb_build_object('action', 'sync')
-  );
-  $$
-);
-
--- 12:30 Europe/Paris (ete = 10:30 UTC ; hiver : 11:30 UTC)
-select cron.schedule(
-  'sync-bank-midi',
-  '30 10 * * *',
-  $$
-  select net.http_post(
-    url     := 'https://<PROJECT_REF>.functions.supabase.co/sync-bank',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'x-cron-secret', '<SYNC_CRON_SECRET>'
-    ),
-    body    := jsonb_build_object('action', 'sync')
-  );
-  $$
-);
-
--- 19:30 Europe/Paris (ete = 17:30 UTC ; hiver : 18:30 UTC)
-select cron.schedule(
-  'sync-bank-soir',
-  '30 17 * * *',
-  $$
-  select net.http_post(
-    url     := 'https://<PROJECT_REF>.functions.supabase.co/sync-bank',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'x-cron-secret', '<SYNC_CRON_SECRET>'
-    ),
-    body    := jsonb_build_object('action', 'sync')
-  );
-  $$
-);
-```
-
-Pour retirer un job : `select cron.unschedule('sync-bank-matin');` (idem midi /
-soir).
+Pour retirer un job : `select cron.unschedule('sync-bank-matin-2x');` (idem
+`sync-bank-soir-2x`).
 
 ## Flow de consentement (cote front)
 
@@ -145,17 +94,18 @@ soir).
    `startAuth { redirectUrl }` et recoit `{ url }`.
 2. Redirection du navigateur vers `url` (page de la banque, authentification
    forte PSD2).
-3. La banque redirige vers `redirectUrl` avec un parametre `code` (et le `state`
-   d'origine).
-4. Le front recupere le `code` et appelle `finalizeAuth { code }`. La
-   `bank_connection` est creee (chiffree) avec `valid_until` a 180 jours.
+3. La banque redirige vers `redirectUrl` avec un parametre `code` et le `state`
+   d'origine.
+4. Le front recupere `code` et `state` et appelle `finalizeAuth { code, state }`
+   (un retour sans `state` est refuse). La `bank_connection` est creee
+   (chiffree) avec `valid_until` a 90 jours.
 5. L'utilisateur lie ensuite chaque compte EB (`uid`) a un compte interne en
    renseignant `providerAccountUid` (cote Edge Function `/api`). Sans liaison, un
    compte EB est ignore par `sync`.
 
-## Re-consentement (expiration a 180 jours)
+## Re-consentement (expiration a 90 jours)
 
-Les sessions EB expirent au bout de 180 jours (`valid_until`). Le front doit
+Les sessions EB expirent au bout de 90 jours (`valid_until`). Le front doit
 afficher une banniere de re-consentement des J-14 avant l'expiration (comparer
 `valid_until` de la connexion, expose par l'action `/api getBankConnections`,
 statut `expiring`), avec un bouton "Reconnecter" qui relance le flow ci-dessus

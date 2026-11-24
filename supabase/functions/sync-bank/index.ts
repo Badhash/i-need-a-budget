@@ -42,7 +42,7 @@ import {
 import { aggMarkStale, aggRecompute } from '../api/aggregates.ts'
 import { loadUserSettings } from '../api/settings.ts'
 import { loadPayeeDefaults } from '../api/payees.ts'
-import { mfaLevelSatisfied } from '../api/mfa.ts'
+import { jwtClaims, mfaLevelSatisfied } from '../api/mfa.ts'
 import { CARD_SETTLEMENT_RE } from '../api/cardSettlement.ts'
 import { payeeKey } from '../../../packages/crypto/src/payee.ts'
 import { isLabelVariant } from '../../../packages/crypto/src/labelVariant.ts'
@@ -184,13 +184,17 @@ const ALLOWED_ORIGINS = new Set([
   'http://localhost:5173',
   'http://localhost:4173',
 ])
-const FALLBACK_ORIGIN = CONFIGURED_ORIGINS[0] ?? 'null'
 
+// Origine non reconnue : AUCUN en-tete Access-Control-Allow-Origin (fail-closed,
+// comme /api). L'ancien repli (premiere origine configuree, sinon 'null')
+// laissait passer les contextes opaques (iframe sandbox, file://). L'en-tete
+// x-cron-secret n'est pas autorise en CORS : il ne sert qu'a l'appel serveur a
+// serveur de pg_cron, jamais a un navigateur.
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') ?? ''
   return {
-    'Access-Control-Allow-Origin': ALLOWED_ORIGINS.has(origin) ? origin : FALLBACK_ORIGIN,
-    'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info, x-cron-secret',
+    ...(ALLOWED_ORIGINS.has(origin) ? { 'Access-Control-Allow-Origin': origin } : {}),
+    'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     Vary: 'Origin',
   }
@@ -618,6 +622,9 @@ function amountStringToCents(raw: string): number {
   return cents
 }
 
+// Plafond d'un montant importe, en centimes (identique a /api).
+const MAX_AMOUNT_CENTS = 100_000_000_000
+
 // Format strict (identique a /api) : mois 01-12, jour 01-31.
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
 
@@ -669,7 +676,9 @@ function mapEbTransaction(tx: EbTransaction): MappedTx | null {
   const indicator = (tx.credit_debit_indicator ?? '').toUpperCase()
   // Montant non conforme au format documente : transaction ecartee.
   const cents = amountStringToCents(tx.transaction_amount?.amount ?? '0')
-  if (Number.isNaN(cents)) return null
+  // Meme plafond que /api (1 milliard d'euros) : un montant aberrant renvoye
+  // par l'agregateur est ignore plutot que d'entrer dans les soldes.
+  if (!Number.isSafeInteger(cents) || Math.abs(cents) > MAX_AMOUNT_CENTS) return null
   const magnitude = Math.abs(cents)
   // DBIT = debit (depense) -> negatif ; tout le reste (CRDT) -> positif.
   const amount = indicator === 'DBIT' ? -magnitude : magnitude
@@ -681,7 +690,7 @@ function mapEbTransaction(tx: EbTransaction): MappedTx | null {
   // La contrepartie depend du sens : sur un debit, on paie un crediteur ; sur
   // un credit, on est paye par un debiteur.
   const counterpartyName =
-    (indicator === 'DBIT' ? tx.creditor?.name : tx.debtor?.name)?.trim() || null
+    (indicator === 'DBIT' ? tx.creditor?.name : tx.debtor?.name)?.trim().slice(0, 200) || null
 
   const label = (remittance.trim() || counterpartyName || 'Transaction').slice(0, 200)
 
@@ -1815,15 +1824,29 @@ async function authStateValid(userId: string, state: string): Promise<boolean> {
   return diff === 0
 }
 
+function isAllowedRedirect(value: string): boolean {
+  try {
+    return ALLOWED_ORIGINS.has(new URL(value).origin)
+  } catch {
+    return false
+  }
+}
+
 // startAuth : ouvre une session d'autorisation PSD2, renvoie l'URL de la banque.
 async function actionStartAuth(userId: string, params: Params) {
   // On privilegie l'URL du secret ENABLE_BANKING_REDIRECT_URL : elle DOIT etre
   // identique a la Redirect URL enregistree dans l'app Enable Banking, sinon EB
   // renvoie REDIRECT_URI_NOT_ALLOWED. Le param du front n'est qu'un repli.
+  const configuredRedirect = (Deno.env.get('ENABLE_BANKING_REDIRECT_URL') ?? '').trim()
   const redirectUrl =
-    (Deno.env.get('ENABLE_BANKING_REDIRECT_URL') ?? '').trim() ||
-    (typeof params.redirectUrl === 'string' ? params.redirectUrl.trim() : '')
+    configuredRedirect || (typeof params.redirectUrl === 'string' ? params.redirectUrl.trim() : '')
   if (!redirectUrl) throw new ApiError(400, 'redirectUrl manquante')
+  // Le repli vient du client : il n'est accepte que s'il pointe vers une
+  // origine de l'application (ALLOWED_ORIGINS), jamais vers un site tiers qui
+  // recevrait le code d'autorisation.
+  if (!configuredRedirect && !isAllowedRedirect(redirectUrl)) {
+    throw new ApiError(400, 'redirectUrl non autorisee')
+  }
 
   // Le nom d'ASPSP est configurable : param optionnel (aspspName) ou secret
   // ENABLE_BANKING_ASPSP_NAME. Pays fixe a la France (perimetre initial).
@@ -1930,13 +1953,11 @@ async function relinkAccountsAfterReconsent(
 async function actionFinalizeAuth(userId: string, params: Params) {
   const code = typeof params.code === 'string' ? params.code.trim() : ''
   if (!code) throw new ApiError(400, 'code d autorisation manquant')
-  // state transmis par le front (a jour) : il doit avoir ete signe pour cet
-  // utilisateur, il y a moins d'une heure. Un front plus ancien ne l'envoie
-  // pas encore : accepte tel quel le temps de sa mise a jour.
-  if (params.state != null) {
-    if (typeof params.state !== 'string' || !(await authStateValid(userId, params.state))) {
-      throw new ApiError(400, 'retour de consentement invalide ou expire, relance la connexion')
-    }
+  // state OBLIGATOIRE : il doit avoir ete signe pour cet utilisateur, il y a
+  // moins d'une heure. La tolerance « front plus ancien sans state » est
+  // retiree : elle rendait la verification contournable en omettant le champ.
+  if (typeof params.state !== 'string' || !(await authStateValid(userId, params.state))) {
+    throw new ApiError(400, 'retour de consentement invalide ou expire, relance la connexion')
   }
 
   // HYP EB : POST /sessions { code } -> { session_id, accounts, access,
@@ -2271,6 +2292,13 @@ async function allUsersWithConnections(): Promise<string[]> {
 async function requireUser(req: Request): Promise<string> {
   const authHeader = req.headers.get('authorization')
   if (!authHeader) throw new ApiError(401, 'authentification requise')
+  // verify_jwt est desactive pour cette fonction : sans ce pre-filtre, tout
+  // appel anonyme (cle anon publique, chaine quelconque) coutait un appel au
+  // service Auth. L'identite reste etablie par auth.getUser() ci-dessous.
+  const claims = jwtClaims(authHeader)
+  if (claims.role !== 'authenticated' || typeof claims.sub !== 'string') {
+    throw new ApiError(401, 'session invalide')
+  }
   const authClient = createClient(SUPABASE_URL, ANON_KEY, {
     global: { headers: { Authorization: authHeader } },
     auth: { persistSession: false, autoRefreshToken: false },
@@ -2321,7 +2349,12 @@ async function constantTimeEqual(a: string, b: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 Deno.serve(async (req) => {
-  const headers = { ...corsHeaders(req), 'Content-Type': 'application/json' }
+  const headers = {
+    ...corsHeaders(req),
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  }
 
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders(req) })
