@@ -72,14 +72,21 @@ function isFontRequest(url) {
 }
 
 // Reseau d'abord, repli cache (navigation / shell).
-async function networkFirst(request, cacheName) {
+// `cacheKey` : cle de rangement imposee. Les navigations sont TOUTES rangees
+// sous './index.html' et jamais sous leur propre URL : le retour de consentement
+// bancaire (?code=...&state=...) restait sinon en clair dans le Cache Storage
+// jusqu'au deploiement suivant.
+async function networkFirst(request, cacheName, cacheKey) {
   const cache = await caches.open(cacheName)
   try {
     const response = await fetch(request)
-    if (response && response.ok) await cache.put(request, response.clone())
+    if (response && response.ok) await cache.put(cacheKey || request, response.clone())
     return response
   } catch (err) {
-    const cached = (await cache.match(request)) || (await cache.match('./index.html')) || (await cache.match('./'))
+    const cached =
+      (cacheKey ? undefined : await cache.match(request)) ||
+      (await cache.match('./index.html')) ||
+      (await cache.match('./'))
     if (cached) return cached
     throw err
   }
@@ -126,7 +133,7 @@ self.addEventListener('fetch', (event) => {
   if (isNeverCached(url)) return
 
   if (request.mode === 'navigate') {
-    event.respondWith(networkFirst(request, SHELL_CACHE))
+    event.respondWith(networkFirst(request, SHELL_CACHE, './index.html'))
     return
   }
 

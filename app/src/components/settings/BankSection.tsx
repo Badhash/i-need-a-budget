@@ -180,6 +180,9 @@ export function BankSection() {
     setConnecting(true)
     try {
       const { url } = await bankStartAuth(window.location.origin + window.location.pathname, aspspName)
+      // L'URL vient du serveur : on ne suit qu'un lien https (jamais un schema
+      // javascript: ou data: si la reponse etait alteree).
+      if (new URL(url).protocol !== 'https:') throw new Error('URL de consentement invalide.')
       if (standalone) markConsentPending()
       window.location.assign(url)
     } catch (err) {
